@@ -1,27 +1,48 @@
 <script setup lang="ts">
-import { TYPE_META } from '~~/shared/types'
-import type { MediaItem } from '~~/shared/types'
+import { reviewBy, TYPE_META } from '~~/shared/types'
+import type { MediaItem, Review } from '~~/shared/types'
 
-const { mine } = useMedia()
+// Reviews you wrote — including ones on friends' entries, since a review
+// belongs to its author rather than to the media entry.
+const { items } = useMedia()
+const { name } = useUser()
 
 const minStars = ref(0)
 
+interface Entry {
+  item: MediaItem
+  review: Review
+}
+
+const mineReviewed = computed<Entry[]>(() =>
+  items.value
+    .map((item) => {
+      const review = reviewBy(item, name.value)
+      return review ? { item, review } : null
+    })
+    .filter((e): e is Entry => e !== null),
+)
+
 const reviewed = computed(() =>
-  mine.value
-    .filter((m): m is MediaItem & { review: NonNullable<MediaItem['review']> } =>
-      !!m.review && m.review.stars >= minStars.value,
-    )
-    .sort((a, b) => {
-      if (b.review.stars !== a.review.stars) return b.review.stars - a.review.stars
-      return b.review.updatedAt.localeCompare(a.review.updatedAt)
-    }),
+  mineReviewed.value
+    .filter((e) => e.review.stars >= minStars.value)
+    .sort(
+      (a, b) =>
+        b.review.stars - a.review.stars ||
+        b.review.updatedAt.localeCompare(a.review.updatedAt),
+    ),
 )
 
 const avg = computed(() => {
-  const withStars = mine.value.filter((m) => m.review)
-  if (!withStars.length) return 0
-  return withStars.reduce((s, m) => s + (m.review?.stars ?? 0), 0) / withStars.length
+  if (!mineReviewed.value.length) return 0
+  return (
+    mineReviewed.value.reduce((s, e) => s + e.review.stars, 0) /
+    mineReviewed.value.length
+  )
 })
+
+const isOwn = (item: MediaItem) =>
+  item.owner.trim().toLowerCase() === name.value.trim().toLowerCase()
 </script>
 
 <template>
@@ -33,10 +54,10 @@ const avg = computed(() => {
           Why these mattered — so you can get excited all over again when you go to recommend one.
         </p>
       </div>
-      <div v-if="mine.some((m) => m.review)" class="stats bg-base-100 shadow">
+      <div v-if="mineReviewed.length" class="stats bg-base-100 shadow">
         <div class="stat py-2">
           <div class="stat-title text-xs">Reviewed</div>
-          <div class="stat-value text-2xl">{{ mine.filter((m) => m.review).length }}</div>
+          <div class="stat-value text-2xl">{{ mineReviewed.length }}</div>
         </div>
         <div class="stat py-2">
           <div class="stat-title text-xs">Avg rating</div>
@@ -68,9 +89,9 @@ const avg = computed(() => {
 
     <div v-else class="space-y-4">
       <article
-        v-for="item in reviewed"
+        v-for="{ item, review } in reviewed"
         :key="item.id"
-        class="card border border-base-300 bg-base-100 shadow-sm"
+        class="card border-2 border-base-content/15 bg-base-100 shadow-sm"
       >
         <div class="card-body gap-2 p-5">
           <div class="flex flex-wrap items-center justify-between gap-2">
@@ -78,15 +99,18 @@ const avg = computed(() => {
               <span class="text-2xl">{{ TYPE_META[item.type].icon }}</span>
               <div>
                 <h3 class="text-lg font-semibold leading-tight">{{ item.title }}</h3>
-                <span class="text-xs opacity-60">{{ TYPE_META[item.type].label }}</span>
+                <span class="text-xs opacity-60">
+                  {{ TYPE_META[item.type].label }}
+                  <template v-if="!isOwn(item)"> · from {{ item.owner }}'s list</template>
+                </span>
               </div>
             </div>
-            <StarRating :model-value="item.review.stars" readonly />
+            <StarRating :model-value="review.stars" readonly />
           </div>
-          <p v-if="item.review.message" class="text-[15px] leading-relaxed">
-            “{{ item.review.message }}”
+          <p v-if="review.message" class="text-[15px] leading-relaxed">
+            “{{ review.message }}”
           </p>
-          <p class="text-xs opacity-50">Reviewed {{ shortDate(item.review.updatedAt) }}</p>
+          <p class="text-xs opacity-50">Reviewed {{ shortDate(review.updatedAt) }}</p>
         </div>
       </article>
     </div>

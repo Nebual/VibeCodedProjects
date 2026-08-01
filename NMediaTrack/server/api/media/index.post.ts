@@ -20,7 +20,14 @@ export default defineEventHandler(async (event) => {
   const companions = Array.isArray(body.companions)
     ? [...new Set(body.companions.map((c) => String(c).trim()).filter(Boolean))]
     : []
-  const group = normaliseGroupSize(companions.length, body.minPlayers, body.soloable)
+  // Books are a solo activity by default — a buddy read is still something you
+  // each do on your own — so they start soloable unless told otherwise.
+  const soloableDefault = type === 'book' ? true : undefined
+  const group = normaliseGroupSize(
+    companions.length,
+    body.minPlayers,
+    body.soloable ?? soloableDefault,
+  )
 
   const item: MediaItem = {
     id: newId(),
@@ -36,14 +43,18 @@ export default defineEventHandler(async (event) => {
     createdAt: now,
     updatedAt: now,
     notes: body.notes ? String(body.notes).trim() : undefined,
-    review:
+    // A review supplied at creation is authored by the creator.
+    reviews:
       body.review && Number(body.review.stars) > 0
-        ? {
-            stars: Math.min(5, Math.max(1, Number(body.review.stars))),
-            message: String(body.review.message ?? '').trim(),
-            updatedAt: now,
-          }
-        : undefined,
+        ? [
+            {
+              author: owner,
+              stars: Math.min(5, Math.max(1, Number(body.review.stars))),
+              message: String(body.review.message ?? '').trim(),
+              updatedAt: now,
+            },
+          ]
+        : [],
   }
 
   await mutateUserMedia(owner, (media) => ({ result: item, media: [...media, item] }))

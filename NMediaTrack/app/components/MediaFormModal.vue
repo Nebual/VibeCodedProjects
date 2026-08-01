@@ -14,9 +14,23 @@ import type { MediaItem, MediaType } from '~~/shared/types'
 const props = defineProps<{ item?: MediaItem | null }>()
 const emit = defineEmits<{ close: []; saved: [item: MediaItem] }>()
 
-const { create, update } = useMedia()
+const { create, update, myReview } = useMedia()
+const { name } = useUser()
 
 const isEdit = computed(() => !!props.item)
+/** Editing someone else's entry — you can change the details, but the review is yours. */
+const isGuest = computed(
+  () =>
+    !!props.item &&
+    props.item.owner.trim().toLowerCase() !== name.value.trim().toLowerCase(),
+)
+/** Reviews left by other people, shown read-only for context. */
+const othersReviews = computed(
+  () =>
+    props.item?.reviews.filter(
+      (r) => r.author.trim().toLowerCase() !== name.value.trim().toLowerCase(),
+    ) ?? [],
+)
 const dialog = ref<HTMLDialogElement | null>(null)
 
 const form = reactive({
@@ -37,6 +51,10 @@ const form = reactive({
 // the payload entirely, so saving an unrelated edit can't silently round the
 // stored timestamp down to midday.
 const originalActivityDate = ref('')
+
+// Tracks whether the user has set Soloable themselves, so the Book default
+// never overrides a deliberate choice. Declared before the watches that use it.
+const soloableTouched = ref(false)
 
 const today = todayInput()
 const activityLabel = computed(() => `Last ${TYPE_META[form.type].noun}`)
@@ -82,14 +100,24 @@ watch(
     form.companions = it ? [...it.companions] : []
     form.lastEpisode = it?.lastEpisode ?? ''
     form.notes = it?.notes ?? ''
-    form.reviewStars = it?.review?.stars ?? 0
-    form.reviewMessage = it?.review?.message ?? ''
+    const mine = it ? myReview(it) : undefined
+    form.reviewStars = mine?.stars ?? 0
+    form.reviewMessage = mine?.message ?? ''
     form.minPlayers = it?.minPlayers ?? 0
-    form.soloable = it?.soloable ?? false
+    // Books are solo by default; existing entries keep whatever they were saved with.
+    form.soloable = it ? (it.soloable ?? false) : form.type === 'book'
+    soloableTouched.value = false
     form.activityDate = activityDate
     originalActivityDate.value = activityDate
   },
   { immediate: true },
+)
+
+watch(
+  () => form.type,
+  (t) => {
+    if (!props.item && !soloableTouched.value) form.soloable = t === 'book'
+  },
 )
 
 onMounted(() => dialog.value?.showModal())
@@ -273,7 +301,7 @@ async function save() {
               class="btn btn-sm"
               :class="form.soloable ? 'btn-accent' : 'btn-outline'"
               title="Can also be enjoyed on your own"
-              @click="form.soloable = !form.soloable"
+              @click="form.soloable = !form.soloable; soloableTouched = true"
             >
               🧍 Soloable
             </button>
@@ -321,7 +349,7 @@ async function save() {
           />
         </div>
 
-        <!-- Review -->
+        <!-- Review — always your own, even on someone else's entry -->
         <div class="divider text-sm opacity-70">Your review</div>
         <div class="form-control">
           <div class="flex items-center gap-3">
@@ -336,6 +364,26 @@ async function save() {
             placeholder="Why did this matter to you? Write it now so future-you can get excited all over again."
             class="textarea textarea-bordered mt-3 w-full"
           />
+          <p v-if="isGuest" class="mt-2 text-xs opacity-60">
+            This is {{ props.item?.owner }}'s entry — your review is yours alone and won't
+            replace theirs.
+          </p>
+        </div>
+
+        <!-- Other people's reviews, read-only -->
+        <div v-if="othersReviews.length" class="space-y-2">
+          <p class="text-sm opacity-70">Also reviewed by</p>
+          <div
+            v-for="r in othersReviews"
+            :key="r.author"
+            class="rounded-box bg-base-200/60 p-3"
+          >
+            <div class="flex items-center gap-2">
+              <StarRating :model-value="r.stars" readonly size="sm" />
+              <span class="text-xs opacity-60">{{ r.author }}</span>
+            </div>
+            <p v-if="r.message" class="mt-1 text-sm italic opacity-90">"{{ r.message }}"</p>
+          </div>
         </div>
 
         <p v-if="errorMsg" class="text-sm text-error">{{ errorMsg }}</p>

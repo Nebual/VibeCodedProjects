@@ -19,3 +19,10 @@ The initial prompt that spawned this repo:
 > Add a 'Minimum 3' and 'Minimum 4' options when editing media that have at least 2 or 3 other people tagged in them (the 'Minimum 3' includes self). Also add 'Soloable' option when theres others tagged.
 > When viewing the library with friends selected, respect the minimum 3/4 options (eg. if Bishop is selected, and Helldivers has Bishop and 5 other people, and 'Minimum 3' is on for Helldivers, then don't show it unless a 3rd Helldivers player is selected).
 > The friends dropdown should get a 'Solo' option that filters only media marked Soloable or that don't have others tagged.
+
+> Add an optional list (aka detail) view as an alternative to the cards layout. Sortable columns. Keep the icons but maybe smaller
+> Books should default to being soloable
+> Lets allow friends to edit media (that they're tagged in). Though, lets keep reviews separate -- if a friend reviews a media, thats _their_ review, separate from the owner's.
+> For Games, clicking the name of the game should link to a Google search of 'Steam' + the game name, in "i'm feelin lucky" mode where it immediately loads the first result. For books, 'Goodreads' + name.
+
+> Also some UI feedback in '/mnt/c/Users/ben11/Documents/Claude Experiments/NMediaTrack/2026_08_01_14-34-28_firefox.png' -  border on the active sort option looks bad on dark mdoe, and lets make those dropdowns (any status and last active) are too wide, lets narrow those. Search can get a bit narrower too.

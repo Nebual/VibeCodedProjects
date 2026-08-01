@@ -1,3 +1,4 @@
+import { canDeleteItem, canEditItem, reviewBy } from '~~/shared/types'
 import type {
   MediaCreateInput,
   MediaItem,
@@ -85,8 +86,19 @@ export const useMedia = () => {
     )
   })
 
+  /** Owner or anyone tagged on it. */
   function canEdit(item: MediaItem) {
-    return item.owner.trim().toLowerCase() === name.value.trim().toLowerCase()
+    return canEditItem(item, name.value)
+  }
+
+  /** Owner only — friends can edit an entry but not remove it. */
+  function canDelete(item: MediaItem) {
+    return canDeleteItem(item, name.value)
+  }
+
+  /** The current user's own review of an item, if they've written one. */
+  function myReview(item: MediaItem) {
+    return reviewBy(item, name.value)
   }
 
   return {
@@ -102,5 +114,7 @@ export const useMedia = () => {
     remove,
     touch,
     canEdit,
+    canDelete,
+    myReview,
   }
 }

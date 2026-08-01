@@ -1,15 +1,39 @@
 <script setup lang="ts">
 import { isSoloable, MEDIA_TYPES, TYPE_META } from '~~/shared/types'
 import type { MediaItem, MediaType } from '~~/shared/types'
+import { SORT_DEFAULT_DIR, SORT_LABELS, sortMedia } from '~/utils/sortMedia'
+import type { SortDir, SortKey } from '~/utils/sortMedia'
 
 const { name } = useUser()
 const { mine, taggedIn, canEdit, pending, refresh } = useMedia()
+
+// --- View mode ---------------------------------------------------------------
+const { mode: viewMode, load: loadViewMode, setMode: setViewMode } = useViewMode()
+onMounted(loadViewMode)
 
 // --- Filters & sorting -------------------------------------------------------
 const typeFilter = ref<MediaType | 'all'>('all')
 const statusFilter = ref<'all' | 'backlog' | 'active' | 'paused' | 'completed' | 'dropped'>('all')
 const search = ref('')
-const sortBy = ref<'recent' | 'title' | 'stars'>('recent')
+
+// One sort state drives both the dropdown (cards) and the column headers (list).
+const sortKey = ref<SortKey>('recent')
+const sortDir = ref<SortDir>(SORT_DEFAULT_DIR.recent)
+
+/** Column headers toggle direction on re-click; the dropdown just picks a key. */
+function toggleSort(key: SortKey) {
+  if (sortKey.value === key) {
+    sortDir.value = sortDir.value === 'asc' ? 'desc' : 'asc'
+  } else {
+    sortKey.value = key
+    sortDir.value = SORT_DEFAULT_DIR[key]
+  }
+}
+
+function chooseSort(key: SortKey) {
+  sortKey.value = key
+  sortDir.value = SORT_DEFAULT_DIR[key]
+}
 
 // Media others have tagged you in shows up here by default — it's still stuff
 // you're actively consuming, even if you don't own the entry.
@@ -102,19 +126,11 @@ const filtered = computed(() => {
   if (selectedFriends.value.length) {
     list = list.filter((m) => friendMatches(m) > 0 && meetsMinimum(m))
   }
-  list.sort((a, b) => {
-    // Most overlap with the selected friends wins; everything else tie-breaks.
-    if (selectedFriends.value.length) {
-      const diff = friendMatches(b) - friendMatches(a)
-      if (diff !== 0) return diff
-    }
-    if (sortBy.value === 'title') return a.title.localeCompare(b.title)
-    if (sortBy.value === 'stars') return (b.review?.stars ?? 0) - (a.review?.stars ?? 0)
-    const at = a.lastActivityAt || a.createdAt
-    const bt = b.lastActivityAt || b.createdAt
-    return bt.localeCompare(at)
+  // Most overlap with the selected friends still wins, whatever column is sorted.
+  return sortMedia(list, sortKey.value, sortDir.value, {
+    primary: selectedFriends.value.length ? friendMatches : undefined,
+    viewer: name.value,
   })
-  return list
 })
 
 // Counts per type for the filter chips.
@@ -172,9 +188,30 @@ function pickRandom() {
           </span>
         </p>
       </div>
-      <div class="flex gap-2">
+      <div class="flex flex-wrap items-center gap-2">
+        <!-- Cards / list layout -->
+        <!-- Active state is a fill, not a bright outline: daisyUI's `btn-outline`
+             borders read far too hot against the dark theme's backgrounds. -->
+        <div class="join">
+          <button
+            class="btn btn-sm join-item border-base-content/20"
+            :class="viewMode === 'cards' ? 'btn-primary' : 'bg-base-100 hover:bg-base-200'"
+            title="Card view"
+            @click="setViewMode('cards')"
+          >
+            ▦
+          </button>
+          <button
+            class="btn btn-sm join-item border-base-content/20"
+            :class="viewMode === 'list' ? 'btn-primary' : 'bg-base-100 hover:bg-base-200'"
+            title="List view"
+            @click="setViewMode('list')"
+          >
+            ☰
+          </button>
+        </div>
         <button
-          class="btn btn-outline gap-2"
+          class="btn gap-2 border-base-content/20 bg-base-100 hover:bg-base-200"
           :disabled="!filtered.length"
           title="Spotlight a random item to pick up"
           @click="pickRandom"
@@ -213,10 +250,15 @@ function pickRandom() {
         <input
           v-model="search"
           type="text"
-          placeholder="Search title, person, notes…"
-          class="input input-bordered input-sm w-full max-w-xs"
+          placeholder="Search title, person…"
+          class="input input-bordered input-sm w-full sm:w-56"
         />
-        <select v-model="statusFilter" class="select select-bordered select-sm">
+        <!-- daisyUI sizes `.select` at `clamp(3rem, 20rem, 100%)`, i.e. 320px.
+             An explicit width overrides it (utilities layer beats components). -->
+        <select
+          v-model="statusFilter"
+          class="select select-bordered select-sm w-32"
+        >
           <option value="all">Any status</option>
           <option value="active">Active</option>
           <option value="backlog">Backlog</option>
@@ -224,19 +266,37 @@ function pickRandom() {
           <option value="completed">Completed</option>
           <option value="dropped">Dropped</option>
         </select>
-        <select v-model="sortBy" class="select select-bordered select-sm">
-          <option value="recent">Recently active</option>
-          <option value="title">Title A–Z</option>
-          <option value="stars">Highest rated</option>
-        </select>
+        <!-- In list view the column headers are the sort control -->
+        <template v-if="viewMode === 'cards'">
+          <select
+            class="select select-bordered select-sm w-36"
+            :value="sortKey"
+            @change="chooseSort(($event.target as HTMLSelectElement).value as SortKey)"
+          >
+            <option v-for="(label, key) in SORT_LABELS" :key="key" :value="key">
+              {{ label }}
+            </option>
+          </select>
+          <button
+            class="btn btn-sm btn-square border-base-content/20 bg-base-100 font-normal hover:bg-base-200"
+            :title="sortDir === 'asc' ? 'Ascending' : 'Descending'"
+            @click="sortDir = sortDir === 'asc' ? 'desc' : 'asc'"
+          >
+            {{ sortDir === 'asc' ? '▲' : '▼' }}
+          </button>
+        </template>
 
         <!-- Friends multi-select (Solo is useful even with nobody tagged) -->
         <div v-if="base.length" class="dropdown">
           <div
             tabindex="0"
             role="button"
-            class="btn btn-sm"
-            :class="selectedFriends.length || soloOnly ? 'btn-secondary' : 'btn-outline'"
+            class="btn btn-sm border-base-content/20"
+            :class="
+              selectedFriends.length || soloOnly
+                ? 'btn-secondary'
+                : 'bg-base-100 hover:bg-base-200'
+            "
           >
             <span v-if="soloOnly">🧍 Solo</span>
             <span v-else-if="!selectedFriends.length">👥 Friends</span>
@@ -330,6 +390,18 @@ function pickRandom() {
     >
       Nothing matches those filters.
     </div>
+
+    <!-- List -->
+    <MediaTable
+      v-else-if="viewMode === 'list'"
+      :items="filtered"
+      :sort-key="sortKey"
+      :sort-dir="sortDir"
+      :highlighted-id="pickedId"
+      @sort="toggleSort"
+      @edit="openEdit"
+      @deleted="refresh"
+    />
 
     <!-- Grid -->
     <div v-else class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">

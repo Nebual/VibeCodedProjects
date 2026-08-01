@@ -12,7 +12,13 @@ export const MEDIA_STATUSES = [
 ] as const
 export type MediaStatus = (typeof MEDIA_STATUSES)[number]
 
+/** Identity is a case-insensitive, trimmed name. */
+export const canonicalName = (name: string): string =>
+  String(name ?? '').trim().toLowerCase()
+
 export interface Review {
+  /** Who wrote it. Reviews belong to a person, not to the media entry. */
+  author: string
   stars: number // 1..5
   message: string
   updatedAt: string // ISO timestamp
@@ -41,7 +47,53 @@ export interface MediaItem {
   createdAt: string
   updatedAt: string
   notes?: string
-  review?: Review
+  /** One review per person. Anyone who can see the item can add their own. */
+  reviews: Review[]
+}
+
+/** The review `person` wrote for this item, if any. */
+export function reviewBy(
+  item: Pick<MediaItem, 'reviews'>,
+  person: string,
+): Review | undefined {
+  const who = canonicalName(person)
+  return item.reviews.find((r) => canonicalName(r.author) === who)
+}
+
+/** Mean star rating across everyone who reviewed it, or 0 if nobody has. */
+export function averageStars(item: Pick<MediaItem, 'reviews'>): number {
+  if (!item.reviews.length) return 0
+  return item.reviews.reduce((s, r) => s + r.stars, 0) / item.reviews.length
+}
+
+/**
+ * The rating to show/sort by for a given viewer: their own if they've written
+ * one, otherwise what everyone else thinks.
+ */
+export function ratingFor(item: Pick<MediaItem, 'reviews'>, viewer: string): number {
+  return reviewBy(item, viewer)?.stars ?? averageStars(item)
+}
+
+/**
+ * Who may edit an item: the owner, plus anyone tagged on it. Tagging someone
+ * means you're consuming it together, so they can keep the details current.
+ * Deleting stays owner-only — see `canDeleteItem`.
+ */
+export function canEditItem(
+  item: Pick<MediaItem, 'owner' | 'companions'>,
+  user: string,
+): boolean {
+  const who = canonicalName(user)
+  if (!who) return false
+  return (
+    canonicalName(item.owner) === who ||
+    item.companions.some((c) => canonicalName(c) === who)
+  )
+}
+
+/** Only the owner may remove an entry from their own list. */
+export function canDeleteItem(item: Pick<MediaItem, 'owner'>, user: string): boolean {
+  return canonicalName(item.owner) === canonicalName(user)
 }
 
 /** Group-size minimums a user can pick. Each counts the owner themselves. */

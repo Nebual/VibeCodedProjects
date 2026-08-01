@@ -9,7 +9,22 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{ edit: [item: MediaItem]; deleted: [] }>()
 
-const { update, remove, touch } = useMedia()
+const { update, remove, touch, canDelete } = useMedia()
+const { name } = useUser()
+
+const isMine = (review: { author: string }) =>
+  review.author.trim().toLowerCase() === name.value.trim().toLowerCase()
+
+const isOwner = computed(
+  () => props.item.owner.trim().toLowerCase() === name.value.trim().toLowerCase(),
+)
+
+// Your own review reads first — it's the one you came back for.
+const orderedReviews = computed(() =>
+  [...props.item.reviews].sort(
+    (a, b) => Number(isMine(b)) - Number(isMine(a)) || a.author.localeCompare(b.author),
+  ),
+)
 
 const meta = computed(() => TYPE_META[props.item.type])
 const statusMeta = computed(() => STATUS_META[props.item.status])
@@ -70,7 +85,17 @@ async function cycleStatus() {
         <div class="flex items-start gap-3">
           <div class="text-3xl leading-none" :title="meta.label">{{ meta.icon }}</div>
           <div>
-            <h3 class="text-lg font-semibold leading-tight">{{ item.title }}</h3>
+            <h3 class="text-lg font-semibold leading-tight">
+              <a
+                v-if="lookupUrl(item)"
+                :href="lookupUrl(item)!"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="link-hover decoration-dotted underline-offset-2 hover:link-primary hover:underline"
+                :title="lookupLabel(item)"
+              >{{ item.title }}</a>
+              <template v-else>{{ item.title }}</template>
+            </h3>
             <div class="mt-1 flex flex-wrap items-center gap-2">
               <button
                 class="badge badge-sm"
@@ -82,7 +107,8 @@ async function cycleStatus() {
                 {{ statusMeta.label }}
               </button>
               <span class="badge badge-ghost badge-sm">{{ meta.label }}</span>
-              <span v-if="!editable" class="badge badge-outline badge-sm">
+              <!-- Shown whenever it isn't your own entry, even if you can edit it -->
+              <span v-if="!isOwner" class="badge badge-outline badge-sm">
                 by {{ item.owner }}
               </span>
             </div>
@@ -95,7 +121,9 @@ async function cycleStatus() {
           <ul tabindex="0" class="menu dropdown-content z-10 w-40 rounded-box bg-base-200 p-2 shadow-lg">
             <li><a @click="emit('edit', item)">✏️ Edit</a></li>
             <li><a @click="markToday">✅ Did this today</a></li>
-            <li><a class="text-error" @click="onDelete">🗑️ Delete</a></li>
+            <li v-if="canDelete(item)">
+              <a class="text-error" @click="onDelete">🗑️ Delete</a>
+            </li>
           </ul>
         </div>
       </div>
@@ -137,11 +165,20 @@ async function cycleStatus() {
       <!-- Notes -->
       <p v-if="item.notes" class="text-sm opacity-80">{{ item.notes }}</p>
 
-      <!-- Review -->
-      <div v-if="item.review" class="rounded-box bg-base-200/60 p-3">
-        <StarRating :model-value="item.review.stars" readonly size="sm" />
-        <p v-if="item.review.message" class="mt-1 text-sm italic opacity-90">
-          "{{ item.review.message }}"
+      <!-- Reviews — yours first, then everyone else's -->
+      <div
+        v-for="review in orderedReviews"
+        :key="review.author"
+        class="rounded-box bg-base-200/60 p-3"
+      >
+        <div class="flex items-center gap-2">
+          <StarRating :model-value="review.stars" readonly size="sm" />
+          <span class="text-xs opacity-60">
+            {{ isMine(review) ? 'you' : review.author }}
+          </span>
+        </div>
+        <p v-if="review.message" class="mt-1 text-sm italic opacity-90">
+          "{{ review.message }}"
         </p>
       </div>
 

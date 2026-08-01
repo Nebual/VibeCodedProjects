@@ -2,8 +2,8 @@ import { existsSync } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import yaml from 'js-yaml'
-import { normaliseGroupSize } from '~~/shared/types'
-import type { MediaItem } from '~~/shared/types'
+import { canonicalName, normaliseGroupSize } from '~~/shared/types'
+import type { MediaItem, Review } from '~~/shared/types'
 
 // Storage layout:
 //   server/data/friends.yml      registry of people + who is tagged in whose list
@@ -16,7 +16,7 @@ const MEDIA_DIR = join(DATA_DIR, 'media')
 const REGISTRY_FILE = join(DATA_DIR, 'friends.yml')
 
 /** Identity is a case-insensitive, trimmed name. */
-export const canonical = (name: string): string => String(name ?? '').trim().toLowerCase()
+export const canonical = canonicalName
 
 interface PersonEntry {
   name: string
@@ -112,14 +112,48 @@ function normalise(item: Partial<MediaItem>, owner: string): MediaItem {
     createdAt: item.createdAt ? String(item.createdAt) : now,
     updatedAt: item.updatedAt ? String(item.updatedAt) : now,
     notes: item.notes ? String(item.notes) : undefined,
-    review: item.review
-      ? {
-          stars: Number(item.review.stars) || 0,
-          message: String(item.review.message ?? ''),
-          updatedAt: item.review.updatedAt ? String(item.review.updatedAt) : now,
-        }
-      : undefined,
+    reviews: normaliseReviews(item, owner, now),
   }
+}
+
+/**
+ * Reviews used to be a single object belonging to the owner. Files written
+ * before that change are migrated on read by attributing the lone review to
+ * the file's owner.
+ */
+function normaliseReviews(
+  item: Partial<MediaItem> & { review?: Partial<Review> },
+  owner: string,
+  now: string,
+): Review[] {
+  const clean = (r: Partial<Review> | undefined, fallbackAuthor: string): Review | null => {
+    if (!r) return null
+    const stars = Math.min(5, Math.max(1, Number(r.stars) || 0))
+    if (!stars) return null
+    return {
+      author: String(r.author ?? fallbackAuthor).trim() || fallbackAuthor,
+      stars,
+      message: String(r.message ?? ''),
+      updatedAt: r.updatedAt ? String(r.updatedAt) : now,
+    }
+  }
+
+  const out: Review[] = []
+  const seen = new Set<string>()
+  const push = (r: Review | null) => {
+    if (!r) return
+    const key = canonicalName(r.author)
+    if (seen.has(key)) return // one review per person
+    seen.add(key)
+    out.push(r)
+  }
+
+  if (Array.isArray(item.reviews)) {
+    for (const r of item.reviews) push(clean(r, owner))
+  }
+  // Legacy single-review shape.
+  if (item.review) push(clean(item.review, owner))
+  return out
 }
 
 /** Read one person's list. Returns [] if they don't own a file yet. */
@@ -211,12 +245,15 @@ export async function visibleMediaFor(user: string): Promise<MediaItem[]> {
   return out
 }
 
-/** Which person owns the item with this id, or null if it doesn't exist. */
-export async function findItemOwner(id: string): Promise<string | null> {
+/** Locate an item across everyone's files, with the owner's canonical key. */
+export async function findItem(
+  id: string,
+): Promise<{ ownerKey: string; ownerName: string; item: MediaItem } | null> {
   const reg = await readRegistry()
   for (const key of Object.keys(reg.people)) {
     const items = await readMediaOf(reg, key)
-    if (items.some((m) => m.id === id)) return key
+    const item = items.find((m) => m.id === id)
+    if (item) return { ownerKey: key, ownerName: reg.people[key]?.name || key, item }
   }
   return null
 }
@@ -243,9 +280,10 @@ export async function mutateUserMedia<T>(
   return next
 }
 
-/** A user may edit an item only if they own it. */
-export function canEdit(item: MediaItem, user: string): boolean {
-  return canonical(item.owner) === canonical(user)
+/** Display name for a canonical key, falling back to the key itself. */
+export async function displayNameOf(key: string): Promise<string> {
+  const reg = await readRegistry()
+  return reg.people[key]?.name || key
 }
 
 /** Every known display name, for tag autocomplete. */

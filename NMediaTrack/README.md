@@ -21,7 +21,15 @@ Data is stored in a plain **YAML** file — no database.
   highlights it. For when you can't decide.
 - **Episode tracking** — shows get a "last episode watched" field (`S2E6`), saved with the show and
   displayed on its card.
-- **Reviews** — 1–5 stars plus a free-text message, with a dedicated Reviews page sorted by rating.
+- **Title lookup** — game titles link straight to their Steam page, books to Goodreads, via
+  DuckDuckGo's "Feeling Ducky" redirect (`?q=\Steam <title>` — a leading backslash jumps to the
+  first result). Other media types aren't linked. See [`app/utils/mediaLinks.ts`](app/utils/mediaLinks.ts).
+- **Cards or list** — toggle between the card grid and a compact table with sortable columns
+  (title, type, status, with, group, rating, last active). The choice is remembered per device and
+  applies to the Shared page too.
+- **Reviews** — 1–5 stars plus a free-text message. Reviews belong to their **author**, not the
+  entry: if you review a friend's book, that's *your* review sitting alongside theirs, and it shows
+  up on *your* Reviews page. Nobody can edit or delete anyone else's.
 - **Consuming with others** — tag people on an item. This doubles as the sharing mechanism
   (see below) and as a way to find something to play together.
 - **Tagged-in media on your Library** — anything someone else tagged you in appears alongside your
@@ -42,15 +50,18 @@ Data is stored in a plain **YAML** file — no database.
 There is **no authentication** — this is a personal/small-group tool. You type a name on first
 visit and it's remembered in `localStorage`. That name is your identity:
 
-- You **own** every item you create, and you can only edit or delete your own items.
+- You **own** every item you create. The owner **and anyone tagged on it** can edit the details —
+  you're consuming it together, so either of you can keep the status and episode current. Only the
+  owner can **delete** it. Reviews are always your own regardless of who owns the entry.
 - Tagging someone makes you friends. When Nebual adds *Helldivers 2* "with **Bishop**", Bishop can
   browse **all** of Nebual's media on his **Shared** page — grouped under "Nebual's list",
   **read-only**. One tag opens the whole list, not just the tagged item.
 - Friendship is **directional**: Bishop tagging you lets you see Bishop's list; it doesn't let
   Bishop see yours until you tag him back. Someone nobody has tagged sees nothing.
 
-Ownership is enforced server-side, not just in the UI — the API returns `403` if a non-owner
-attempts a write.
+All of this is enforced server-side, not just in the UI — the API returns `403` when someone who
+isn't the owner or a tagged companion tries to edit, when a non-owner tries to delete, and a
+`review` in the payload is always attributed to the caller regardless of what they send.
 
 ## Pages
 
@@ -115,18 +126,26 @@ media:
     type: show          # game | show | movie | book | other
     status: active      # backlog | active | paused | completed | dropped
     companions:
-      - Aria            # tagged people; grants them read access
+      - Aria            # tagged people; they can read AND edit this entry
     minPlayers: 3       # optional; counts the owner. Needs >= 2 companions
-    soloable: true      # optional; only meaningful with >= 1 companion
+    soloable: true      # optional; only meaningful with >= 1 companion. Books default true
     lastEpisode: S2E6
     lastActivityAt: '2026-07-28T21:00:00.000Z'
     createdAt: '2026-07-01T19:00:00.000Z'
     updatedAt: '2026-07-28T21:00:00.000Z'
-    review:
-      stars: 5
-      message: Why this mattered.
-      updatedAt: '2026-07-28T21:00:00.000Z'
+    reviews:            # one per person, each owned by its author
+      - author: Nebual
+        stars: 5
+        message: Why this mattered.
+        updatedAt: '2026-07-28T21:00:00.000Z'
+      - author: Aria
+        stars: 4
+        message: Aria's own take, untouchable by anyone else.
+        updatedAt: '2026-07-29T10:00:00.000Z'
 ```
+
+Files written before reviews became per-person used a single `review:` object; those are migrated
+on read (attributed to the file's owner) and rewritten in the new shape on the next save.
 
 **`friends.yml`** — `taggedIn` is the lookup that decides which media files to open for a viewer,
 so building someone's view never reads every file:
@@ -154,7 +173,7 @@ concurrent requests can't clobber each other.
 | -------- | --------------------------- | ------------------------------------------- |
 | `GET`    | `/api/media?user=Name`      | Items you own + full lists of anyone who tagged you. |
 | `POST`   | `/api/media`                | Create. Body includes `owner`.              |
-| `PUT`    | `/api/media/:id`            | Update. Body needs `actor`; owner-only.     |
+| `PUT`    | `/api/media/:id`            | Update. Body needs `actor`; owner or tagged companion. A `review` applies to the actor's own. |
 | `DELETE` | `/api/media/:id?actor=Name` | Delete. Owner-only.                         |
 | `GET`    | `/api/people?not=Name`      | Known names, for tag autocomplete.          |
 
@@ -165,7 +184,8 @@ app/
   app.vue                    # shell: navbar + name gate
   assets/css/main.css        # Tailwind v4 + DaisyUI theme setup
   components/
-    MediaCard.vue            # one item: status, episode, companions, review, last-played
+    MediaCard.vue            # one item: status, episode, companions, reviews, last-played
+    MediaTable.vue           # compact list view with sortable columns
     MediaFormModal.vue       # add/edit dialog
     NameGate.vue             # first-run name prompt
     PersonInput.vue          # tag-style "with whom" input
@@ -174,9 +194,11 @@ app/
   composables/
     useUser.ts               # name in localStorage
     useTheme.ts              # light/dark mode in localStorage
-    useMedia.ts              # fetch + CRUD, mine/sharedWithMe split
+    useViewMode.ts           # cards vs list, in localStorage
+    useMedia.ts              # fetch + CRUD, mine/sharedWithMe split, permissions
   pages/                     # index, shared, reviews
-  utils/time.ts              # timeAgo / daysSince / shortDate
+  utils/time.ts              # timeAgo / daysSince / date-input conversion
+  utils/sortMedia.ts         # sort keys shared by the dropdown and table headers
 server/
   api/media/                 # REST handlers
   data/friends.yml           # who is tagged in whose list (derived)
