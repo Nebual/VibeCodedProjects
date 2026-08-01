@@ -1,0 +1,46 @@
+{
+  "name": "nshoppinglist (Nuxt)",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "workspaceFolder": "/workspace",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
+  "mounts": [
+    // The host workspace is a CIFS share with no symlink support, and Nuxt writes
+    // heavily to these. Keep them on container-local named volumes instead.
+    "source=nshopping-node-modules,target=/workspace/node_modules,type=volume",
+    "source=nshopping-nuxt,target=/workspace/.nuxt,type=volume",
+    "source=nshopping-pnpm-store,target=/home/node/.local/share/pnpm/store,type=volume"
+  ],
+  // Bind to all interfaces so the dev server is reachable from the host.
+  "containerEnv": {
+    "HOST": "0.0.0.0"
+  },
+  "remoteUser": "node",
+  "updateRemoteUserUID": true,
+  "postCreateCommand": "sudo chown node:node node_modules .nuxt && pnpm install",
+  "forwardPorts": [3000, 24678],
+  "portsAttributes": {
+    "3000": {
+      "label": "Nuxt dev server",
+      "onAutoForward": "notify"
+    },
+    "24678": {
+      "label": "Vite HMR",
+      "onAutoForward": "silent"
+    }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "Vue.volar",
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode"
+      ],
+      "settings": {
+        "typescript.tsdk": "node_modules/typescript/lib",
+        "editor.formatOnSave": true
+      }
+    }
+  }
+}

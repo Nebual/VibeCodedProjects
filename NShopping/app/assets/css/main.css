@@ -1,0 +1,16 @@
+@import "tailwindcss";
+@plugin "daisyui" {
+  themes: emerald --default, dim --prefersdark;
+}
+
+/* We render our own clear button, styled to match the rest of the toolbar. */
+input[type="search"]::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+html {
+  -webkit-tap-highlight-color: transparent;
+  /* Carry the theme onto the document itself, so overscroll doesn't flash white. */
+  background-color: var(--color-base-200);
+}

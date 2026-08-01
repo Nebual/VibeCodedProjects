@@ -1,0 +1,31 @@
+# Nuxt dev/build outputs
+.output
+.data
+.nuxt
+.nitro
+.cache
+dist
+
+# Node dependencies
+node_modules
+.pnpm-store
+
+# Logs
+logs
+*.log
+
+# Misc
+.DS_Store
+.fleet
+.idea
+
+# Stored lists
+data
+
+# Machine-local Claude Code settings
+.claude/settings.local.json
+
+# Local env files
+.env
+.env.*
+!.env.example
