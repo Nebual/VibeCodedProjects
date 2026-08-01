@@ -31,10 +31,55 @@ export interface MediaItem {
   lastEpisode?: string
   /** When the owner last engaged with this media (played/watched/read). */
   lastActivityAt?: string
+  /**
+   * Smallest group this needs, counting the owner. Unset means no minimum.
+   * Only offerable once enough people are tagged to actually reach it.
+   */
+  minPlayers?: number
+  /** Playable alone, even though other people are tagged on it. */
+  soloable?: boolean
   createdAt: string
   updatedAt: string
   notes?: string
   review?: Review
+}
+
+/** Group-size minimums a user can pick. Each counts the owner themselves. */
+export const MIN_PLAYER_OPTIONS = [3, 4] as const
+
+/**
+ * A minimum of N is only meaningful once N-1 other people are tagged —
+ * otherwise the group could never reach it.
+ */
+export function canOfferMinPlayers(companionCount: number, min: number): boolean {
+  return companionCount + 1 >= min
+}
+
+/** "Soloable" only says anything when other people are tagged. */
+export function canOfferSoloable(companionCount: number): boolean {
+  return companionCount >= 1
+}
+
+/** Drop group-size settings that the current companion list can't support. */
+export function normaliseGroupSize(
+  companionCount: number,
+  minPlayers?: number | null,
+  soloable?: boolean | null,
+): { minPlayers?: number; soloable?: boolean } {
+  const min = Number(minPlayers)
+  const validMin =
+    MIN_PLAYER_OPTIONS.includes(min as never) && canOfferMinPlayers(companionCount, min)
+      ? min
+      : undefined
+  return {
+    minPlayers: validMin,
+    soloable: soloable && canOfferSoloable(companionCount) ? true : undefined,
+  }
+}
+
+/** Can this be enjoyed alone? True when nobody else is tagged, or it's marked soloable. */
+export function isSoloable(item: Pick<MediaItem, 'companions' | 'soloable'>): boolean {
+  return item.companions.length === 0 || item.soloable === true
 }
 
 /** Payload accepted when creating a new media item. */
@@ -45,7 +90,10 @@ export interface MediaCreateInput {
   status?: MediaStatus
   companions?: string[]
   lastEpisode?: string
-  lastActivityAt?: string
+  /** null clears the date; omit the key to leave it unchanged. */
+  lastActivityAt?: string | null
+  minPlayers?: number | null
+  soloable?: boolean | null
   notes?: string
   review?: Review | null
 }

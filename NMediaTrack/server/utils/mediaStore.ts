@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import yaml from 'js-yaml'
+import { normaliseGroupSize } from '~~/shared/types'
 import type { MediaItem } from '~~/shared/types'
 
 // Storage layout:
@@ -93,17 +94,21 @@ function fileFor(reg: Registry, key: string, display: string): string {
 
 function normalise(item: Partial<MediaItem>, owner: string): MediaItem {
   const now = new Date().toISOString()
+  const companions = Array.isArray(item.companions)
+    ? item.companions.map((c) => String(c).trim()).filter(Boolean)
+    : []
+  const group = normaliseGroupSize(companions.length, item.minPlayers, item.soloable)
   return {
     id: String(item.id),
     title: String(item.title ?? '').trim(),
     type: (item.type ?? 'other') as MediaItem['type'],
     owner,
     status: (item.status ?? 'backlog') as MediaItem['status'],
-    companions: Array.isArray(item.companions)
-      ? item.companions.map((c) => String(c).trim()).filter(Boolean)
-      : [],
+    companions,
     lastEpisode: item.lastEpisode ? String(item.lastEpisode) : undefined,
     lastActivityAt: item.lastActivityAt ? String(item.lastActivityAt) : undefined,
+    minPlayers: group.minPlayers,
+    soloable: group.soloable,
     createdAt: item.createdAt ? String(item.createdAt) : now,
     updatedAt: item.updatedAt ? String(item.updatedAt) : now,
     notes: item.notes ? String(item.notes) : undefined,

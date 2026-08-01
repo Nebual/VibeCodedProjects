@@ -1,5 +1,5 @@
 import { canonical, findItemOwner, mutateUserMedia } from '~~/server/utils/mediaStore'
-import { MEDIA_STATUSES, MEDIA_TYPES } from '~~/shared/types'
+import { MEDIA_STATUSES, MEDIA_TYPES, normaliseGroupSize } from '~~/shared/types'
 import type { MediaItem, MediaUpdateInput } from '~~/shared/types'
 
 // PUT /api/media/:id  — update an item. Only the owner (body.actor) may edit.
@@ -40,8 +40,11 @@ export default defineEventHandler(async (event) => {
     if ('notes' in body) {
       updated.notes = body.notes ? String(body.notes).trim() : undefined
     }
-    if ('lastActivityAt' in body && body.lastActivityAt) {
-      updated.lastActivityAt = String(body.lastActivityAt)
+    // Explicit null clears the date; omitting the key leaves it untouched.
+    if ('lastActivityAt' in body) {
+      updated.lastActivityAt = body.lastActivityAt
+        ? String(body.lastActivityAt)
+        : undefined
     }
     if ('review' in body) {
       if (body.review === null) {
@@ -54,6 +57,18 @@ export default defineEventHandler(async (event) => {
         }
       }
     }
+    if ('minPlayers' in body) updated.minPlayers = body.minPlayers ?? undefined
+    if ('soloable' in body) updated.soloable = body.soloable ?? undefined
+
+    // Re-validate against the FINAL companion list: shrinking the group can
+    // invalidate a minimum the client never touched.
+    const group = normaliseGroupSize(
+      updated.companions.length,
+      updated.minPlayers,
+      updated.soloable,
+    )
+    updated.minPlayers = group.minPlayers
+    updated.soloable = group.soloable
 
     const next = [...media]
     next[idx] = updated

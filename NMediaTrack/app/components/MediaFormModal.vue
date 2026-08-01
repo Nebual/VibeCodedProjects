@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import {
+  canOfferMinPlayers,
+  canOfferSoloable,
   MEDIA_STATUSES,
   MEDIA_TYPES,
+  MIN_PLAYER_OPTIONS,
   STATUS_META,
   TYPE_META,
 } from '~~/shared/types'
@@ -25,7 +28,43 @@ const form = reactive({
   notes: '',
   reviewStars: 0,
   reviewMessage: '',
+  minPlayers: 0 as number,
+  soloable: false,
+  activityDate: '',
 })
+
+// The date the item was opened with. If it comes back unchanged we omit it from
+// the payload entirely, so saving an unrelated edit can't silently round the
+// stored timestamp down to midday.
+const originalActivityDate = ref('')
+
+const today = todayInput()
+const activityLabel = computed(() => `Last ${TYPE_META[form.type].noun}`)
+
+// Group-size options depend on how many people are tagged right now, so they
+// appear and disappear as you edit the "With" field.
+const soloOffered = computed(() => canOfferSoloable(form.companions.length))
+const minOffered = computed(() =>
+  MIN_PLAYER_OPTIONS.filter((m) => canOfferMinPlayers(form.companions.length, m)),
+)
+const groupOffered = computed(() => soloOffered.value || minOffered.value.length > 0)
+
+/** The next minimum tier still out of reach, and how many more tags it needs. */
+const nextMinHint = computed(() => {
+  const next = MIN_PLAYER_OPTIONS.find(
+    (m) => !canOfferMinPlayers(form.companions.length, m),
+  )
+  return next ? { min: next, more: next - 1 - form.companions.length } : null
+})
+
+// Untagging people can invalidate a choice that was legal a moment ago.
+watch(
+  () => form.companions.length,
+  (n) => {
+    if (!canOfferSoloable(n)) form.soloable = false
+    if (form.minPlayers && !canOfferMinPlayers(n, form.minPlayers)) form.minPlayers = 0
+  },
+)
 
 const saving = ref(false)
 const errorMsg = ref('')
@@ -40,6 +79,10 @@ watchEffect(() => {
   form.notes = it?.notes ?? ''
   form.reviewStars = it?.review?.stars ?? 0
   form.reviewMessage = it?.review?.message ?? ''
+  form.minPlayers = it?.minPlayers ?? 0
+  form.soloable = it?.soloable ?? false
+  form.activityDate = toDateInput(it?.lastActivityAt)
+  originalActivityDate.value = form.activityDate
 })
 
 onMounted(() => dialog.value?.showModal())
@@ -56,13 +99,26 @@ async function save() {
   }
   saving.value = true
   errorMsg.value = ''
+
+  // Only touch the activity date when the user actually changed it: unchanged
+  // -> omit, cleared -> null, otherwise the picked day at local midday.
+  const activity: { lastActivityAt?: string | null } = {}
+  if (form.activityDate !== originalActivityDate.value) {
+    activity.lastActivityAt = form.activityDate
+      ? fromDateInput(form.activityDate)
+      : null
+  }
+
   const payload = {
+    ...activity,
     title: form.title.trim(),
     type: form.type,
     status: form.status,
     companions: form.companions,
     lastEpisode: form.type === 'show' ? form.lastEpisode.trim() : '',
     notes: form.notes.trim(),
+    minPlayers: form.minPlayers || null,
+    soloable: form.soloable || null,
     review:
       form.reviewStars > 0
         ? {
@@ -153,6 +209,41 @@ async function save() {
           />
         </div>
 
+        <!-- Last activity date — drives "3 weeks ago" and the recency sort -->
+        <div class="form-control">
+          <label class="label">
+            <span class="label-text">{{ activityLabel }}</span>
+            <span class="label-text-alt opacity-60">controls where it sorts</span>
+          </label>
+          <div class="flex flex-wrap items-center gap-2">
+            <input
+              v-model="form.activityDate"
+              type="date"
+              :max="today"
+              class="input input-bordered"
+            />
+            <button
+              type="button"
+              class="btn btn-sm btn-outline"
+              @click="form.activityDate = today"
+            >
+              Today
+            </button>
+            <button
+              v-if="form.activityDate"
+              type="button"
+              class="btn btn-ghost btn-sm"
+              @click="form.activityDate = ''"
+            >
+              Clear
+            </button>
+          </div>
+          <p class="mt-2 text-xs opacity-60">
+            Backdate this to push it down the “recently active” list. Clearing it shows
+            “never {{ TYPE_META[form.type].noun }}” and falls back to the date you added it.
+          </p>
+        </div>
+
         <!-- Companions -->
         <div class="form-control">
           <label class="label">
@@ -160,6 +251,56 @@ async function save() {
             <span class="label-text-alt opacity-60">tag people to share this list with them</span>
           </label>
           <PersonInput v-model="form.companions" />
+        </div>
+
+        <!-- Group size — only offerable once enough people are tagged -->
+        <div v-if="groupOffered" class="form-control">
+          <label class="label">
+            <span class="label-text">Group size</span>
+            <span class="label-text-alt opacity-60">used by the friend filter</span>
+          </label>
+          <div class="flex flex-wrap items-center gap-2">
+            <button
+              v-if="soloOffered"
+              type="button"
+              class="btn btn-sm"
+              :class="form.soloable ? 'btn-accent' : 'btn-outline'"
+              title="Can also be enjoyed on your own"
+              @click="form.soloable = !form.soloable"
+            >
+              🧍 Soloable
+            </button>
+
+            <span v-if="minOffered.length" class="ml-1 text-sm opacity-60">Needs</span>
+            <button
+              v-if="minOffered.length"
+              type="button"
+              class="btn btn-sm"
+              :class="!form.minPlayers ? 'btn-primary' : 'btn-outline'"
+              @click="form.minPlayers = 0"
+            >
+              Any
+            </button>
+            <button
+              v-for="m in minOffered"
+              :key="m"
+              type="button"
+              class="btn btn-sm"
+              :class="form.minPlayers === m ? 'btn-primary' : 'btn-outline'"
+              :title="`Needs at least ${m} people, counting you`"
+              @click="form.minPlayers = m"
+            >
+              Minimum {{ m }}
+            </button>
+          </div>
+          <p class="mt-2 text-xs opacity-60">
+            Minimums count you.
+            <template v-if="nextMinHint">
+              Tag {{ nextMinHint.more }} more
+              {{ nextMinHint.more === 1 ? 'person' : 'people' }} to unlock “Minimum
+              {{ nextMinHint.min }}”.
+            </template>
+          </p>
         </div>
 
         <!-- Notes -->

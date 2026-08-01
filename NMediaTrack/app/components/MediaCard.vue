@@ -116,6 +116,24 @@ async function cycleStatus() {
         >{{ c }}</span>
       </div>
 
+      <!-- Group size -->
+      <div v-if="item.minPlayers || item.soloable" class="flex flex-wrap gap-1">
+        <span
+          v-if="item.minPlayers"
+          class="badge badge-primary badge-outline badge-sm"
+          :title="`Needs at least ${item.minPlayers} people, counting ${editable ? 'you' : item.owner}`"
+        >
+          👥 min {{ item.minPlayers }}
+        </span>
+        <span
+          v-if="item.soloable"
+          class="badge badge-accent badge-outline badge-sm"
+          title="Can also be enjoyed alone"
+        >
+          🧍 soloable
+        </span>
+      </div>
+
       <!-- Notes -->
       <p v-if="item.notes" class="text-sm opacity-80">{{ item.notes }}</p>
 

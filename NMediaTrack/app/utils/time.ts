@@ -25,6 +25,40 @@ export function daysSince(iso?: string): number {
   return (Date.now() - then) / (1000 * 60 * 60 * 24)
 }
 
+/** ISO timestamp -> "YYYY-MM-DD" for an <input type="date">, in local time. */
+export function toDateInput(iso?: string): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
+/**
+ * "YYYY-MM-DD" -> ISO timestamp. Past dates are anchored at local midday rather
+ * than midnight so they can't slip a day across timezones or DST transitions.
+ * Today resolves to the current time, so picking it reads as "just now" instead
+ * of drifting hours away from the clock.
+ */
+export function fromDateInput(value: string): string | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim())
+  if (!m) return null
+  const [, y, mo, d] = m
+  const now = new Date()
+  const date = new Date(Number(y), Number(mo) - 1, Number(d), 12, 0, 0, 0)
+  if (Number.isNaN(date.getTime())) return null
+  const isToday =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate()
+  return (isToday ? now : date).toISOString()
+}
+
+/** Today as "YYYY-MM-DD", for date-input defaults and max bounds. */
+export function todayInput(): string {
+  return toDateInput(new Date().toISOString())
+}
+
 /** A short absolute date like "30 Jul 2026". */
 export function shortDate(iso?: string): string {
   if (!iso) return ''

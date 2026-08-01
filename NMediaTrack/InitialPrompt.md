@@ -15,3 +15,7 @@ The initial prompt that spawned this repo:
 >  Lets store media in separate files per-user, with a friends.yml listing who is tagged in whose (so we know which separate media yml's to lookup)
 > - on dark mode, the cards blend in with the background, lets give them a bit more of a border
 > - the search is good but lets also have a multi-dropdown of friends. When filtering by friends, sort by how many of those friends are tagged in each game (so a game with all selected friends tagged would show first, a game with only one of the friends tagged shows last)
+
+> Add a 'Minimum 3' and 'Minimum 4' options when editing media that have at least 2 or 3 other people tagged in them (the 'Minimum 3' includes self). Also add 'Soloable' option when theres others tagged.
+> When viewing the library with friends selected, respect the minimum 3/4 options (eg. if Bishop is selected, and Helldivers has Bishop and 5 other people, and 'Minimum 3' is on for Helldivers, then don't show it unless a 3rd Helldivers player is selected).
+> The friends dropdown should get a 'Solo' option that filters only media marked Soloable or that don't have others tagged.

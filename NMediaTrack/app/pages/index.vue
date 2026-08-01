@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { MEDIA_TYPES, TYPE_META } from '~~/shared/types'
+import { isSoloable, MEDIA_TYPES, TYPE_META } from '~~/shared/types'
 import type { MediaItem, MediaType } from '~~/shared/types'
 
 const { name } = useUser()
@@ -21,6 +21,9 @@ const base = computed(() =>
 
 // --- Friend filter -----------------------------------------------------------
 const selectedFriends = ref<string[]>([])
+// "Solo" is a mode, not a person — playing alone and playing with Bishop are
+// different questions, so picking one clears the other.
+const soloOnly = ref(false)
 
 /** Everyone involved in the visible media, other than you. */
 const friendOptions = computed(() => {
@@ -48,6 +51,30 @@ function toggleFriend(friend: string) {
   const i = selectedFriends.value.indexOf(friend)
   if (i === -1) selectedFriends.value.push(friend)
   else selectedFriends.value.splice(i, 1)
+  if (selectedFriends.value.length) soloOnly.value = false
+}
+
+function toggleSolo() {
+  soloOnly.value = !soloOnly.value
+  if (soloOnly.value) selectedFriends.value = []
+}
+
+function clearGroupFilter() {
+  selectedFriends.value = []
+  soloOnly.value = false
+}
+
+/**
+ * How many people the selected group would field for this item: you, plus every
+ * selected friend who's actually on it. Compared against the item's minimum.
+ */
+function partySize(item: MediaItem): number {
+  return friendMatches(item) + 1
+}
+
+function meetsMinimum(item: MediaItem): boolean {
+  if (!item.minPlayers) return true
+  return partySize(item) >= item.minPlayers
 }
 
 // Drop friends that vanish from the data (e.g. after untagging).
@@ -68,9 +95,12 @@ const filtered = computed(() => {
         (m.notes ?? '').toLowerCase().includes(q),
     )
   }
-  // Filtering by friends keeps anything involving at least one of them.
+  // Solo mode: only things you can actually do on your own.
+  if (soloOnly.value) list = list.filter((m) => isSoloable(m))
+  // Filtering by friends keeps anything involving at least one of them, and
+  // drops anything the resulting group is too small for.
   if (selectedFriends.value.length) {
-    list = list.filter((m) => friendMatches(m) > 0)
+    list = list.filter((m) => friendMatches(m) > 0 && meetsMinimum(m))
   }
   list.sort((a, b) => {
     // Most overlap with the selected friends wins; everything else tie-breaks.
@@ -200,25 +230,39 @@ function pickRandom() {
           <option value="stars">Highest rated</option>
         </select>
 
-        <!-- Friends multi-select -->
-        <div v-if="friendOptions.length" class="dropdown">
+        <!-- Friends multi-select (Solo is useful even with nobody tagged) -->
+        <div v-if="base.length" class="dropdown">
           <div
             tabindex="0"
             role="button"
             class="btn btn-sm"
-            :class="selectedFriends.length ? 'btn-secondary' : 'btn-outline'"
+            :class="selectedFriends.length || soloOnly ? 'btn-secondary' : 'btn-outline'"
           >
-            <span v-if="!selectedFriends.length">👥 Friends</span>
+            <span v-if="soloOnly">🧍 Solo</span>
+            <span v-else-if="!selectedFriends.length">👥 Friends</span>
             <span v-else>👥 {{ selectedFriends.join(', ') }}</span>
             <span class="text-xs opacity-60">▾</span>
           </div>
           <div
             tabindex="0"
-            class="dropdown-content z-20 mt-1 w-56 rounded-box border border-base-300 bg-base-100 p-2 shadow-lg"
+            class="dropdown-content z-20 mt-1 w-60 rounded-box border border-base-300 bg-base-100 p-2 shadow-lg"
           >
-            <p class="px-2 pb-1 pt-1 text-xs opacity-60">
-              Sorts by how many are on each item
-            </p>
+            <!-- Solo is its own mode -->
+            <label
+              class="label cursor-pointer justify-start gap-2 rounded-btn px-2 py-1.5 hover:bg-base-200"
+              title="Only media you can enjoy on your own"
+            >
+              <input
+                type="checkbox"
+                class="checkbox checkbox-xs checkbox-accent"
+                :checked="soloOnly"
+                @change="toggleSolo"
+              />
+              <span class="label-text">🧍 Solo</span>
+            </label>
+
+            <div class="divider my-1 text-xs opacity-60">or with</div>
+
             <label
               v-for="friend in friendOptions"
               :key="friend"
@@ -232,10 +276,15 @@ function pickRandom() {
               />
               <span class="label-text">{{ friend }}</span>
             </label>
+
+            <p class="px-2 pt-1 text-xs opacity-60">
+              Sorted by how many of them are on each item. Media with a group minimum is
+              hidden until enough of its people are picked.
+            </p>
             <button
-              v-if="selectedFriends.length"
+              v-if="selectedFriends.length || soloOnly"
               class="btn btn-ghost btn-xs mt-1 w-full"
-              @click="selectedFriends = []"
+              @click="clearGroupFilter"
             >
               Clear
             </button>

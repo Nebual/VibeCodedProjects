@@ -1,5 +1,5 @@
 import { mutateUserMedia, newId } from '~~/server/utils/mediaStore'
-import { MEDIA_STATUSES, MEDIA_TYPES } from '~~/shared/types'
+import { MEDIA_STATUSES, MEDIA_TYPES, normaliseGroupSize } from '~~/shared/types'
 import type { MediaCreateInput, MediaItem } from '~~/shared/types'
 
 // POST /api/media  — create an entry in body.owner's own list.
@@ -17,17 +17,22 @@ export default defineEventHandler(async (event) => {
     : 'backlog'
 
   const now = new Date().toISOString()
+  const companions = Array.isArray(body.companions)
+    ? [...new Set(body.companions.map((c) => String(c).trim()).filter(Boolean))]
+    : []
+  const group = normaliseGroupSize(companions.length, body.minPlayers, body.soloable)
+
   const item: MediaItem = {
     id: newId(),
     title,
     type,
     owner,
     status,
-    companions: Array.isArray(body.companions)
-      ? [...new Set(body.companions.map((c) => String(c).trim()).filter(Boolean))]
-      : [],
+    companions,
     lastEpisode: body.lastEpisode ? String(body.lastEpisode).trim() : undefined,
     lastActivityAt: body.lastActivityAt || (status === 'active' ? now : undefined),
+    minPlayers: group.minPlayers,
+    soloable: group.soloable,
     createdAt: now,
     updatedAt: now,
     notes: body.notes ? String(body.notes).trim() : undefined,

@@ -15,7 +15,8 @@ Data is stored in a plain **YAML** file — no database.
   (backlog / active / paused / completed / dropped).
 - **Last-played indicator** — every item shows "last played 3 weeks ago". Anything active or
   paused that's been untouched for 21+ days gets a **"⏳ pick back up?"** nudge, so things don't
-  quietly rot in the backlog.
+  quietly rot in the backlog. The date is editable, so you can backdate something to push it out
+  of the top of the list (or hit **Did this today** on the card to bump it).
 - **Random button** — spotlights a random item from your current filter, scrolls to it and
   highlights it. For when you can't decide.
 - **Episode tracking** — shows get a "last episode watched" field (`S2E6`), saved with the show and
@@ -28,6 +29,10 @@ Data is stored in a plain **YAML** file — no database.
 - **Friend filter** — a multi-select dropdown of everyone in your visible media. Pick a few and the
   list narrows to media involving them, **sorted by how many of them are on each item** — so
   something all of you are in floats to the top. Handy for "what can the three of us play?"
+- **Group size** — media with enough people tagged can be marked **Minimum 3** / **Minimum 4**
+  (counting you) or **Soloable**. The friend filter respects it: a 4-player co-op marked
+  *Minimum 3* stays hidden until you've picked enough of its people to actually field a game. The
+  dropdown's **Solo** option flips to the opposite question — only things you can enjoy alone.
 - **Light/dark theme** — sun/moon toggle in the navbar (daisyUI `nord` / `night`), remembered in
   `localStorage` and defaulting to your system preference. An inline head script applies it before
   first paint, so there's no flash of the wrong theme.
@@ -76,8 +81,8 @@ published out of a container. A `PORT`/`NITRO_PORT` exported in the shell still 
 
 ## Data
 
-Everything is committed to the repo and safe to hand-edit. One YAML file per person, plus a
-registry that says who can see whose:
+Plain YAML, safe to hand-edit. One file per person, plus a registry that says who can see whose.
+`server/data/` is gitignored, so each deployment keeps its own data:
 
 ```
 server/data/
@@ -98,6 +103,8 @@ media:
     status: active      # backlog | active | paused | completed | dropped
     companions:
       - Aria            # tagged people; grants them read access
+    minPlayers: 3       # optional; counts the owner. Needs >= 2 companions
+    soloable: true      # optional; only meaningful with >= 1 companion
     lastEpisode: S2E6
     lastActivityAt: '2026-07-28T21:00:00.000Z'
     createdAt: '2026-07-01T19:00:00.000Z'
