@@ -7,7 +7,7 @@
     "dev": "nuxt dev",
     "generate": "nuxt generate",
     "preview": "nuxt preview --port 8188",
-    "start": "node --env-file=.env.production .output/server/index.mjs",
+    "start": "node --env-file-if-exists=.env scripts/start.mjs",
     "postinstall": "nuxt prepare"
   },
   "dependencies": {

@@ -22,8 +22,6 @@ logs
 .env
 .env.*
 !.env.example
-# Committed: sets the production port (8188). Contains no secrets.
-!.env.production
 
 # pnpm store (only created if the store is redirected into the project)
 .pnpm-store

@@ -69,21 +69,28 @@ watch(
 const saving = ref(false)
 const errorMsg = ref('')
 
-watchEffect(() => {
-  const it = props.item
-  form.title = it?.title ?? ''
-  form.type = it?.type ?? 'game'
-  form.status = it?.status ?? 'backlog'
-  form.companions = it ? [...it.companions] : []
-  form.lastEpisode = it?.lastEpisode ?? ''
-  form.notes = it?.notes ?? ''
-  form.reviewStars = it?.review?.stars ?? 0
-  form.reviewMessage = it?.review?.message ?? ''
-  form.minPlayers = it?.minPlayers ?? 0
-  form.soloable = it?.soloable ?? false
-  form.activityDate = toDateInput(it?.lastActivityAt)
-  originalActivityDate.value = form.activityDate
-})
+// Deliberately a `watch` on the prop, not a `watchEffect`. watchEffect tracks
+// everything it reads, so any read of `form.*` in here would make editing that
+// field re-run this and wipe the user's input.
+watch(
+  () => props.item,
+  (it) => {
+    const activityDate = toDateInput(it?.lastActivityAt)
+    form.title = it?.title ?? ''
+    form.type = it?.type ?? 'game'
+    form.status = it?.status ?? 'backlog'
+    form.companions = it ? [...it.companions] : []
+    form.lastEpisode = it?.lastEpisode ?? ''
+    form.notes = it?.notes ?? ''
+    form.reviewStars = it?.review?.stars ?? 0
+    form.reviewMessage = it?.review?.message ?? ''
+    form.minPlayers = it?.minPlayers ?? 0
+    form.soloable = it?.soloable ?? false
+    form.activityDate = activityDate
+    originalActivityDate.value = activityDate
+  },
+  { immediate: true },
+)
 
 onMounted(() => dialog.value?.showModal())
 

@@ -75,9 +75,22 @@ pnpm start    # run the production server on http://localhost:8188
 pnpm preview  # preview the production build, also on 8188
 ```
 
-The production port is **8188**, set in [`.env.production`](.env.production) (`NITRO_PORT`) and
-mirrored in the `preview` script's `--port`. It also sets `NITRO_HOST=0.0.0.0` so the port can be
-published out of a container. A `PORT`/`NITRO_PORT` exported in the shell still overrides it.
+The production port is **8188**. Nitro only takes the port from the environment at runtime, so
+[`scripts/start.mjs`](scripts/start.mjs) sets the default before importing the built server — kept
+in the repo rather than a `.env` file that can go missing. It also sets `NITRO_HOST=0.0.0.0` so the
+port can be published out of a container.
+
+`pnpm start` loads a `.env` from the project root when one exists (`--env-file-if-exists`, so a
+missing file is fine). Settings resolve **shell env > `.env` > built-in defaults**:
+
+| `.env` | shell | result |
+| ------ | ----- | ------ |
+| —      | —     | `8188` |
+| `NITRO_PORT=7777` | — | `7777` |
+| `NITRO_PORT=7777` | `NITRO_PORT=9099` | `9099` |
+
+`.env` is gitignored, so it's the place for per-machine overrides and secrets. Note `pnpm preview`
+passes `--port 8188` explicitly, and that flag beats a port set in `.env`.
 
 ## Data
 
