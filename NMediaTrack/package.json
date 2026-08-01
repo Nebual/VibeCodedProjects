@@ -1,0 +1,25 @@
+{
+  "name": "nmediatrack",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "build": "nuxt build",
+    "dev": "nuxt dev",
+    "generate": "nuxt generate",
+    "preview": "nuxt preview --port 8188",
+    "start": "node --env-file=.env.production .output/server/index.mjs",
+    "postinstall": "nuxt prepare"
+  },
+  "dependencies": {
+    "js-yaml": "^4.1.0",
+    "nuxt": "^4.5.1",
+    "vue": "^3.5.40",
+    "vue-router": "^5.2.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.13",
+    "@types/js-yaml": "^4.0.9",
+    "daisyui": "^5.1.30",
+    "tailwindcss": "^4.1.13"
+  }
+}

@@ -1,0 +1,43 @@
+@import "tailwindcss";
+/* `night` is the no-JS fallback; the theme toggle swaps `data-theme` between
+   these two. Each daisyUI theme sets its own `color-scheme`, so don't pin one. */
+@plugin "daisyui" {
+  themes: night --default, nord;
+}
+
+/* App-wide tweaks */
+html,
+body,
+#__nuxt {
+  min-height: 100vh;
+}
+
+/* Subtle card hover lift used across media cards */
+.card-lift {
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+}
+.card-lift:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in oklch, var(--color-base-content) 35%, transparent);
+}
+
+/* Highlight animation for the random / "picked" state */
+@keyframes pick-pop {
+  0% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 var(--pick-ring, rgba(250, 204, 21, 0.6));
+  }
+  50% {
+    transform: scale(1.02);
+    box-shadow: 0 0 0 8px rgba(250, 204, 21, 0);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(250, 204, 21, 0);
+  }
+}
+.pick-highlight {
+  animation: pick-pop 0.9s ease-out;
+  outline: 2px solid theme(--color-warning, #facc15);
+  outline-offset: 2px;
+}

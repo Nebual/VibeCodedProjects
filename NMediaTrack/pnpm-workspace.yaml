@@ -1,0 +1,15 @@
+allowBuilds:
+  esbuild: true
+
+# pnpm 11 reads settings from here (no longer from package.json's "pnpm" field).
+
+# Allow these dependencies to run their install/build scripts.
+onlyBuiltDependencies:
+  - esbuild
+  - '@parcel/watcher'
+  - better-sqlite3
+  - unrs-resolver
+
+# Don't re-run `pnpm install` before every `pnpm <script>`. This project's
+# node_modules is a bind mount and the deps check otherwise aborts dev/build.
+verifyDepsBeforeRun: false
