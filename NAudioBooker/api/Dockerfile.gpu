@@ -1,15 +1,34 @@
 # Synthesis node with CUDA. Used by ../docker-compose.node.yml.
 #
-# Based on the CUDA runtime image rather than python:slim because
-# onnxruntime-gpu links against the CUDA and cuDNN shared libraries and will
-# silently fall back to CPU if it cannot find them.
-FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+# Based on a CUDA runtime image rather than python:slim because onnxruntime-gpu
+# links against the CUDA and cuDNN shared libraries and will silently fall back
+# to CPU if it cannot find them.
+#
+# The CUDA major version has to match on both sides: onnxruntime-gpu switched to
+# CUDA 13 around 1.27, and those wheels want libcublasLt.so.13, which a CUDA 12
+# base does not have. The default pairing below is CUDA 13 with a current
+# onnxruntime. Drivers are backward compatible, so a CUDA 13 driver also runs
+# CUDA 12 images -- but not the reverse, and CUDA 13 needs a fairly new driver.
+#
+# For an older driver, build the CUDA 12 pairing instead:
+#
+#   docker build -f Dockerfile.gpu \
+#     --build-arg CUDA_IMAGE=nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04 \
+#     --build-arg ONNXRUNTIME_GPU='onnxruntime-gpu>=1.21,<1.27' -t nab-node .
+#
+# Either way the dependency check at the end of this file fails the build on a
+# mismatch, so a wrong pairing cannot ship.
 
-# Ubuntu 22.04 ships Python 3.10 and has no python3.12 packages at all, so the
-# interpreter has to come from somewhere else. uv is already here to manage the
-# virtualenv and can fetch a standalone 3.12 itself, which avoids adding a
-# third-party PPA and keeps the image independent of whatever the distro
-# happens to package this year.
+ARG CUDA_IMAGE=nvidia/cuda:13.0.1-cudnn-runtime-ubuntu24.04
+FROM ${CUDA_IMAGE}
+
+ARG ONNXRUNTIME_GPU=onnxruntime-gpu
+
+# The interpreter comes from uv rather than the distro: Ubuntu 22.04 has no
+# python3.12 packages at all, and pinning the version here would otherwise
+# depend on which Ubuntu the chosen CUDA image happens to be built on. uv is
+# already present to manage the virtualenv, so this drops a dependency instead
+# of adding a PPA.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates curl espeak-ng ffmpeg \
@@ -40,18 +59,35 @@ RUN uv sync --frozen --no-dev
 # onnxruntime and onnxruntime-gpu install the same `onnxruntime` module, so the
 # CPU build has to come out before the GPU one goes in.
 RUN uv pip uninstall --python /app/.venv/bin/python onnxruntime \
-    && uv pip install --python /app/.venv/bin/python onnxruntime-gpu
+    && uv pip install --python /app/.venv/bin/python "${ONNXRUNTIME_GPU}"
 
 ENV PATH="/app/.venv/bin:$PATH" \
     NAB_ROLE=worker-node \
     NAB_TTS_DEVICE=cuda
 
-# Fail the build rather than ship an image that cannot see its own GPU stack.
-# This only checks that the provider is compiled in; whether a device is
-# actually visible depends on the runtime, and /node/health reports that.
-RUN python -c "import onnxruntime as ort; \
-    assert 'CUDAExecutionProvider' in ort.get_available_providers(), \
-    f'no CUDA provider in {ort.get_available_providers()}'"
+# Fail the build rather than ship an image that quietly runs on CPU.
+#
+# Checking get_available_providers() is NOT enough: it lists CUDA whenever the
+# provider is *compiled in*, even when the shared library cannot load for want
+# of the CUDA runtime. That is exactly how a CUDA-13 wheel on a CUDA-12 base
+# got as far as a running container -- the assertion passed and it fell back to
+# CPU at runtime. Resolving the provider library's own dependencies is what
+# actually catches a version mismatch, and it needs no GPU to do it.
+RUN LIB="$(python -c 'import onnxruntime, pathlib; \
+        print(pathlib.Path(onnxruntime.__file__).parent / "capi" / "libonnxruntime_providers_cuda.so")')" \
+    && echo "checking $LIB" \
+    # libcuda.so.1 ships with the driver and is injected by the container
+    # runtime at start-up, so it is legitimately absent during the build.
+    && MISSING="$(ldd "$LIB" | grep 'not found' | grep -v 'libcuda\.so\.1' || true)" \
+    && if [ -n "$MISSING" ]; then \
+         echo "onnxruntime-gpu cannot load against this CUDA base image:"; \
+         echo "$MISSING"; \
+         echo "Pair a CUDA 12 base with 'onnxruntime-gpu<1.27', or use a CUDA 13 base."; \
+         exit 1; \
+       fi \
+    && python -c "import onnxruntime as ort; \
+        assert 'CUDAExecutionProvider' in ort.get_available_providers(), \
+        f'no CUDA provider in {ort.get_available_providers()}'"
 
 EXPOSE 8000
 CMD ["uvicorn", "naudiobooker.main:app", "--host", "0.0.0.0", "--port", "8000"]

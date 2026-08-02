@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import logging
 import re
+import signal
 import threading
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -55,6 +55,16 @@ CANCEL_CHECK_EVERY = 5
 
 class Cancelled(Exception):
     """The job was cancelled while running."""
+
+
+class ShuttingDown(Exception):
+    """The worker was asked to stop. The job is requeued, not cancelled.
+
+    Distinct from Cancelled because the two mean opposite things to a user: one
+    is "you asked for this to stop", the other is "the machine is going down
+    and your render will resume". Conflating them would leave a book marked
+    cancelled after a routine container restart.
+    """
 
 
 @dataclass
@@ -104,7 +114,12 @@ def _plan_chunks(book_id: str, job: JobInfo, max_chars: int) -> _Progress:
     return progress
 
 
-def _check_cancelled(job_id: str) -> None:
+def _check_cancelled(job_id: str, stop: threading.Event | None = None) -> None:
+    # Shutdown is checked first and locally: it must not depend on a database
+    # round trip, and a stopping worker should not be recorded as a
+    # user-initiated cancellation.
+    if stop is not None and stop.is_set():
+        raise ShuttingDown
     if jobs.read_status(job_id) in ("cancelling", "cancelled"):
         raise Cancelled
 
@@ -118,6 +133,7 @@ def _render_chapter(
     cache: ChunkCache,
     destination: Path,
     progress: _Progress,
+    stop: threading.Event | None = None,
 ) -> float:
     """Synthesize one chapter to a WAV file. Returns its duration."""
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -130,7 +146,7 @@ def _render_chapter(
     ) as out:
         for position, chunk in enumerate(chunks):
             if position % CANCEL_CHECK_EVERY == 0:
-                _check_cancelled(job.id)
+                _check_cancelled(job.id, stop)
 
             # Keyed on the model, not the backend: a chunk made on the GPU node
             # and the same chunk made locally are interchangeable, and must
@@ -182,7 +198,13 @@ class _Rendered:
     plan: GainPlan | None = None
 
 
-def _finalize(job: JobInfo, settings: Settings, book: BookDetail, out_dir: Path) -> None:
+def _finalize(
+    job: JobInfo,
+    settings: Settings,
+    book: BookDetail,
+    out_dir: Path,
+    stop: threading.Event | None = None,
+) -> None:
     """Normalise, encode and tag everything the synthesis pass produced.
 
     Runs after synthesis rather than during it because loudness can only be
@@ -214,7 +236,7 @@ def _finalize(job: JobInfo, settings: Settings, book: BookDetail, out_dir: Path)
     mp3_dir = out_dir / "mp3"
 
     for position, item in enumerate(rendered, start=1):
-        _check_cancelled(job.id)
+        _check_cancelled(job.id, stop)
 
         loudness = measure(item.wav)
         item.plan = plan_gain(loudness)
@@ -254,7 +276,7 @@ def _finalize(job: JobInfo, settings: Settings, book: BookDetail, out_dir: Path)
 
     artifact: Path | None = None
     if job.output_format in ("m4b", "both"):
-        _check_cancelled(job.id)
+        _check_cancelled(job.id, stop)
         jobs.update_progress(job.id, stage="building m4b")
         artifact = out_dir / f"{_safe_filename(book.title)}.m4b"
         build_m4b(
@@ -293,7 +315,11 @@ def _finalize(job: JobInfo, settings: Settings, book: BookDetail, out_dir: Path)
     jobs.update_progress(job.id, stage="complete", artifact_path=str(artifact), artifact_bytes=size)
 
 
-def process_job(job: JobInfo, settings: Settings | None = None) -> None:
+def process_job(
+    job: JobInfo,
+    settings: Settings | None = None,
+    stop: threading.Event | None = None,
+) -> None:
     """Render every included chapter of one job."""
     settings = settings or get_settings()
     backend = get_backend(settings)
@@ -306,7 +332,7 @@ def process_job(job: JobInfo, settings: Settings | None = None) -> None:
         jobs.update_progress(job.id, chunks_total=progress.chunks_total)
 
         for chapter in job.chapters:
-            _check_cancelled(job.id)
+            _check_cancelled(job.id, stop)
             chunks = progress.plan.get(chapter.chapter_index, [])
             destination = out_dir / f"{chapter.chapter_index:03d}.wav"
 
@@ -327,6 +353,7 @@ def process_job(job: JobInfo, settings: Settings | None = None) -> None:
                     cache=cache,
                     destination=destination,
                     progress=progress,
+                    stop=stop,
                 )
             except Cancelled:
                 raise
@@ -354,8 +381,8 @@ def process_job(job: JobInfo, settings: Settings | None = None) -> None:
 
         book = store.load_book(job.book_id)
         try:
-            _finalize(job, settings, book, out_dir)
-        except Cancelled:
+            _finalize(job, settings, book, out_dir, stop)
+        except (Cancelled, ShuttingDown):
             raise
         except EncodeError as exc:
             # Synthesis is the expensive part and it succeeded; say so rather
@@ -371,6 +398,13 @@ def process_job(job: JobInfo, settings: Settings | None = None) -> None:
             jobs.finish_job(job.id, "done")
         log.info("job %s: finished", job.id)
 
+    except ShuttingDown:
+        # Not a failure and not a cancellation: the work is unfinished and will
+        # be picked up again. Everything synthesized so far is in the cache, so
+        # resuming costs almost nothing.
+        log.info("job %s: worker stopping, requeued", job.id)
+        jobs.requeue(job.id)
+        raise
     except Cancelled:
         log.info("job %s: cancelled", job.id)
         jobs.finish_job(job.id, "cancelled")
@@ -396,18 +430,41 @@ class RenderWorker:
         while not self.stop.is_set():
             job = jobs.claim_next_job()
             if job is None:
+                # Event.wait rather than sleep, so a stop signal is acted on
+                # immediately instead of after the poll interval elapses.
                 self.stop.wait(self.settings.worker_poll_interval_s)
                 continue
-            process_job(job, self.settings)
+            try:
+                process_job(job, self.settings, self.stop)
+            except ShuttingDown:
+                break
+        log.info("worker stopped")
+
+
+def _install_signal_handlers(worker: RenderWorker) -> None:
+    """Stop cleanly on SIGTERM and SIGINT.
+
+    Necessary, not merely tidy. In a container the worker is PID 1, and the
+    kernel does not deliver a signal to PID 1 unless a handler is installed --
+    the default disposition is simply skipped. So SIGTERM was being discarded,
+    `docker stop` waited out its ten-second grace period, and the process was
+    then SIGKILLed mid-render every single time.
+    """
+
+    def handle(signum, _frame):
+        log.info("received %s, finishing current chunk then stopping", signal.Signals(signum).name)
+        worker.stop.set()
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(sig, handle)
 
 
 def run_forever(settings: Settings | None = None) -> None:
     settings = settings or get_settings()
     settings.ensure_dirs()
     worker = RenderWorker(settings=settings)
+    _install_signal_handlers(worker)
     try:
         worker.run()
-    except KeyboardInterrupt:
-        log.info("worker stopping")
+    except KeyboardInterrupt:  # pragma: no cover - handler normally catches it
         worker.stop.set()
-        time.sleep(0.1)

@@ -11,6 +11,12 @@ from typing import Literal
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+_API_DIR = Path(__file__).resolve().parents[1]
+
+#: The repo root in a checkout. Inside the container image the package sits at
+#: /app with no repo above it, so fall back to the package directory there.
+_PROJECT_ROOT = _API_DIR.parent if (_API_DIR.parent / "api").is_dir() else _API_DIR
+
 Role = Literal["api", "worker", "worker-node"]
 """
 api          -- serves HTTP, owns the database, dispatches jobs
@@ -21,11 +27,39 @@ worker-node  -- stateless remote synthesiser (the Windows/3070 box); exposes
 
 TTSBackendId = Literal["kokoro", "piper", "remote"]
 
+#: Env files consulted, in increasing order of precedence.
+ENV_FILE_CANDIDATES = (_PROJECT_ROOT / ".env", _API_DIR / ".env", Path(".env"))
+
+
+def env_files_found() -> list[str]:
+    """Which of the candidate .env files actually exist.
+
+    Surfaced by /health because "my .env is being ignored" is otherwise
+    indistinguishable from "my .env is wrong", and the two have completely
+    different fixes. Note that in Docker this list is usually empty and that is
+    correct: Compose passes configuration as environment variables via
+    `env_file:`, and a root .env never enters the container.
+    """
+    found = []
+    for candidate in ENV_FILE_CANDIDATES:
+        try:
+            if candidate.is_file():
+                found.append(str(candidate.resolve()))
+        except OSError:
+            continue
+    return found
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="NAB_",
-        env_file=".env",
+        # Anchored to the project rather than the working directory. The API
+        # starts with `cd api && uvicorn ...`, the worker likewise, and a bare
+        # ".env" would therefore only ever be found when the process happened
+        # to start from the right place -- so a .env at the repo root was
+        # silently ignored and the app ran on defaults. Later entries win, so a
+        # CWD-local .env can still override.
+        env_file=ENV_FILE_CANDIDATES,
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -34,7 +68,10 @@ class Settings(BaseSettings):
 
     # Storage. Everything the app generates lives under data_dir so a single
     # bind mount covers uploads, rendered audio, the chunk cache and the db.
-    data_dir: Path = Path("../data")
+    # Absolute for the same reason as env_file: a relative default resolves
+    # against the working directory, so the same install would look in
+    # different places depending on how it was launched.
+    data_dir: Path = _PROJECT_ROOT / "data"
 
     # TTS
     tts_backend: TTSBackendId = "kokoro"
@@ -44,7 +81,7 @@ class Settings(BaseSettings):
     # Model weights. Kept outside data_dir because they are large, immutable
     # and shared between every book, so they should not be backed up or synced
     # alongside a user's library.
-    models_dir: Path = Path("../models")
+    models_dir: Path = _PROJECT_ROOT / "models"
     #: fp32, deliberately. The int8 build is a third of the size but measured
     #: 5x SLOWER on CPU on both machines tested -- quantised kernels lose badly
     #: to onnxruntime's optimised fp32 paths for this model's op mix.

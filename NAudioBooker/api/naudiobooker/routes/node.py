@@ -17,6 +17,7 @@ from ..audio import to_wav_bytes
 from ..config import get_settings
 from ..models import NodeInfo, PreviewRequest
 from ..tts import BackendUnavailable, TTSError, get_backend
+from ..tts.base import BackendHealth
 
 router = APIRouter(tags=["node"])
 
@@ -50,6 +51,17 @@ def node_health() -> NodeInfo:
     try:
         backend = get_backend(settings)
         health = backend.health()
+
+        # Loads the model on first call. Worth the one-off second: without it
+        # the answer to "is this node actually using the GPU?" is unknowable,
+        # and that question is the whole reason the node exists.
+        provider = None
+        if health.available:
+            try:
+                provider = getattr(backend, "device", None)
+            except BackendUnavailable as exc:
+                health = BackendHealth(available=False, detail=str(exc))
+
         return NodeInfo(
             available=health.available,
             detail=health.detail,
@@ -57,6 +69,7 @@ def node_health() -> NodeInfo:
             model_version=backend.model_version,
             sample_rate=backend.sample_rate,
             max_chars=backend.max_chars,
+            provider=provider,
             authenticated=bool(settings.remote_worker_token),
         )
     except (BackendUnavailable, NotImplementedError) as exc:

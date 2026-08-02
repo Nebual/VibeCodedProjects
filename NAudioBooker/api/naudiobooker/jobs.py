@@ -254,6 +254,22 @@ def request_cancel(job_id: str) -> JobInfo:
     return get_job(job_id)
 
 
+def requeue(job_id: str) -> None:
+    """Put a running job back on the queue.
+
+    Used when the worker is shutting down: the job was neither cancelled nor
+    finished, so leaving it 'running' with no worker alive would show it as
+    in-progress forever. Requeuing costs almost nothing because every chunk
+    already synthesized is in the cache.
+    """
+    with db.transaction() as conn:
+        conn.execute(
+            "UPDATE jobs SET status = 'queued', started_at = NULL, current_title = NULL,"
+            " stage = NULL, updated_at = ? WHERE id = ? AND status IN ('running', 'cancelling')",
+            (_now(), job_id),
+        )
+
+
 def reclaim_orphaned_jobs() -> int:
     """Requeue jobs a dead worker left marked running.
 

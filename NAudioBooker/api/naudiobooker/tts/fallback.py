@@ -117,11 +117,23 @@ class FallbackBackend:
 
         return self.secondary.synthesize(text, voice, speed)
 
+    @property
+    def provider(self) -> str | None:
+        return getattr(self._active(), "provider", None)
+
     def health(self) -> BackendHealth:
         primary = self.primary.health() if self._primary_available else None
         if primary is not None and primary.available:
             self._promote()
             return BackendHealth(available=True, detail=f"remote: {primary.detail}")
+
+        # Demote, do not merely report. Saying "using local fallback" while
+        # leaving the dispatcher pointed at the primary makes `id` and
+        # `model_version` describe a backend that is not serving -- and
+        # model_version is part of the chunk cache key, so a disagreement there
+        # is not just a confusing status line.
+        if primary is not None:
+            self._demote(RuntimeError(primary.detail))
 
         secondary = self.secondary.health()
         reason = primary.detail if primary else "remote in cooldown after a failure"

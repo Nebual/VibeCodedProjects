@@ -72,11 +72,20 @@ const LANGUAGE_NAMES: Record<string, string> = {
 
 <template>
   <div class="space-y-3">
+    <!-- Show what the server actually said. A hardcoded guess here ("check the
+         model files") sends people to verify things that were never wrong. -->
     <div v-if="error" class="alert alert-warning text-sm">
-      <span>
-        No voices available. The TTS backend could not start — check that the model
-        files are present.
-      </span>
+      <div>
+        <div class="font-medium">
+          No voices available
+        </div>
+        <div class="mt-1 font-mono text-xs opacity-80">
+          {{ error.data?.detail ?? error.data?.message ?? error.message }}
+        </div>
+        <div class="mt-1 text-xs opacity-70">
+          <code>GET /health</code> reports which backend is in use and why it failed.
+        </div>
+      </div>
     </div>
 
     <template v-else>

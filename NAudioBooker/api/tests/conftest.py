@@ -8,11 +8,41 @@ to construct.
 
 from __future__ import annotations
 
+import os
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
+
+from naudiobooker.config import Settings, get_settings
+
+
+@pytest.fixture(autouse=True)
+def isolated_settings(monkeypatch):
+    """Keep the machine's real configuration out of the tests.
+
+    Settings deliberately finds a .env at the project root regardless of the
+    working directory. That is right for the app and wrong for tests: it means
+    whatever a developer has configured locally -- a node token, a remote
+    backend -- silently changes what the suite exercises. This was not
+    hypothetical; the moment .env discovery started working, three tests began
+    failing with 401 because a real token had appeared in the environment.
+    """
+    monkeypatch.setitem(Settings.model_config, "env_file", None)
+    for key in list(os.environ):
+        if key.startswith("NAB_"):
+            monkeypatch.delenv(key, raising=False)
+
+    # get_settings is lru_cached, and `app = create_app()` at the bottom of
+    # main.py calls it at import time -- before any fixture can run. Without
+    # clearing the cache the very first Settings built from the developer's real
+    # .env is handed to every test thereafter, and disabling env_file above
+    # achieves nothing.
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
 
 CONTAINER = """<?xml version="1.0"?>
 <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
@@ -33,8 +63,14 @@ def xhtml(body: str) -> str:
 
 
 def paragraphs(count: int, word: str = "word") -> str:
-    """A body with `count` paragraphs of twenty words each."""
-    return "".join(f"<p>{' '.join([word] * 20)}</p>" for _ in range(count))
+    """A body with `count` paragraphs of twenty words each.
+
+    Each paragraph ends with a distinct token. Identical paragraphs would share
+    a chunk cache key, so a chapter of repeated text needs exactly one
+    synthesis call no matter how long it is -- which silently turns any test
+    that counts synthesis calls into a test of the cache instead.
+    """
+    return "".join(f"<p>{' '.join([word] * 19)} {word}{i}</p>" for i in range(count))
 
 
 @dataclass

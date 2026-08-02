@@ -70,6 +70,7 @@ class KokoroLocalBackend:
         self.model_version = f"kokoro-1.0/{self._model_path.stem}"
 
         self._kokoro = None
+        self._provider: str | None = None
         self._lock = threading.Lock()
 
     # -- model lifecycle ---------------------------------------------------
@@ -132,9 +133,34 @@ class KokoroLocalBackend:
             # a missing CUDA runtime falls back silently, and a GPU node that
             # is quietly running on CPU is the kind of thing you discover from
             # a render taking nine hours.
-            log.info("Kokoro running on %s", session.get_providers()[0])
+            self._provider = session.get_providers()[0]
+            log.info("Kokoro running on %s", self._provider)
             self._kokoro = Kokoro.from_session(session, str(self._voices_path))
             return self._kokoro
+
+    @property
+    def provider(self) -> str | None:
+        """The chosen execution provider, or None if the model is not loaded.
+
+        Unlike :attr:`device` this never triggers a load, so /health can report
+        it without paying a second of model initialisation on the primary host.
+        """
+        return self._provider
+
+    @property
+    def device(self) -> str:
+        """The execution provider onnxruntime actually chose.
+
+        Loads the model to find out, because the answer is only knowable once
+        a session exists. Worth the wait: a GPU node that fell back to CPU --
+        because onnxruntime-gpu is missing, or the CUDA major version does not
+        match the image, or the container was started without --gpus -- is
+        otherwise indistinguishable from a working one until a render takes
+        nine hours. This is reported by /node/health rather than left to a log
+        line, since app logs do not surface under uvicorn's default config.
+        """
+        self._load()
+        return self._provider or "unknown"
 
     def _providers(self, ort) -> list[str]:
         """Execution providers in preference order."""

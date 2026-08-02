@@ -4,6 +4,20 @@ export default defineNuxtConfig({
   compatibilityDate: '2025-07-15',
   devtools: { enabled: true },
 
+  app: {
+    head: {
+      title: 'NAudioBooker',
+      link: [
+        // Served from web/public. Several sizes because browsers pick per
+        // context: 16/32 for the tab and bookmarks bar, 180 for an iOS home
+        // screen shortcut, where a 32px icon would look like a smudge.
+        { rel: 'icon', type: 'image/png', sizes: '32x32', href: '/favicon-32.png' },
+        { rel: 'icon', type: 'image/png', sizes: '16x16', href: '/favicon-16.png' },
+        { rel: 'apple-touch-icon', sizes: '180x180', href: '/favicon-180.png' },
+      ],
+    },
+  },
+
   css: ['~/assets/css/main.css'],
 
   // Tailwind v4 is wired in as a Vite plugin. Do not add @nuxtjs/tailwindcss:

@@ -89,6 +89,10 @@ class NodeInfo(BaseModel):
     model_version: str
     sample_rate: int
     max_chars: int
+    #: The execution provider actually in use, e.g. "CUDAExecutionProvider".
+    #: The single most useful field on a GPU node: "CPUExecutionProvider" here
+    #: means the offload is doing nothing, which is otherwise invisible.
+    provider: str | None = None
     #: False means the node accepts unauthenticated synthesis requests.
     authenticated: bool = False
 

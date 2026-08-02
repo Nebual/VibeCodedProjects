@@ -191,10 +191,31 @@ chunk already synthesized, defeating the entire point of falling back. The key i
 *model*, not the transport. Confirmed: rendering on the node then re-rendering locally hit
 46/46 cache entries in 4 seconds.
 
-No GPU exists in this sandbox, so CUDA provider selection is implemented and logged but
-unverified on real hardware. The log line reports whichever provider onnxruntime actually
-chose, because a silent fall back to CPU on the node is otherwise invisible until a render
-takes nine hours.
+No GPU exists in this sandbox, so CUDA cannot be exercised end to end. The node image does
+build and run, and `/node/health` truthfully reports `CPUExecutionProvider` here — which is
+the diagnostic working, not a failure.
+
+### The GPU image took four attempts, and each failure was invisible
+
+1. **Ubuntu 22.04 has no `python3.12` packages.** uv provisions the interpreter instead, which
+   removes a dependency rather than adding a PPA.
+2. **The `onnxruntime-gpu` swap ran before the final `uv sync`**, which reconciles against the
+   lockfile and would have reinstalled the CPU wheel over it.
+3. **`get_available_providers()` is not a usable check.** It lists CUDA whenever the provider
+   is *compiled in*, including when the library cannot load — it returned
+   `['CUDAExecutionProvider', ...]` on an image where CUDA was demonstrably broken. The build
+   now resolves the provider library's shared-object dependencies, excluding `libcuda.so.1`
+   which the driver injects at runtime.
+4. **`Kokoro running on <provider>` never appears under uvicorn**, because app loggers get no
+   handler in its default config. The provider is now a field on `/node/health`.
+
+Every one of these produces the same symptom: a node that looks healthy and runs at CPU
+speed. That is why the check is in the build and the answer is in an endpoint, rather than
+both being left to a log line nobody reads.
+
+CUDA major versions must match between base image and wheel; onnxruntime-gpu moved to CUDA 13
+around 1.27. `CUDA_IMAGE` and `ONNXRUNTIME_GPU` are build args so either pairing works, and a
+mismatch fails the build.
 
 Note: HuggingFace is blocked by the sandbox network policy (403), so any model distributed
 only via HF — Chatterbox, F5-TTS — needs `sbx policy allow network huggingface.co` before it

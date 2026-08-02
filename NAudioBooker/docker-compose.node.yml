@@ -26,6 +26,19 @@ services:
     build:
       context: ./api
       dockerfile: Dockerfile.gpu
+      args:
+        # Defaults target CUDA 13. Drivers are backward compatible, so a CUDA
+        # 13 driver also runs CUDA 12 images, but not the reverse. For an older
+        # driver, override both together -- the CUDA major version of the base
+        # image and of the onnxruntime-gpu wheel have to match:
+        #
+        #   CUDA_IMAGE=nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+        #   ONNXRUNTIME_GPU=onnxruntime-gpu>=1.21,<1.27
+        #
+        # A mismatch fails the build rather than shipping an image that
+        # silently runs on CPU.
+        CUDA_IMAGE: ${CUDA_IMAGE:-nvidia/cuda:13.0.1-cudnn-runtime-ubuntu24.04}
+        ONNXRUNTIME_GPU: ${ONNXRUNTIME_GPU:-onnxruntime-gpu}
     environment:
       NAB_ROLE: worker-node
       NAB_MODELS_DIR: /models
@@ -34,6 +47,10 @@ services:
       # synthesize for anyone who can reach it if this is unset.
       NAB_REMOTE_WORKER_TOKEN: ${NAB_REMOTE_WORKER_TOKEN:?set a shared token}
     volumes:
+      # The weights are read locally, so this machine needs its own copy --
+      # they do not come from the primary host, and models/ is gitignored so a
+      # fresh checkout has none. Run ../scripts/fetch-models.ps1 (or .sh) here
+      # first, or /node/health will report the files as missing.
       - ./models:/models:ro
     ports:
       - "8001:8000"

@@ -117,13 +117,20 @@ hours and nobody is listening to check.
 Download the weights into a directory outside `data/`:
 
 ```bash
-mkdir -p models && cd models
-BASE=https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0
-curl -LO $BASE/kokoro-v1.0.onnx   # fp32, 311 MB
-curl -LO $BASE/voices-v1.0.bin    # 27 MB, 54 voices
+./scripts/fetch-models.sh          # or scripts\fetch-models.ps1 on Windows
 ```
 
-Point the API at them with `NAB_MODELS_DIR` if they are not in `../models`.
+That pulls `kokoro-v1.0.onnx` (fp32, 311 MB) and `voices-v1.0.bin` (27 MB,
+54 voices) into `models/`. Point elsewhere with `NAB_MODELS_DIR`.
+
+**Run it on every machine that synthesizes.** The weights are read locally, so a
+GPU node needs its own copy — they are not shipped from the primary host, and
+`models/` is gitignored so a fresh checkout has none. A node without them says
+so plainly:
+
+```json
+{"available": false, "detail": "missing model files: kokoro-v1.0.onnx, ..."}
+```
 
 Use the fp32 build. The int8 one is a third of the size and measured about
 **five times slower** on every CPU tested — quantised kernels lose to
@@ -177,6 +184,29 @@ NAB_REMOTE_WORKER_TOKEN=<same secret>
 ```
 
 There is also `docker-compose.node.yml` for the GPU side.
+
+### Matching CUDA versions
+
+The CUDA major version of the base image and of the `onnxruntime-gpu` wheel
+have to agree. onnxruntime-gpu moved to CUDA 13 around 1.27; earlier wheels
+link against CUDA 12. The image defaults to CUDA 13 with a current
+onnxruntime; for an older driver, override both:
+
+```bash
+docker build -f api/Dockerfile.gpu \
+  --build-arg CUDA_IMAGE=nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04 \
+  --build-arg ONNXRUNTIME_GPU='onnxruntime-gpu>=1.21,<1.27' api
+```
+
+Note that `nvidia-smi` reports the *highest* CUDA version your driver
+supports, not one it requires — drivers are backward compatible, so a CUDA 13
+driver runs CUDA 12 images perfectly well.
+
+A mismatch does not need diagnosing by hand: the image build resolves the
+provider library's shared-object dependencies and fails if any are missing.
+That check exists because `onnxruntime.get_available_providers()` lists CUDA
+whenever the provider is merely *compiled in* — including when it cannot load —
+so it will happily tell you a broken install is fine.
 
 **An unreachable node degrades rather than fails.** A desktop that sleeps or
 reboots would otherwise kill a multi-hour render, so the dispatcher falls back

@@ -3,12 +3,21 @@ export interface SystemDeps {
   espeak_ng: boolean
 }
 
+export interface TTSStatus {
+  configured: string
+  active: string | null
+  available: boolean
+  detail: string
+  provider: string | null
+}
+
 export interface Health {
   status: 'ok' | 'degraded'
   version: string
   role: string
   tts_backend: string
   deps: SystemDeps
+  tts: TTSStatus | null
 }
 
 export interface ChapterInfo {
