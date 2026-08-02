@@ -14,9 +14,11 @@ import time
 
 from ..config import Settings
 from .base import (
+    NO_OPTIONS,
     AudioChunk,
     BackendHealth,
     BackendUnavailable,
+    ModelOptions,
     ReferenceClip,
     TTSError,
     Voice,
@@ -203,6 +205,7 @@ class KokoroLocalBackend:
         voice: str,
         speed: float = 1.0,
         reference: ReferenceClip | None = None,
+        options: ModelOptions = NO_OPTIONS,
     ) -> AudioChunk:
         # Kokoro has fixed voices and cannot clone, so a reference clip is
         # accepted and ignored rather than rejected: callers pass it uniformly

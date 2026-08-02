@@ -16,9 +16,11 @@ import logging
 import time
 
 from .base import (
+    NO_OPTIONS,
     AudioChunk,
     BackendHealth,
     BackendUnavailable,
+    ModelOptions,
     ReferenceClip,
     TTSBackend,
     Voice,
@@ -117,10 +119,11 @@ class FallbackBackend:
         voice: str,
         speed: float = 1.0,
         reference: ReferenceClip | None = None,
+        options: ModelOptions = NO_OPTIONS,
     ) -> AudioChunk:
         if self._primary_available:
             try:
-                chunk = self.primary.synthesize(text, voice, speed, reference)
+                chunk = self.primary.synthesize(text, voice, speed, reference, options)
                 self._promote()
                 return chunk
             except BackendUnavailable as exc:
@@ -128,7 +131,7 @@ class FallbackBackend:
             # A TTSError is the node working correctly and rejecting this
             # input; retrying locally would just fail the same way.
 
-        return self.secondary.synthesize(text, voice, speed, reference)
+        return self.secondary.synthesize(text, voice, speed, reference, options)
 
     @property
     def provider(self) -> str | None:

@@ -22,9 +22,11 @@ import numpy as np
 
 from ..config import Settings
 from .base import (
+    NO_OPTIONS,
     AudioChunk,
     BackendHealth,
     BackendUnavailable,
+    ModelOptions,
     ReferenceClip,
     TTSError,
     Voice,
@@ -41,6 +43,44 @@ DEFAULT_CFG_WEIGHT = 0.5
 MAX_CHARS = 300
 
 
+def _or_default(value: float | None, fallback: float) -> float:
+    """Unset means "use Resemble's default", not zero.
+
+    Worth spelling out because both knobs are meaningful at 0.0, so `value or
+    fallback` would silently rewrite a deliberate 0 into 0.5.
+    """
+    return fallback if value is None else value
+
+
+def _check_watermarker() -> None:
+    """Catch the broken-watermarker install before it becomes a riddle.
+
+    Chatterbox watermarks its output with resemble-perth, which imports
+    pkg_resources. setuptools 81 deprecated that module and 83 removed it, and
+    Python 3.12 venvs no longer bundle setuptools at all -- so the import
+    fails, perth catches it and sets PerthImplicitWatermarker = None, and
+    Chatterbox only falls over later trying to call it.
+
+    The resulting "'NoneType' object is not callable" names neither perth nor
+    setuptools nor pkg_resources, which makes it essentially unsearchable. The
+    image pins setuptools<81 for this reason; the check stays because a
+    container built before that pin fails exactly this way.
+    """
+    try:
+        import perth
+    except ImportError:
+        return  # A build without the watermarker at all is not our problem.
+
+    if getattr(perth, "PerthImplicitWatermarker", None) is None:
+        raise BackendUnavailable(
+            "Chatterbox's watermarker (resemble-perth) failed to import "
+            "pkg_resources, so it is unusable and Chatterbox would fail with "
+            "\"'NoneType' object is not callable\". Fix it in the node "
+            "container with: uv pip install 'setuptools<81' -- or rebuild the "
+            "image, which now pins it."
+        )
+
+
 class ChatterboxBackend:
     """Local Chatterbox synthesis. Thread-safe; the model loads on first use."""
 
@@ -55,13 +95,11 @@ class ChatterboxBackend:
         #: Monotonic timestamp of the last synthesis; drives idle unloading.
         self.last_used_at: float | None = None
         self._sample_rate = 24_000  # replaced with model.sr once loaded
-        self._exaggeration = DEFAULT_EXAGGERATION
-        self._cfg_weight = DEFAULT_CFG_WEIGHT
-        # The expressive controls change the audio, so they are part of the
-        # identity the chunk cache keys on.
-        self.model_version = (
-            f"chatterbox-original/ex{self._exaggeration:.2f}/cfg{self._cfg_weight:.2f}"
-        )
+        # The expressive controls used to live here and be baked into
+        # model_version. They are per-request now, so they travel in
+        # ModelOptions and land in the cache key through its token instead --
+        # one instance can then serve every setting without reloading.
+        self.model_version = "chatterbox-original"
 
     @property
     def sample_rate(self) -> int:
@@ -85,6 +123,8 @@ class ChatterboxBackend:
                     "environment because it conflicts with omnivoice: "
                     "`uv pip install chatterbox-tts`."
                 ) from exc
+
+            _check_watermarker()
 
             device = resolve_device(self._settings)
             warn_if_cpu("Chatterbox", device)
@@ -119,6 +159,7 @@ class ChatterboxBackend:
         voice: str,
         speed: float = 1.0,
         reference: ReferenceClip | None = None,
+        options: ModelOptions = NO_OPTIONS,
     ) -> AudioChunk:
         self.last_used_at = time.monotonic()
         text = text.strip()
@@ -135,8 +176,8 @@ class ChatterboxBackend:
             wav = model.generate(
                 text,
                 audio_prompt_path=str(reference.path),
-                exaggeration=self._exaggeration,
-                cfg_weight=self._cfg_weight,
+                exaggeration=_or_default(options.exaggeration, DEFAULT_EXAGGERATION),
+                cfg_weight=_or_default(options.cfg_weight, DEFAULT_CFG_WEIGHT),
             )
         except Exception as exc:
             raise TTSError(f"Chatterbox failed on {len(text)} chars: {exc}") from exc
@@ -156,7 +197,6 @@ class ChatterboxBackend:
             if array.ndim > 1:
                 array = array.mean(axis=0)
         return array
-
 
     # -- resource management ----------------------------------------------
 

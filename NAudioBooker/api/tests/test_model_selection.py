@@ -207,3 +207,73 @@ def test_render_rejects_a_clip_that_no_longer_exists(backends, book, clip) -> No
 
     assert res.status_code == 400
     assert "no voice clip" in res.json()["detail"].lower()
+
+
+# ---------------------------------------------------------------------------
+# Preview caching
+# ---------------------------------------------------------------------------
+
+
+def test_repeat_preview_is_served_from_cache(backends) -> None:
+    with TestClient(create_app()) as client:
+        body = {"voice": "af_heart", "model": "kokoro", "text": "the same words"}
+        first = client.post("/preview", json=body)
+        second = client.post("/preview", json=body)
+
+    assert first.headers["x-cache"] == "miss"
+    assert second.headers["x-cache"] == "hit"
+    assert second.content == first.content
+    # The point of the cache: the model ran once, not twice.
+    assert len(backends["kokoro"].calls) == 1
+
+
+def test_each_distinguishing_field_is_its_own_cache_entry(backends) -> None:
+    """Anything that changes the audio has to change the key.
+
+    Comparing voices is the whole use case, so serving voice A's audio for
+    voice B would be both wrong and the most likely thing to go unnoticed.
+    """
+    base = {"voice": "af_heart", "model": "kokoro", "text": "identical text", "speed": 1.0}
+    variants = [
+        base,
+        {**base, "voice": "bf_emma"},
+        {**base, "speed": 1.25},
+        {**base, "text": "different text"},
+    ]
+
+    with TestClient(create_app()) as client:
+        for variant in variants:
+            assert client.post("/preview", json=variant).headers["x-cache"] == "miss"
+
+    assert len(backends["kokoro"].calls) == len(variants)
+
+
+def test_the_same_text_on_a_different_model_is_not_reused(backends, clip) -> None:
+    shared = {"text": "identical text", "speed": 1.0}
+
+    with TestClient(create_app()) as client:
+        kokoro = client.post("/preview", json={**shared, "voice": "af_heart", "model": "kokoro"})
+        omni = client.post("/preview", json={**shared, "voice": clip.id, "model": "omnivoice"})
+
+    assert kokoro.headers["x-cache"] == "miss"
+    assert omni.headers["x-cache"] == "miss"
+
+
+def test_preview_offers_a_filename_naming_the_combination(backends, clip) -> None:
+    with TestClient(create_app()) as client:
+        res = client.post(
+            "/preview",
+            json={"voice": clip.id, "model": "omnivoice", "text": "hello", "speed": 1.25},
+        )
+
+    disposition = res.headers["content-disposition"]
+    assert "omnivoice" in disposition
+    assert clip.id in disposition
+    assert "1.25x" in disposition
+
+
+def test_the_filename_leaves_out_a_default_speed(backends) -> None:
+    with TestClient(create_app()) as client:
+        res = client.post("/preview", json={"voice": "af_heart", "model": "kokoro"})
+
+    assert res.headers["content-disposition"] == 'inline; filename="preview-kokoro-af-heart.wav"'

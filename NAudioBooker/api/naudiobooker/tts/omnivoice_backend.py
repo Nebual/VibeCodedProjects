@@ -21,9 +21,11 @@ import numpy as np
 
 from ..config import Settings
 from .base import (
+    NO_OPTIONS,
     AudioChunk,
     BackendHealth,
     BackendUnavailable,
+    ModelOptions,
     ReferenceClip,
     TTSError,
     Voice,
@@ -43,6 +45,25 @@ DEFAULT_STEPS = 32
 #: OmniVoice is not phoneme-limited the way Kokoro is, but very long inputs
 #: still degrade prosody and cost more to redo on a cache miss.
 MAX_CHARS = 400
+
+
+def _explain(exc: Exception) -> str:
+    """Add the fix to failures whose message describes only the symptom.
+
+    Triton JIT-compiles its CUDA kernels the first time one runs, and shells
+    out to a C compiler to build the launcher. A -runtime CUDA base image has
+    none, so a node loads the model, reports itself healthy, and then fails on
+    the first chunk with a message about a compiler and nothing about Docker.
+    """
+    message = str(exc)
+    if "C compiler" in message or "triton.knobs.build" in message:
+        return (
+            f"{message} -- Triton needs a C compiler to build its CUDA kernels "
+            "and the node image has none. Install one in the container with: "
+            "apt-get update && apt-get install -y build-essential -- or "
+            "rebuild the image, which now includes it."
+        )
+    return message
 
 
 class OmniVoiceBackend:
@@ -122,6 +143,7 @@ class OmniVoiceBackend:
         voice: str,
         speed: float = 1.0,
         reference: ReferenceClip | None = None,
+        options: ModelOptions = NO_OPTIONS,
     ) -> AudioChunk:
         self.last_used_at = time.monotonic()
         text = text.strip()
@@ -150,11 +172,10 @@ class OmniVoiceBackend:
         try:
             audio = model.generate(**kwargs)
         except Exception as exc:
-            raise TTSError(f"OmniVoice failed on {len(text)} chars: {exc}") from exc
+            raise TTSError(f"OmniVoice failed on {len(text)} chars: {_explain(exc)}") from exc
 
         samples = np.asarray(audio[0] if isinstance(audio, list) else audio, dtype=np.float32)
         return AudioChunk(samples=samples, sample_rate=SAMPLE_RATE)
-
 
     # -- resource management ----------------------------------------------
 

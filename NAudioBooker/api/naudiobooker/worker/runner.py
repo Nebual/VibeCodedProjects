@@ -39,7 +39,7 @@ from ..db import init_db
 from ..models import BookDetail, JobInfo
 from ..text import Chunk, chunk_paragraphs
 from ..tts import TTSError, get_backend
-from ..tts.base import ReferenceClip, TTSBackend
+from ..tts.base import NO_OPTIONS, ModelOptions, ReferenceClip, TTSBackend
 from ..voices import VoiceLibrary
 
 log = logging.getLogger(__name__)
@@ -159,6 +159,7 @@ def _render_chapter(
     progress: _Progress,
     stop: threading.Event | None = None,
     reference: ReferenceClip | None = None,
+    options: ModelOptions = NO_OPTIONS,
 ) -> float:
     """Synthesize one chapter to a WAV file. Returns its duration."""
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -185,10 +186,14 @@ def _render_chapter(
                 # not identify the audio. Without the clip hash here, pointing
                 # a voice at a new recording would serve the old one forever.
                 voice_ref=job.voice_ref,
+                # The tuning the job was queued with, not whatever the model
+                # defaults to now. A render resumed after a settings change
+                # must keep sounding like the chapters already on disk.
+                options=options.cache_token(),
             )
             audio = cache.get(key)
             if audio is None:
-                audio = backend.synthesize(chunk.text, job.voice, job.speed, reference)
+                audio = backend.synthesize(chunk.text, job.voice, job.speed, reference, options)
                 cache.put(key, audio)
             else:
                 progress.cache_hits += 1
@@ -362,6 +367,7 @@ def process_job(
     )
     try:
         reference = _resolve_reference(job)
+        options = ModelOptions.from_dict(job.options)
         progress = _plan_chunks(job.book_id, job, backend.max_chars)
         jobs.update_progress(job.id, chunks_total=progress.chunks_total)
 
@@ -389,6 +395,7 @@ def process_job(
                     progress=progress,
                     stop=stop,
                     reference=reference,
+                    options=options,
                 )
             except Cancelled:
                 raise

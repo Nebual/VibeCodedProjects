@@ -153,6 +153,20 @@ const { data: bookSamples } = await useAsyncData<Option[]>(
 
 const options = computed<Option[]>(() => [...(bookSamples.value ?? []), ...PRESETS])
 
+/**
+ * Where a preview stops being a quick listen.
+ *
+ * Not a limit -- longer text is chunked exactly as a render is. It is a
+ * warning that the wait now scales with the text, which on a cloning model
+ * matters a great deal.
+ */
+const LONG_PREVIEW_CHARS = 600
+/** Matches MAX_PREVIEW_CHARS on the server, which refuses beyond this. */
+const MAX_PREVIEW_CHARS = 20_000
+
+const long = computed(() => text.value.length > LONG_PREVIEW_CHARS)
+const tooLong = computed(() => text.value.length > MAX_PREVIEW_CHARS)
+
 const selected = ref('')
 
 function apply(id: string) {
@@ -214,9 +228,23 @@ watch(bookSamples, applyDefault)
       rows="3"
       placeholder="Or type anything you want to hear in this voice…"
     />
-    <p class="text-base-content/40 text-xs">
-      {{ text.length }} characters. Long passages take proportionally longer to
-      preview.
-    </p>
+    <!-- The action sits directly under the text it speaks, with the character
+         count pushed to the far side so the two never crowd each other. -->
+    <div class="flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
+      <slot name="actions" />
+      <p
+        class="text-xs"
+        :class="tooLong ? 'text-error' : long ? 'text-warning' : 'text-base-content/40'"
+      >
+        {{ text.length.toLocaleString() }} characters.
+        <template v-if="tooLong">
+          Over the {{ MAX_PREVIEW_CHARS.toLocaleString() }} limit for a single
+          preview — upload it as a book instead.
+        </template>
+        <template v-else-if="long">
+          Split into chunks like a render, so it takes proportionally longer.
+        </template>
+      </p>
+    </div>
   </div>
 </template>

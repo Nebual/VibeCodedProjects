@@ -17,6 +17,7 @@ from test_tts import FakeBackend
 from naudiobooker import jobs, store
 from naudiobooker.config import Settings
 from naudiobooker.db import init_db
+from naudiobooker.tts.base import NO_OPTIONS
 from naudiobooker.worker.runner import (
     RenderWorker,
     ShuttingDown,
@@ -97,11 +98,11 @@ def test_shutdown_mid_render_keeps_completed_chunks(env, book, backend):
     original = backend.synthesize
     calls = {"n": 0}
 
-    def stop_partway(text, voice, speed=1.0, reference=None):
+    def stop_partway(text, voice, speed=1.0, reference=None, options=NO_OPTIONS):
         calls["n"] += 1
         if calls["n"] == 6:
             stop.set()
-        return original(text, voice, speed, reference)
+        return original(text, voice, speed, reference, options)
 
     backend.synthesize = stop_partway
     with pytest.raises(ShuttingDown):

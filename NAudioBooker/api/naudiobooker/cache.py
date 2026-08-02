@@ -44,6 +44,7 @@ def chunk_key(
     speed: float,
     text: str,
     voice_ref: str | None = None,
+    options: str = "",
 ) -> str:
     """Key for one synthesized chunk.
 
@@ -52,11 +53,20 @@ def chunk_key(
     same name can be re-pointed at a completely different recording. Keying on
     the name alone would serve the old voice from cache forever, and the only
     symptom would be a book that stubbornly refuses to sound like the new clip.
+
+    ``options`` is ModelOptions.cache_token() -- the per-request tuning knobs.
+    An empty token is appended as nothing at all rather than as an empty
+    field, which keeps the digest byte-identical to the one this function
+    produced before options existed. Untuned audio therefore stays in the
+    cache instead of every book in it being silently invalidated.
     """
     digest = hashlib.sha256()
     # Length-prefixed so no combination of field values can collide with a
     # different combination by concatenating the same way.
-    for part in (model_version, voice, voice_ref or "", f"{speed:.4f}", text):
+    parts = [model_version, voice, voice_ref or "", f"{speed:.4f}", text]
+    if options:
+        parts.append(options)
+    for part in parts:
         encoded = part.encode("utf-8")
         digest.update(str(len(encoded)).encode("ascii"))
         digest.update(b"\0")

@@ -6,6 +6,7 @@ SQLite so the two processes need nothing else in common but a filesystem.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import uuid
 from datetime import UTC, datetime
@@ -23,7 +24,14 @@ def _now() -> str:
 
 
 def _job_from_row(row: sqlite3.Row, chapters: list[JobChapterInfo]) -> JobInfo:
-    return JobInfo(**dict(row), chapters=chapters)
+    fields = dict(row)
+    # Stored as JSON text; a row written before the column existed, or by hand,
+    # should not take a render down.
+    try:
+        fields["options"] = json.loads(fields.get("options") or "{}")
+    except (TypeError, ValueError):
+        fields["options"] = {}
+    return JobInfo(**fields, chapters=chapters)
 
 
 def _chapters_for(conn: sqlite3.Connection, job_id: str) -> list[JobChapterInfo]:
@@ -52,6 +60,7 @@ def create_job(
     output_format: str = "mp3",
     model: str = "kokoro",
     voice_ref: str | None = None,
+    options: dict[str, float] | None = None,
 ) -> JobInfo:
     """Queue a render. ``chapters`` is (index, title) for included chapters."""
     job_id = uuid.uuid4().hex[:12]
@@ -60,9 +69,9 @@ def create_job(
     with db.transaction() as conn:
         conn.execute(
             "INSERT INTO jobs (id, book_id, status, voice, speed, backend,"
-            " model, voice_ref, model_version, chapters_total, output_format,"
-            " created_at, updated_at)"
-            " VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " model, voice_ref, options, model_version, chapters_total,"
+            " output_format, created_at, updated_at)"
+            " VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 job_id,
                 book_id,
@@ -71,6 +80,7 @@ def create_job(
                 backend,
                 model,
                 voice_ref,
+                json.dumps(options or {}, sort_keys=True),
                 model_version,
                 len(chapters),
                 output_format,

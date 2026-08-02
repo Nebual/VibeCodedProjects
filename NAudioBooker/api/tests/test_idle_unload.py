@@ -11,7 +11,7 @@ from test_tts import FakeBackend
 
 from naudiobooker.config import Settings
 from naudiobooker.main import create_app
-from naudiobooker.tts.base import backend_idle_seconds, unload_backend
+from naudiobooker.tts.base import NO_OPTIONS, backend_idle_seconds, unload_backend
 from naudiobooker.tts.idle import IdleUnloader
 from naudiobooker.tts.remote_http import RemoteHttpBackend
 
@@ -25,7 +25,7 @@ class LoadableBackend(FakeBackend):
         self.last_used_at: float | None = None
         self.unload_calls = 0
 
-    def synthesize(self, text, voice, speed=1.0, reference=None):
+    def synthesize(self, text, voice, speed=1.0, reference=None, options=NO_OPTIONS):
         self.loaded = True
         self.last_used_at = time.monotonic()
         return super().synthesize(text, voice, speed)

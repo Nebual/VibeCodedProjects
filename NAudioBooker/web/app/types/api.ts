@@ -101,6 +101,16 @@ export interface JobInfo {
   is_terminal: boolean
 }
 
+export interface TuningKnob {
+  id: string
+  label: string
+  minimum: number
+  maximum: number
+  step: number
+  default: number
+  hint: string
+}
+
 export interface ModelInfo {
   id: string
   label: string
@@ -112,6 +122,8 @@ export interface ModelInfo {
   notes: string
   node_url: string | null
   is_default: boolean
+  /** Controls this model exposes. The UI renders a slider per entry. */
+  tuning: TuningKnob[]
 }
 
 export interface VoiceClipInfo {

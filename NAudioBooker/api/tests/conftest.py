@@ -19,7 +19,7 @@ from naudiobooker.config import Settings, get_settings
 
 
 @pytest.fixture(autouse=True)
-def isolated_settings(monkeypatch):
+def isolated_settings(monkeypatch, tmp_path):
     """Keep the machine's real configuration out of the tests.
 
     Settings deliberately finds a .env at the project root regardless of the
@@ -28,11 +28,19 @@ def isolated_settings(monkeypatch):
     backend -- silently changes what the suite exercises. This was not
     hypothetical; the moment .env discovery started working, three tests began
     failing with 401 because a real token had appeared in the environment.
+
+    The data dir is redirected for the same reason, in the other direction: a
+    default Settings resolves it relative to the working directory, so any test
+    that writes through one -- the preview cache is the first -- would leave
+    files in the repo and hand them to the next run. A cache is exactly the
+    kind of state that turns that into a test which passes only the second
+    time.
     """
     monkeypatch.setitem(Settings.model_config, "env_file", None)
     for key in list(os.environ):
         if key.startswith("NAB_"):
             monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("NAB_DATA_DIR", str(tmp_path / "nab-data"))
 
     # get_settings is lru_cached, and `app = create_app()` at the bottom of
     # main.py calls it at import time -- before any fixture can run. Without

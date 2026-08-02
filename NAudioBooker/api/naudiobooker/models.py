@@ -84,6 +84,18 @@ class VoiceClipInfo(BaseModel):
     filename: str
 
 
+class TuningKnobInfo(BaseModel):
+    """One per-request control, described so the UI can render it generically."""
+
+    id: str
+    label: str
+    minimum: float
+    maximum: float
+    step: float
+    default: float
+    hint: str
+
+
 class ModelInfo(BaseModel):
     id: str
     label: str
@@ -99,6 +111,8 @@ class ModelInfo(BaseModel):
     #: Which node would serve this model, when synthesis is remote.
     node_url: str | None = None
     is_default: bool = False
+    #: Controls this model exposes. The UI shows sliders for whatever is here.
+    tuning: list[TuningKnobInfo] = Field(default_factory=list)
 
 
 class PreviewRequest(BaseModel):
@@ -108,6 +122,9 @@ class PreviewRequest(BaseModel):
     speed: float = Field(default=1.0, ge=0.5, le=2.0)
     #: Model to preview with. Defaults to the configured one.
     model: str | None = None
+    #: Per-request tuning, as {"exaggeration": 0.7}. Only the knobs the chosen
+    #: model declares are meaningful; the rest are ignored by the backend.
+    options: dict[str, float] = Field(default_factory=dict)
 
 
 class NodeSynthesizeRequest(BaseModel):
@@ -124,6 +141,10 @@ class NodeSynthesizeRequest(BaseModel):
     speed: float = Field(default=1.0, ge=0.5, le=2.0)
     voice_ref: str | None = None
     ref_text: str | None = None
+    #: Per-request tuning knobs, as {"exaggeration": 0.7}. A mapping rather
+    #: than named fields so a node and a primary on different versions still
+    #: talk: an unknown knob is ignored, not a 422.
+    options: dict[str, float] = Field(default_factory=dict)
 
 
 class NodeInfo(BaseModel):
@@ -158,6 +179,9 @@ class RenderRequest(BaseModel):
     output_format: OutputFormat = "mp3"
     #: Which model to render with. Defaults to the configured one.
     model: str | None = None
+    #: Per-request tuning, as {"exaggeration": 0.7}. Only the knobs the chosen
+    #: model declares are meaningful; the rest are ignored by the backend.
+    options: dict[str, float] = Field(default_factory=dict)
 
 
 class JobChapterInfo(BaseModel):
@@ -186,6 +210,9 @@ class JobInfo(BaseModel):
     model: str = "kokoro"
     #: Reference clip hash, when rendering in a cloned voice.
     voice_ref: str | None = None
+    #: Tuning the render was queued with. Persisted because a job outlives the
+    #: request, and the worker rebuilds the cache key from it hours later.
+    options: dict[str, float] = Field(default_factory=dict)
     model_version: str
     chapters_total: int
     chapters_done: int

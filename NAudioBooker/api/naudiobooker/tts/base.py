@@ -97,6 +97,63 @@ class ReferenceClip:
 
 
 @dataclass(frozen=True)
+class ModelOptions:
+    """Per-request knobs that change the audio without changing the model.
+
+    A shared vocabulary rather than a per-backend bag: each backend reads the
+    fields it understands and ignores the rest, so adding a knob for one model
+    does not ripple through the others. They cannot live on the backend
+    instance -- one instance serves every request, and the weights are too
+    large to hold one per setting combination.
+
+    Whatever is added here must appear in ``cache_token``. A knob that changes
+    the audio but not the cache key would serve the previous setting's audio
+    back forever, and the symptom -- a slider that appears to do nothing after
+    the first try -- points nowhere near the cache.
+    """
+
+    #: Chatterbox. Higher is more dramatic, and also faster; 0.5 is neutral.
+    exaggeration: float | None = None
+    #: Chatterbox classifier-free guidance. Lower slows the pacing down, which
+    #: is how you compensate for the speed-up that exaggeration brings.
+    cfg_weight: float | None = None
+
+    def cache_token(self) -> str:
+        """Stable identity of these options, empty when nothing is set.
+
+        Empty is load-bearing: chunk_key omits the field entirely in that case,
+        so every key written before this existed still resolves. Sorted and
+        fixed-precision so the same settings always produce the same token.
+        """
+        parts = [f"{name}={value:.4f}" for name, value in sorted(self.as_dict().items())]
+        return ",".join(parts)
+
+    def as_dict(self) -> dict[str, float]:
+        """Only the knobs actually set, for sending over the wire."""
+        return {
+            name: value
+            for name, value in (
+                ("exaggeration", self.exaggeration),
+                ("cfg_weight", self.cfg_weight),
+            )
+            if value is not None
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, float] | None) -> ModelOptions:
+        data = data or {}
+        return cls(
+            exaggeration=data.get("exaggeration"),
+            cfg_weight=data.get("cfg_weight"),
+        )
+
+
+#: Shared by every call that does not tune anything, so the common path does
+#: not allocate and `is NO_OPTIONS` is a cheap default check.
+NO_OPTIONS = ModelOptions()
+
+
+@dataclass(frozen=True)
 class BackendHealth:
     available: bool
     detail: str
@@ -127,12 +184,14 @@ class TTSBackend(Protocol):
         voice: str,
         speed: float = 1.0,
         reference: ReferenceClip | None = None,
+        options: ModelOptions = NO_OPTIONS,
     ) -> AudioChunk:
         """Speak ``text``.
 
-        ``reference`` carries a cloned voice's audio. Models without cloning
-        ignore it rather than raising, so the caller does not have to know
-        which kind of model it is holding.
+        ``reference`` carries a cloned voice's audio, and ``options`` the
+        per-request tuning knobs. Models that support neither ignore them
+        rather than raising, so the caller does not have to know which kind of
+        model it is holding.
         """
         ...
 

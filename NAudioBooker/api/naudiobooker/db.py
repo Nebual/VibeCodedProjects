@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     output_format   TEXT NOT NULL DEFAULT 'mp3',
     model           TEXT NOT NULL DEFAULT 'kokoro',
     voice_ref       TEXT,
+    options         TEXT NOT NULL DEFAULT '{}',
     artifact_path   TEXT,
     artifact_bytes  INTEGER,
     error           TEXT,
@@ -118,6 +119,10 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         # The cloned voice's clip hash. Recorded so a finished job says which
         # recording produced it, and so the cache key can be reconstructed.
         ("voice_ref", "TEXT"),
+        # Per-request tuning, as a JSON object. Stored rather than derived
+        # because the worker rebuilds the cache key from it long after the
+        # request that chose it has gone.
+        ("options", "TEXT NOT NULL DEFAULT '{}'"),
     ],
     "job_chapters": [
         ("gain_db", "REAL"),

@@ -10,6 +10,10 @@ const props = defineProps<{
 const model = defineModel<string>('model', { required: true })
 const voice = defineModel<string>('voice', { required: true })
 const speed = defineModel<number>('speed', { default: 1.0 })
+/** Tuning per model id, so switching away and back keeps your settings. */
+const tuning = defineModel<Record<string, Record<string, number>>>('tuning', {
+  default: () => ({}),
+})
 
 const { data: models } = await useFetch<ModelInfo[]>('/api/models', { default: () => [] })
 const { data: voices } = await useFetch<VoiceInfo[]>('/api/voices', { default: () => [] })
@@ -19,6 +23,49 @@ const { data: clips, refresh: refreshClips } = await useFetch<VoiceClipInfo[]>(
 )
 
 const current = computed(() => models.value.find(m => m.id === model.value))
+
+// -- per-model tuning ---------------------------------------------------------
+
+/** Knobs the current model declares. Empty for models without any. */
+const knobs = computed(() => current.value?.tuning ?? [])
+
+function knobValue(id: string): number {
+  const stored = tuning.value[model.value]?.[id]
+  if (stored !== undefined) return stored
+  return knobs.value.find(k => k.id === id)?.default ?? 0
+}
+
+function setKnob(id: string, value: number) {
+  tuning.value = {
+    ...tuning.value,
+    [model.value]: { ...tuning.value[model.value], [id]: value },
+  }
+}
+
+function resetKnobs() {
+  const { [model.value]: _dropped, ...rest } = tuning.value
+  tuning.value = rest
+}
+
+/**
+ * Only the knobs actually moved away from their default.
+ *
+ * Sending defaults explicitly would work, but it would also put a tuning
+ * token in the cache key for every render -- so an untuned book would miss
+ * every chunk already cached from before this feature existed.
+ */
+const activeTuning = computed(() => {
+  const out: Record<string, number> = {}
+  for (const knob of knobs.value) {
+    const value = knobValue(knob.id)
+    if (Math.abs(value - knob.default) > 1e-9) out[knob.id] = value
+  }
+  return out
+})
+
+const isTuned = computed(() => Object.keys(activeTuning.value).length > 0)
+
+defineExpose({ activeTuning })
 
 /**
  * How long this model would take on the selected chapters.
@@ -114,12 +161,18 @@ const sampleText = ref('')
 const previewing = ref(false)
 const previewError = ref<string | null>(null)
 const audioUrl = ref<string | null>(null)
+/** Filename the server suggests, so downloads say which combination they are. */
+const downloadName = ref('preview.wav')
+/** Whether the last preview came back from the cache rather than the model. */
+const fromCache = ref(false)
 
 async function play() {
   previewing.value = true
   previewError.value = null
   try {
-    const blob = await $fetch<Blob>('/api/preview', {
+    // Raw response rather than the parsed body: the filename and the
+    // cache-hit flag both arrive as headers.
+    const response = await $fetch.raw<Blob>('/api/preview', {
       method: 'POST',
       responseType: 'blob',
       body: {
@@ -127,10 +180,13 @@ async function play() {
         speed: speed.value,
         model: model.value,
         text: sampleText.value.trim() || null,
+        options: activeTuning.value,
       },
     })
     if (audioUrl.value) URL.revokeObjectURL(audioUrl.value)
-    audioUrl.value = URL.createObjectURL(blob)
+    audioUrl.value = URL.createObjectURL(response._data as Blob)
+    downloadName.value = filenameFrom(response.headers) ?? 'preview.wav'
+    fromCache.value = response.headers.get('x-cache') === 'hit'
     await nextTick()
     document.querySelector<HTMLAudioElement>('#voice-preview')?.play()
   }
@@ -140,6 +196,11 @@ async function play() {
   finally {
     previewing.value = false
   }
+}
+
+function filenameFrom(headers: Headers): string | null {
+  const match = /filename="([^"]+)"/.exec(headers.get('content-disposition') ?? '')
+  return match?.[1] ?? null
 }
 
 /**
@@ -197,7 +258,7 @@ const needsClip = computed(() => current.value?.supports_cloning && !clips.value
 
       <!-- The two facts worth interrupting for: it will be slow, and it may
            not run here at all. -->
-      <div v-if="current && !current.cpu_viable" class="alert alert-info py-2 text-xs">
+      <div v-if="current && !current.cpu_viable" class="alert alert-soft alert-info py-2 text-xs">
         <span>
           Needs the GPU node.
           <template v-if="current.node_url">Configured at <code>{{ current.node_url }}</code>.</template>
@@ -207,7 +268,7 @@ const needsClip = computed(() => current.value?.supports_cloning && !clips.value
       <!-- Keyed on the estimate, not on the model being slow: a slow model on
            two short chapters is still a few minutes, and calling that an
            overnight job would be plainly wrong. -->
-      <div v-if="longRender" class="alert alert-warning py-2 text-xs">
+      <div v-if="longRender" class="alert alert-soft alert-warning py-2 text-xs">
         <span>
           Roughly <strong>{{ longRender }}</strong> to render this selection.
         </span>
@@ -289,36 +350,90 @@ const needsClip = computed(() => current.value?.supports_cloning && !clips.value
       </p>
     </div>
 
-    <!-- Speed and preview -->
-    <div class="flex flex-wrap items-end gap-3">
-      <label class="form-control">
-        <div class="label py-1 mr-1">
-          <span class="label-text text-xs">Speed — {{ speed.toFixed(2) }}×</span>
-        </div>
-        <input
-          v-model.number="speed"
-          type="range"
-          min="0.7"
-          max="1.4"
-          step="0.05"
-          class="range range-xs w-40"
+    <!-- Per-model tuning. Rendered from what the model declares, so adding a
+         knob to a model needs no change here. -->
+    <div v-if="knobs.length" class="space-y-3">
+      <div class="flex items-center gap-2">
+        <span class="label-text text-xs font-medium">Delivery</span>
+        <button
+          v-if="isTuned"
+          class="btn btn-ghost btn-xs"
+          @click="resetKnobs"
         >
-      </label>
-      <button class="btn btn-sm" :disabled="previewing || !voice" @click="play">
-        <span v-if="previewing" class="loading loading-spinner loading-xs" />
-        {{ previewing ? 'Rendering…' : 'Preview' }}
-      </button>
+          Reset
+        </button>
+        <span v-else class="text-base-content/40 text-xs">defaults</span>
+      </div>
+
+      <div class="flex flex-wrap gap-x-10 gap-y-4">
+        <div v-for="knob in knobs" :key="knob.id" class="w-56 space-y-1.5">
+          <div class="text-xs">
+            {{ knob.label }}
+            <span class="text-base-content/50 font-mono">{{ knobValue(knob.id).toFixed(2) }}</span>
+          </div>
+          <input
+            type="range"
+            class="range range-xs w-full"
+            :min="knob.minimum"
+            :max="knob.maximum"
+            :step="knob.step"
+            :value="knobValue(knob.id)"
+            :aria-label="knob.label"
+            @input="setKnob(knob.id, Number(($event.target as HTMLInputElement).value))"
+          >
+          <p class="text-base-content/40 text-xs leading-snug">
+            {{ knob.hint }}
+          </p>
+        </div>
+      </div>
     </div>
 
-    <SamplePhrase v-model="sampleText" :book-id="bookId" />
+    <!-- Speed. Same column width as a tuning knob so the controls line up. -->
+    <div class="w-56 space-y-1.5">
+      <div class="text-xs">
+        Speed
+        <span class="text-base-content/50 font-mono">{{ speed.toFixed(2) }}×</span>
+      </div>
+      <input
+        v-model.number="speed"
+        type="range"
+        min="0.7"
+        max="1.4"
+        step="0.05"
+        class="range range-xs w-full"
+        aria-label="Speed"
+      >
+    </div>
 
-    <audio
-      v-if="audioUrl"
-      id="voice-preview"
-      :src="audioUrl"
-      controls
-      class="h-9 w-full max-w-md"
-    />
+    <SamplePhrase v-model="sampleText" :book-id="bookId">
+      <template #actions>
+        <button class="btn btn-sm btn-primary" :disabled="previewing || !voice" @click="play">
+          <span v-if="previewing" class="loading loading-spinner loading-xs" />
+          {{ previewing ? 'Rendering…' : 'Preview' }}
+        </button>
+      </template>
+    </SamplePhrase>
+
+    <div v-if="audioUrl" class="flex flex-wrap items-center gap-2">
+      <audio
+        id="voice-preview"
+        :src="audioUrl"
+        controls
+        class="h-9 w-full max-w-md"
+      />
+      <!-- The blob is already here, so this costs no second synthesis and no
+           second request -- which is the point when comparing a dozen takes. -->
+      <a
+        class="btn btn-ghost btn-sm"
+        :href="audioUrl"
+        :download="downloadName"
+      >
+        Download
+      </a>
+      <span v-if="fromCache" class="text-base-content/40 text-xs">
+        from cache
+      </span>
+    </div>
     <p v-if="previewError" class="text-error text-xs">
       {{ previewError }}
     </p>

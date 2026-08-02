@@ -8,7 +8,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
 from ..config import get_settings
-from ..models import ModelInfo, VoiceClipInfo
+from ..models import ModelInfo, TuningKnobInfo, VoiceClipInfo
 from ..tts.models import ALL_MODELS
 from ..voices import VoiceError, VoiceLibrary
 
@@ -43,6 +43,7 @@ def list_models() -> list[ModelInfo]:
             notes=spec.notes,
             node_url=settings.node_url_for(spec.id) if settings.is_remote else None,
             is_default=spec.id == settings.tts_model,
+            tuning=[TuningKnobInfo(**vars(knob)) for knob in spec.tuning],
         )
         for spec in ALL_MODELS
     ]

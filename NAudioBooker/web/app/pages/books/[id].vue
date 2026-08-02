@@ -8,7 +8,12 @@ const { data: book, error } = await useFetch<BookDetail>(`/api/books/${id}`)
 
 // Remembered across visits: a global default, overridden per book once you
 // have chosen for this one.
-const { model, voice, speed } = useVoicePreference(id)
+const { model, voice, speed, tuning } = useVoicePreference(id)
+
+// The picker knows which knobs the chosen model declares and which have been
+// moved off their default; the page only needs the result, to hand to a render.
+const picker = ref<{ activeTuning: Record<string, number> } | null>(null)
+const activeTuning = computed(() => picker.value?.activeTuning ?? {})
 
 /** Index of the chapter whose extracted text is expanded, if any. */
 const openChapter = ref<number | null>(null)
@@ -132,9 +137,11 @@ const includedCount = computed(
           </h2>
         </div>
         <VoicePicker
+          ref="picker"
           v-model:model="model"
           v-model:voice="voice"
           v-model:speed="speed"
+          v-model:tuning="tuning"
           :book-id="book.id"
           :est-seconds="book.est_seconds"
         />
@@ -146,6 +153,7 @@ const includedCount = computed(
       :model="model"
       :voice="voice"
       :speed="speed"
+      :options="activeTuning"
       :included-chapters="includedCount"
     />
 

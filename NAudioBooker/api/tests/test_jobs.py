@@ -12,7 +12,7 @@ from naudiobooker.audio import probe_duration
 from naudiobooker.cache import ChunkCache, chunk_key
 from naudiobooker.config import Settings
 from naudiobooker.db import init_db
-from naudiobooker.tts.base import AudioChunk
+from naudiobooker.tts.base import NO_OPTIONS, AudioChunk
 from naudiobooker.worker.runner import process_job
 
 
@@ -291,11 +291,11 @@ def test_a_failing_chapter_does_not_abort_the_others(env, book, backend, monkeyp
     calls = {"n": 0}
     original = backend.synthesize
 
-    def flaky(text, voice, speed=1.0, reference=None):
+    def flaky(text, voice, speed=1.0, reference=None, options=NO_OPTIONS):
         calls["n"] += 1
         if calls["n"] == 1:
             raise TTSError("synthesis exploded")
-        return original(text, voice, speed, reference)
+        return original(text, voice, speed, reference, options)
 
     monkeypatch.setattr(backend, "synthesize", flaky)
 
@@ -316,11 +316,11 @@ def test_interrupted_render_resumes_from_cache(env, book, backend, monkeypatch):
     seen = {"n": 0}
     original = backend.synthesize
 
-    def die_after_a_few(text, voice, speed=1.0, reference=None):
+    def die_after_a_few(text, voice, speed=1.0, reference=None, options=NO_OPTIONS):
         seen["n"] += 1
         if seen["n"] > 6:
             raise Cancelled
-        return original(text, voice, speed, reference)
+        return original(text, voice, speed, reference, options)
 
     monkeypatch.setattr(backend, "synthesize", die_after_a_few)
     make_job(book)

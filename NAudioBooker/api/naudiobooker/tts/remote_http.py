@@ -16,9 +16,11 @@ import soundfile as sf
 
 from ..config import Settings
 from .base import (
+    NO_OPTIONS,
     AudioChunk,
     BackendHealth,
     BackendUnavailable,
+    ModelOptions,
     ReferenceClip,
     TTSError,
     Voice,
@@ -261,6 +263,7 @@ class RemoteHttpBackend:
         voice: str,
         speed: float = 1.0,
         reference: ReferenceClip | None = None,
+        options: ModelOptions = NO_OPTIONS,
     ) -> AudioChunk:
         # Before anything is sent: confirm this node runs the model we think it
         # does. Preview reaches synthesize() without ever reading model_version,
@@ -271,7 +274,13 @@ class RemoteHttpBackend:
         if reference is not None:
             self._ensure_clip(reference)
 
-        payload = {"text": text, "voice": voice, "speed": speed}
+        payload: dict = {"text": text, "voice": voice, "speed": speed}
+        tuning = options.as_dict()
+        if tuning:
+            # Only when set. An older node would 422 on an unexpected field,
+            # and there is no reason to make an untuned render depend on the
+            # node being new enough to know about tuning at all.
+            payload["options"] = tuning
         if reference is not None:
             payload["voice_ref"] = reference.ref_hash
             payload["ref_text"] = reference.transcript

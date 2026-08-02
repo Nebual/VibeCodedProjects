@@ -93,6 +93,7 @@ def start_render(book_id: str, request: RenderRequest) -> JobInfo:
         backend=backend.id,
         model=spec.id,
         voice_ref=reference.ref_hash if reference else None,
+        options=request.options,
         model_version=model_version,
         chapters=included,
         output_format=request.output_format,

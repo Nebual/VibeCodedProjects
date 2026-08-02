@@ -14,6 +14,53 @@ Family = str
 
 
 @dataclass(frozen=True)
+class TuningKnob:
+    """One per-request control a model exposes.
+
+    Described here rather than hardcoded in the UI so a model's controls
+    travel with the model: the front end renders whatever a spec declares,
+    and adding a knob to another model needs no front-end change.
+    """
+
+    #: Must match a field name on ModelOptions.
+    id: str
+    label: str
+    minimum: float
+    maximum: float
+    step: float
+    default: float
+    hint: str
+
+
+#: Resemble's guidance, which is specific enough to be worth passing on rather
+#: than paraphrasing: the defaults suit most prompts; a fast-talking reference
+#: clip does better with cfg_weight nearer 0.3; and for dramatic reads, raise
+#: exaggeration to ~0.7 and drop cfg_weight to ~0.3, because exaggeration
+#: speeds speech up and a lower cfg_weight slows the pacing back down.
+CHATTERBOX_TUNING = (
+    TuningKnob(
+        id="exaggeration",
+        label="Exaggeration",
+        minimum=0.25,
+        maximum=1.0,
+        step=0.05,
+        default=0.5,
+        hint="How dramatic the delivery is. Raising it also speeds speech up.",
+    ),
+    TuningKnob(
+        id="cfg_weight",
+        label="Pacing (CFG weight)",
+        minimum=0.2,
+        maximum=1.0,
+        step=0.05,
+        default=0.5,
+        hint="Lower is slower and more deliberate. Try 0.3 for a fast "
+        "reference clip, or to offset high exaggeration.",
+    ),
+)
+
+
+@dataclass(frozen=True)
 class ModelSpec:
     id: str
     label: str
@@ -33,6 +80,8 @@ class ModelSpec:
     #: possible.
     cpu_viable: bool
     notes: str
+    #: Per-request controls this model exposes. Empty for models with none.
+    tuning: tuple[TuningKnob, ...] = ()
 
 
 #: Kokoro is the default for a reason: non-autoregressive, so identical text
@@ -64,9 +113,8 @@ CHATTERBOX_ORIGINAL = ModelSpec(
     # factor, so a CPU ratio predicts nothing.
     gpu_rtf_hint=2.16,
     cpu_viable=False,
-    notes=(
-        "A slower, high quality model with voice cloning."
-    ),
+    notes=("A slower, high quality model with voice cloning."),
+    tuning=CHATTERBOX_TUNING,
 )
 
 OMNIVOICE = ModelSpec(
@@ -81,9 +129,7 @@ OMNIVOICE = ModelSpec(
     # an earlier estimate an order of magnitude out.
     gpu_rtf_hint=3.5,
     cpu_viable=False,
-    notes=(
-        "Voice cloning from a 3-10 second clip."
-    ),
+    notes=("Voice cloning from a 3-10 second clip."),
 )
 
 #: Chatterbox also ships Turbo (350M) and Nano (110M) English variants. Nano in

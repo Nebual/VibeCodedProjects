@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 from naudiobooker.audio import to_wav_bytes
 from naudiobooker.main import create_app
 from naudiobooker.tts.base import (
+    NO_OPTIONS,
     AudioChunk,
     BackendHealth,
     BackendUnavailable,
@@ -42,6 +43,8 @@ class FakeBackend:
         #: Reference clip passed with each call, so tests can assert a cloned
         #: voice actually reached the backend rather than being dropped.
         self.references: list[object] = []
+        #: Tuning passed with each call, for the same reason.
+        self.options: list[object] = []
 
     def voices(self) -> list[Voice]:
         if not self._available:
@@ -57,12 +60,14 @@ class FakeBackend:
         voice: str,
         speed: float = 1.0,
         reference=None,
+        options=NO_OPTIONS,
     ) -> AudioChunk:
         if not self._available:
             raise BackendUnavailable("no model")
         if not text.strip():
             raise TTSError("nothing to synthesize")
         self.references.append(reference)
+        self.options.append(options)
         self.calls.append((text, voice, speed))
         n = int(self.sample_rate * len(text) / 100 / speed)
         t = np.arange(n, dtype=np.float32) / self.sample_rate
@@ -236,11 +241,41 @@ def test_preview_honours_supplied_text(fake) -> None:
     assert fake.calls[-1][0] == "Just this."
 
 
-def test_preview_rejects_overlong_text(fake) -> None:
+def test_preview_accepts_text_longer_than_the_model_takes_in_one_call(fake) -> None:
+    """Long text is chunked like a render rather than refused or truncated.
+
+    The screen doubles as a way to speak arbitrary pasted text, and the old
+    600-character bound made that useless. What must not happen is the text
+    silently reaching a model that caps out below it.
+    """
+    # Each sentence must be distinct. Repeating one would give every chunk the
+    # same cache key, so the model would be called once and the other chunks
+    # served from cache -- and the test would be measuring the cache instead.
+    sentences = [
+        f"This is sentence number {n} and it exists to make the passage long."
+        for n in range(30)
+    ]
+    text = " ".join(sentences)
+    assert len(text) > fake.max_chars
+
     with TestClient(create_app()) as client:
-        res = client.post("/preview", json={"voice": "fk_ann", "text": "x" * 5000})
+        res = client.post("/preview", json={"voice": "fk_ann", "text": text})
+
+    assert res.status_code == 200, res.text
+    assert len(fake.calls) > 1, "the text was sent to the model in one oversized call"
+    assert all(len(call[0]) <= fake.max_chars for call in fake.calls)
+    # Every sentence has to survive the round trip, in order.
+    spoken = " ".join(call[0] for call in fake.calls)
+    assert spoken == text
+
+
+def test_preview_still_refuses_text_far_too_long_for_one_request(fake) -> None:
+    with TestClient(create_app()) as client:
+        res = client.post("/preview", json={"voice": "fk_ann", "text": "x " * 20_000})
 
     assert res.status_code == 413
+    # The message must point somewhere useful rather than just saying no.
+    assert "render it" in res.json()["detail"]
 
 
 @pytest.mark.parametrize("speed", [0.4, 2.5])

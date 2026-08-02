@@ -16,9 +16,22 @@ export interface VoiceChoice {
   model: string
   voice: string
   speed: number
+  /**
+   * Per-model tuning, keyed by model id.
+   *
+   * Kept per model rather than flat: the knobs mean different things to
+   * different models, and coming back to Chatterbox should restore the
+   * settings you left it on rather than whatever the last model used.
+   */
+  tuning: Record<string, Record<string, number>>
 }
 
-const FALLBACK: VoiceChoice = { model: 'kokoro', voice: 'af_heart', speed: 1.0 }
+const FALLBACK: VoiceChoice = {
+  model: 'kokoro',
+  voice: 'af_heart',
+  speed: 1.0,
+  tuning: {},
+}
 
 function read(key: string): Partial<VoiceChoice> | null {
   if (import.meta.server) return null
@@ -82,5 +95,13 @@ export function useVoicePreference(bookId?: string) {
       get: () => choice.value.speed,
       set: (v: number) => { choice.value = { ...choice.value, speed: v } },
     }) as Ref<number>,
+    tuning: computed({
+      // Defaulted on read: a preference stored before tuning existed has no
+      // such key, and a missing object would break every lookup downstream.
+      get: () => choice.value.tuning ?? {},
+      set: (v: Record<string, Record<string, number>>) => {
+        choice.value = { ...choice.value, tuning: v }
+      },
+    }) as Ref<Record<string, Record<string, number>>>,
   }
 }

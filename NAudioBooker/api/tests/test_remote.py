@@ -17,6 +17,7 @@ from test_tts import FakeBackend
 from naudiobooker.config import Settings
 from naudiobooker.main import create_app
 from naudiobooker.tts.base import (
+    NO_OPTIONS,
     AudioChunk,
     BackendHealth,
     BackendUnavailable,
@@ -211,7 +212,9 @@ class DeadBackend:
         self.attempts += 1
         raise BackendUnavailable("box is asleep")
 
-    def synthesize(self, text: str, voice: str, speed: float = 1.0, reference=None) -> AudioChunk:
+    def synthesize(
+        self, text: str, voice: str, speed: float = 1.0, reference=None, options=NO_OPTIONS
+    ) -> AudioChunk:
         self.attempts += 1
         raise BackendUnavailable("box is asleep")
 

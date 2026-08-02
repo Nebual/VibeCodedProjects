@@ -6,6 +6,8 @@ const props = defineProps<{
   model: string
   voice: string
   speed: number
+  /** Per-request model tuning, already reduced to non-default knobs. */
+  options: Record<string, number>
   includedChapters: number
 }>()
 
@@ -56,6 +58,7 @@ async function start() {
         voice: props.voice,
         speed: props.speed,
         model: props.model,
+        options: props.options,
         output_format: format.value,
       },
     })
@@ -85,6 +88,12 @@ const STATUS_BADGE: Record<string, string> = {
 }
 
 const percent = computed(() => Math.round((job.value?.progress ?? 0) * 100))
+
+function tuningLabel(options: Record<string, number>): string {
+  return Object.entries(options)
+    .map(([id, value]) => `${id} ${value}`)
+    .join(', ')
+}
 
 /** Remaining time from observed throughput, not a fixed guess. */
 const eta = computed(() => {
@@ -130,6 +139,15 @@ const eta = computed(() => {
           </select>
 
           <span v-if="job" class="badge badge-ghost badge-sm">{{ job.model }}</span>
+          <!-- Two renders of one book can now differ by settings alone, so the
+               job has to say which it used. -->
+          <span
+            v-if="job && Object.keys(job.options ?? {}).length"
+            class="badge badge-ghost badge-sm"
+            :title="tuningLabel(job.options)"
+          >
+            tuned
+          </span>
           <span v-if="job" class="badge badge-sm" :class="STATUS_BADGE[job.status]">
             {{ job.stage && !job.is_terminal ? job.stage : job.status }}
           </span>

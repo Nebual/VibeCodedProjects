@@ -18,7 +18,7 @@ from ..audio import to_wav_bytes
 from ..config import get_settings
 from ..models import NodeInfo, NodeSynthesizeRequest
 from ..tts import BackendUnavailable, TTSError, get_backend
-from ..tts.base import BackendHealth, ReferenceClip, unload_backend
+from ..tts.base import BackendHealth, ModelOptions, ReferenceClip, unload_backend
 
 router = APIRouter(tags=["node"])
 
@@ -178,7 +178,13 @@ def node_synthesize(
 
     try:
         backend = get_backend()
-        chunk = backend.synthesize(text, request.voice, request.speed, reference)
+        chunk = backend.synthesize(
+            text,
+            request.voice,
+            request.speed,
+            reference,
+            ModelOptions.from_dict(request.options),
+        )
     except (BackendUnavailable, NotImplementedError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except TTSError as exc:
