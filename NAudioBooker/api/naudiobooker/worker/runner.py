@@ -15,6 +15,9 @@ import logging
 import re
 import signal
 import threading
+from collections import deque
+from collections.abc import Callable, Iterator, Sequence
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -25,9 +28,11 @@ from .. import jobs, store
 from ..audio import (
     EncodeError,
     GainPlan,
+    Loudness,
     M4BChapter,
     TrackTags,
     build_m4b,
+    combine,
     measure,
     plan_gain,
     tag_mp3,
@@ -39,7 +44,7 @@ from ..db import init_db
 from ..models import BookDetail, JobInfo
 from ..text import Chunk, chunk_paragraphs
 from ..tts import TTSError, get_backend
-from ..tts.base import NO_OPTIONS, ModelOptions, ReferenceClip, TTSBackend
+from ..tts.base import NO_OPTIONS, AudioChunk, ModelOptions, ReferenceClip, TTSBackend
 from ..voices import VoiceLibrary
 
 log = logging.getLogger(__name__)
@@ -148,6 +153,48 @@ def _check_cancelled(job_id: str, stop: threading.Event | None = None) -> None:
         raise Cancelled
 
 
+def _in_order[T, R](work: Callable[[T], R], items: Sequence[T], concurrency: int) -> Iterator[R]:
+    """Apply ``work`` to ``items`` concurrently, yielding results in order.
+
+    Kokoro's ONNX graph is fixed at batch 1, so the only way to keep the GPU
+    busy is to have several calls in flight at once. Results are still yielded
+    in the original order, which is what makes this safe to drop into a loop
+    that streams straight to a file: the audio is byte-identical to a serial
+    render, only the wall-clock changes.
+
+    The look-ahead is bounded at ``concurrency + 1``. Unbounded submission
+    would race ahead of the consumer and hold every finished chunk in memory
+    -- twenty thousand of them for a novel.
+    """
+    if concurrency <= 1:
+        for item in items:
+            yield work(item)
+        return
+
+    pool = ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="synth")
+    try:
+        pending: deque[Future[R]] = deque()
+        upcoming = iter(items)
+
+        def fill() -> None:
+            while len(pending) < concurrency + 1:
+                nxt = next(upcoming, None)
+                if nxt is None:
+                    return
+                pending.append(pool.submit(work, nxt))
+
+        fill()
+        while pending:
+            result = pending.popleft().result()
+            fill()
+            yield result
+    finally:
+        # cancel_futures drops whatever has not started; the handful already
+        # running still have to finish, which bounds how long a cancellation
+        # takes to one chunk rather than one per worker.
+        pool.shutdown(wait=True, cancel_futures=True)
+
+
 def _render_chapter(
     *,
     job: JobInfo,
@@ -160,42 +207,54 @@ def _render_chapter(
     stop: threading.Event | None = None,
     reference: ReferenceClip | None = None,
     options: ModelOptions = NO_OPTIONS,
+    concurrency: int = 1,
 ) -> float:
     """Synthesize one chapter to a WAV file. Returns its duration."""
     destination.parent.mkdir(parents=True, exist_ok=True)
     tmp = destination.with_suffix(".partial.wav")
+
+    def render_one(chunk: Chunk) -> tuple[AudioChunk, bool]:
+        """One chunk, start to finish. Returns (audio, came_from_cache).
+
+        Deliberately free of shared mutable state: with concurrency > 1 this
+        runs on a pool thread, and every counter it might have touched is
+        updated by the consumer below instead, in chunk order.
+        """
+        # Keyed on the model, not the backend: a chunk made on the GPU node
+        # and the same chunk made locally are interchangeable, and must
+        # stay so across a mid-job fallback.
+        key = chunk_key(
+            model_version=backend.model_version,
+            voice=job.voice,
+            speed=job.speed,
+            text=chunk.text,
+            # A cloned voice is named by the user, so the name alone does
+            # not identify the audio. Without the clip hash here, pointing
+            # a voice at a new recording would serve the old one forever.
+            voice_ref=job.voice_ref,
+            # The tuning the job was queued with, not whatever the model
+            # defaults to now. A render resumed after a settings change
+            # must keep sounding like the chapters already on disk.
+            options=options.cache_token(),
+        )
+        cached = cache.get(key)
+        if cached is not None:
+            return cached, True
+        audio = backend.synthesize(chunk.text, job.voice, job.speed, reference, options)
+        cache.put(key, audio)
+        return audio, False
 
     duration = 0.0
     done_here = 0
     with sf.SoundFile(
         tmp, "w", samplerate=backend.sample_rate, channels=1, subtype="PCM_16"
     ) as out:
-        for position, chunk in enumerate(chunks):
+        for position, (audio, from_cache) in enumerate(_in_order(render_one, chunks, concurrency)):
             if position % CANCEL_CHECK_EVERY == 0:
                 _check_cancelled(job.id, stop)
 
-            # Keyed on the model, not the backend: a chunk made on the GPU node
-            # and the same chunk made locally are interchangeable, and must
-            # stay so across a mid-job fallback.
-            key = chunk_key(
-                model_version=backend.model_version,
-                voice=job.voice,
-                speed=job.speed,
-                text=chunk.text,
-                # A cloned voice is named by the user, so the name alone does
-                # not identify the audio. Without the clip hash here, pointing
-                # a voice at a new recording would serve the old one forever.
-                voice_ref=job.voice_ref,
-                # The tuning the job was queued with, not whatever the model
-                # defaults to now. A render resumed after a settings change
-                # must keep sounding like the chapters already on disk.
-                options=options.cache_token(),
-            )
-            audio = cache.get(key)
-            if audio is None:
-                audio = backend.synthesize(chunk.text, job.voice, job.speed, reference, options)
-                cache.put(key, audio)
-            else:
+            chunk = chunks[position]
+            if from_cache:
                 progress.cache_hits += 1
 
             out.write(np.asarray(audio.samples, dtype=np.float32))
@@ -229,6 +288,7 @@ class _Rendered:
     title: str
     wav: Path
     duration_s: float
+    loudness: Loudness | None = None
     plan: GainPlan | None = None
 
 
@@ -269,27 +329,45 @@ def _finalize(
     year = str(book.created_at.year)
     mp3_dir = out_dir / "mp3"
 
+    # One measurement pass over the whole book, then one gain for all of it.
+    #
+    # Per chapter was the obvious thing and the wrong one. Measured on Kokoro,
+    # five very different passages in a single voice span 0.4 dB of RMS, so a
+    # per-chapter correction is chasing inaudible noise -- and it is the wrong
+    # shape besides, because normalising chapters independently flattens real
+    # differences between them. Measuring is cheap either way: about three
+    # seconds for a seventeen-hour book.
+    measurements = []
+    for item in rendered:
+        _check_cancelled(job.id, stop)
+        item.loudness = measure(item.wav)
+        measurements.append(item.loudness)
+
+    book_loudness = combine(measurements)
+    plan = plan_gain(book_loudness)
+    spread = max(m.rms_dbfs for m in measurements) - min(m.rms_dbfs for m in measurements)
+    log.info(
+        "job %s: book rms=%.1f peak=%.1f dBFS across %s chapters (rms spread %.1f dB)"
+        " -> gain %+.1f dB, limiting %.1f dB",
+        job.id,
+        book_loudness.rms_dbfs,
+        book_loudness.peak_dbfs,
+        len(measurements),
+        spread,
+        plan.gain_db,
+        plan.limiting_db,
+    )
+
     for position, item in enumerate(rendered, start=1):
         _check_cancelled(job.id, stop)
-
-        loudness = measure(item.wav)
-        item.plan = plan_gain(loudness)
-        log.info(
-            "job %s: chapter %s rms=%.1f peak=%.1f dBFS -> gain %+.1f dB, limiting %.1f dB",
-            job.id,
-            item.chapter_index,
-            loudness.rms_dbfs,
-            loudness.peak_dbfs,
-            item.plan.gain_db,
-            item.plan.limiting_db,
-        )
+        item.plan = plan
 
         mp3 = mp3_dir / f"{position:02d} {_safe_filename(item.title)}.mp3"
         wav_to_mp3(
             item.wav,
             mp3,
-            gain_db=item.plan.gain_db,
-            limit_dbfs=item.plan.limit_dbfs,
+            gain_db=plan.gain_db,
+            limit_dbfs=plan.limit_dbfs,
             bitrate=settings.mp3_bitrate,
         )
         tag_mp3(
@@ -305,7 +383,7 @@ def _finalize(
             cover=cover,
         )
         jobs.update_chapter(
-            job.id, item.chapter_index, path=str(mp3), gain_db=round(item.plan.gain_db, 2)
+            job.id, item.chapter_index, path=str(mp3), gain_db=round(plan.gain_db, 2)
         )
 
     artifact: Path | None = None
@@ -314,16 +392,7 @@ def _finalize(
         jobs.update_progress(job.id, stage="building m4b")
         artifact = out_dir / f"{_safe_filename(book.title)}.m4b"
         build_m4b(
-            [
-                M4BChapter(
-                    title=r.title,
-                    source=r.wav,
-                    duration_s=r.duration_s,
-                    gain_db=r.plan.gain_db if r.plan else 0.0,
-                    limit_dbfs=r.plan.limit_dbfs if r.plan else None,
-                )
-                for r in rendered
-            ],
+            [M4BChapter(title=r.title, source=r.wav, duration_s=r.duration_s) for r in rendered],
             artifact,
             title=book.title,
             artist=author,
@@ -331,6 +400,9 @@ def _finalize(
             cover=cover,
             bitrate=settings.m4b_bitrate,
             work_dir=out_dir,
+            gain_db=plan.gain_db,
+            limit_dbfs=plan.limit_dbfs,
+            sample_rate=settings.m4b_sample_rate,
         )
 
     # The intermediate WAVs are enormous -- roughly 170 MB per hour -- and
@@ -362,7 +434,9 @@ def process_job(
 
     log.info(
         "job %s: rendering %s chapters with %s%s",
-        job.id, len(job.chapters), job.model,
+        job.id,
+        len(job.chapters),
+        job.model,
         f" (cloned voice {job.voice_ref[:12]})" if job.voice_ref else "",
     )
     try:
@@ -396,6 +470,7 @@ def process_job(
                     stop=stop,
                     reference=reference,
                     options=options,
+                    concurrency=settings.render_concurrency,
                 )
             except Cancelled:
                 raise

@@ -489,3 +489,45 @@ def test_health_reports_a_node_serving_the_wrong_model() -> None:
 
     assert health.available is False
     assert "NAB_REMOTE_MODEL_URLS" in health.detail
+
+
+def test_concurrent_synthesis_evicts_siblings_only_once() -> None:
+    """The worker can have several chunks in flight; eviction must stay once.
+
+    Without a lock around the check-then-set, every in-flight chunk decides it
+    is the first and fires its own round of unload requests at the siblings.
+    """
+    import threading
+
+    unloads = []
+    settings = Settings(
+        tts_backend="remote",
+        remote_worker_url="http://box:8001",
+        remote_model_urls={"kokoro": "http://box:8001", "omnivoice": "http://box:8002"},
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/node/unload"):
+            unloads.append(str(request.url))
+            return httpx.Response(200, json={"unloaded": True})
+        return httpx.Response(200, json={"unloaded": False})
+
+    remote = RemoteHttpBackend(settings, model_id="kokoro", base_url="http://box:8001")
+    remote._client = httpx.Client(
+        base_url="http://box:8001", transport=httpx.MockTransport(handler)
+    )
+
+    start = threading.Event()
+
+    def call() -> None:
+        start.wait()
+        remote.prepare()
+
+    threads = [threading.Thread(target=call) for _ in range(8)]
+    for t in threads:
+        t.start()
+    start.set()
+    for t in threads:
+        t.join()
+
+    assert len(unloads) == 1, f"sibling evicted {len(unloads)} times"

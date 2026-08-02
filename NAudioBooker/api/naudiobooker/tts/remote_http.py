@@ -200,9 +200,13 @@ class RemoteHttpBackend:
         siblings unload themselves after a minute idle anyway, so this only has
         to cover the handover.
         """
-        if self._evicted:
-            return
-        self._evicted = True
+        # Locked because the worker can now have several chunks in flight at
+        # once: an unguarded check-then-set lets every one of them decide it is
+        # the first and fire its own round of unload requests at the siblings.
+        with self._lock:
+            if self._evicted:
+                return
+            self._evicted = True
 
         for url in self._sibling_urls():
             try:

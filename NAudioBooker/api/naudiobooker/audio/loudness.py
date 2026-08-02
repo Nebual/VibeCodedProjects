@@ -68,6 +68,33 @@ def measure(path: Path) -> Loudness:
     return Loudness(rms_dbfs=_to_dbfs(rms), peak_dbfs=_to_dbfs(peak), frames=frames)
 
 
+def combine(parts: list[Loudness]) -> Loudness:
+    """One measurement covering several files, as if they were concatenated.
+
+    Used to give a whole book a single gain instead of one per chapter.
+    Measured on Kokoro, five very different passages in one voice span 0.4 dB
+    of RMS -- inaudible -- so a per-chapter correction is chasing noise. Worse,
+    it is the wrong shape: normalising each chapter separately would flatten
+    genuine differences between them, quietly boosting a subdued chapter to
+    match a loud one.
+
+    RMS is pooled over frames rather than averaged over files, so a
+    ninety-second foreword cannot pull the level of a nine-hour book around.
+    """
+    real = [p for p in parts if p.frames > 0]
+    if not real:
+        return Loudness(rms_dbfs=_SILENCE_FLOOR_DBFS, peak_dbfs=_SILENCE_FLOOR_DBFS, frames=0)
+
+    frames = sum(p.frames for p in real)
+    # Back out each part's mean square from its dBFS, weight by length, repool.
+    total_square = sum((10.0 ** (p.rms_dbfs / 20.0)) ** 2 * p.frames for p in real)
+    return Loudness(
+        rms_dbfs=_to_dbfs(math.sqrt(total_square / frames)),
+        peak_dbfs=max(p.peak_dbfs for p in real),
+        frames=frames,
+    )
+
+
 #: Ceiling on how much work the limiter is asked to do. Speech tolerates a few
 #: dB of peak reduction without sounding processed; much more and it audibly
 #: flattens. Past this, loudness is sacrificed instead.

@@ -120,12 +120,33 @@ class Settings(BaseSettings):
     #: How long the worker sleeps when the queue is empty.
     worker_poll_interval_s: float = 2.0
 
+    #: Chunks synthesized at once within a chapter.
+    #:
+    #: Kokoro's ONNX graph is exported at a fixed batch of 1 -- the tokens
+    #: input is literally [1, sequence_length] and the output has no batch
+    #: axis -- so real batching is not available and overlapping separate
+    #: calls is the only way to give the card more than one thing to do.
+    #: Measured on an RTX 3070: one stream 45x real time, two streams ~40x
+    #: each (~1.8x total), three streams ~25x each, which is no better than
+    #: two. So two is the knee, and past it contention costs more than the
+    #: extra parallelism wins.
+    #:
+    #: Defaults to 1. Raising it costs VRAM -- the weights are shared but
+    #: activations are not -- which matters on a card already too small to
+    #: hold two cloning models at once.
+    render_concurrency: int = Field(default=1, ge=1, le=8)
+
     # Output encoding. Speech at 24 kHz mono needs far less than music: 96 kbps
     # MP3 is transparent for narration, and AAC holds up at a lower rate still.
     # (ACX submission would want 192 kbps CBR at 44.1 kHz -- these defaults are
     # for listening, not for delivery to a distributor.)
     mp3_bitrate: str = "96k"
     m4b_bitrate: str = "64k"
+    #: Sample rate for the M4B. None follows the source, which is what you
+    #: want: synthesis is 24 kHz and AAC encodes that natively, so upsampling
+    #: adds no information and costs roughly 30% of the encode. Set it (44100)
+    #: only for a player that insists.
+    m4b_sample_rate: int | None = None
 
     # Remote GPU worker (Phase 5). When tts_backend is "remote" these must be
     # set; the dispatcher falls back to local synthesis if the node is
@@ -162,7 +183,6 @@ class Settings(BaseSettings):
     def ensure_dirs(self) -> None:
         for d in (self.data_dir, self.books_dir, self.cache_dir):
             d.mkdir(parents=True, exist_ok=True)
-
 
     @model_validator(mode="after")
     def _normalise_legacy_backend(self) -> "Settings":
