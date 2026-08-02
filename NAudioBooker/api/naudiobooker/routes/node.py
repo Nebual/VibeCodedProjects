@@ -10,14 +10,15 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import Response
 
+from .. import node_clips
 from ..audio import to_wav_bytes
 from ..config import get_settings
-from ..models import NodeInfo, PreviewRequest
+from ..models import NodeInfo, NodeSynthesizeRequest
 from ..tts import BackendUnavailable, TTSError, get_backend
-from ..tts.base import BackendHealth
+from ..tts.base import BackendHealth, ReferenceClip, unload_backend
 
 router = APIRouter(tags=["node"])
 
@@ -84,12 +85,74 @@ def node_health() -> NodeInfo:
         )
 
 
+@router.post("/node/unload")
+def node_unload(
+    authorization: Annotated[str | None, Header()] = None,
+) -> dict:
+    """Release the model and its VRAM.
+
+    Called by a peer node's client before it loads its own model. An 8 GB card
+    cannot hold two of these at once, and the failure mode without this is an
+    out-of-memory error on the second model that says nothing about the first
+    one still holding the card.
+
+    Safe to call when nothing is loaded; it simply reports that.
+    """
+    _check_token(authorization)
+    try:
+        backend = get_backend()
+    except (BackendUnavailable, NotImplementedError):
+        return {"unloaded": False, "detail": "no backend to unload"}
+
+    freed = unload_backend(backend)
+    return {
+        "unloaded": freed,
+        "detail": "model released" if freed else "nothing was loaded",
+    }
+
+
+@router.get("/node/clips/{ref_hash}")
+def node_has_clip(
+    ref_hash: str,
+    authorization: Annotated[str | None, Header()] = None,
+) -> dict:
+    """Whether this node already holds a reference clip.
+
+    Asked once per clip so the primary can skip the upload. A book is twenty
+    thousand chunks; re-sending the clip with each one would move gigabytes to
+    convey the same few hundred kilobytes.
+    """
+    _check_token(authorization)
+    return {"ref_hash": ref_hash, "present": node_clips.has(ref_hash)}
+
+
+@router.post("/node/clips/{ref_hash}", status_code=201)
+async def node_put_clip(
+    ref_hash: str,
+    request: Request,
+    authorization: Annotated[str | None, Header()] = None,
+) -> dict:
+    """Accept a reference clip, verified against the hash it is filed under."""
+    _check_token(authorization)
+
+    data = await request.body()
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty clip")
+
+    try:
+        node_clips.store(ref_hash, data)
+    except node_clips.ClipRejected as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {"ref_hash": ref_hash, "stored": True}
+
+
 @router.post(
     "/node/synthesize",
     responses={200: {"content": {"audio/wav": {}}, "description": "WAV audio"}},
 )
 def node_synthesize(
-    request: PreviewRequest,
+    request: NodeSynthesizeRequest,
     authorization: Annotated[str | None, Header()] = None,
 ) -> Response:
     _check_token(authorization)
@@ -98,9 +161,24 @@ def node_synthesize(
     if not text:
         raise HTTPException(status_code=400, detail="No text supplied")
 
+    reference = None
+    if request.voice_ref:
+        if not node_clips.has(request.voice_ref):
+            # 409 rather than 400: the caller can fix this by uploading the
+            # clip and retrying, which is exactly what the client does.
+            raise HTTPException(
+                status_code=409,
+                detail=f"reference clip {request.voice_ref[:12]} is not on this node",
+            )
+        reference = ReferenceClip(
+            path=node_clips.path_for(request.voice_ref),
+            ref_hash=request.voice_ref,
+            transcript=request.ref_text,
+        )
+
     try:
         backend = get_backend()
-        chunk = backend.synthesize(text, request.voice, request.speed)
+        chunk = backend.synthesize(text, request.voice, request.speed, reference)
     except (BackendUnavailable, NotImplementedError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except TTSError as exc:

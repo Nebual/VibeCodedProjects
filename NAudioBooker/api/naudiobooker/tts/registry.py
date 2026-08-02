@@ -1,8 +1,7 @@
-"""Resolve the configured TTS backend.
+"""Resolve a model id to a working backend.
 
-One process holds one backend instance: the model weights are hundreds of
-megabytes and the onnxruntime session is thread-safe, so rebuilding it per
-request would be wasteful and slow.
+One process holds one instance per model: the weights are hundreds of megabytes
+and the sessions are thread-safe, so rebuilding per request would be wasteful.
 """
 
 from __future__ import annotations
@@ -11,42 +10,68 @@ import threading
 
 from ..config import Settings, get_settings
 from .base import TTSBackend
+from .models import ModelSpec, get_model
 
-_instances: dict[str, TTSBackend] = {}
+_instances: dict[tuple, TTSBackend] = {}
 _lock = threading.Lock()
 
 
-def _build(settings: Settings) -> TTSBackend:
-    backend = settings.tts_backend
+def _local_backend(settings: Settings, spec: ModelSpec) -> TTSBackend:
+    """Build the in-process backend for a model family.
 
-    if backend == "kokoro":
+    Imported lazily and per family, because Chatterbox and OmniVoice cannot
+    coexist in one environment -- Chatterbox pins transformers==5.2.0 and
+    OmniVoice needs >=5.3.0. Importing both eagerly would make whichever is
+    absent break the other.
+    """
+    if spec.family == "kokoro":
         from .kokoro_local import KokoroLocalBackend
 
         return KokoroLocalBackend(settings)
 
-    if backend == "remote":
-        from .remote_http import RemoteHttpBackend
+    if spec.family == "chatterbox":
+        from .chatterbox_backend import ChatterboxBackend
 
-        remote = RemoteHttpBackend(settings)
-        if not settings.remote_fallback_local:
-            return remote
+        return ChatterboxBackend(settings)
 
-        # A desktop GPU box sleeps and reboots. Wrapping the remote in a
-        # fallback means that costs a slower render rather than a dead job.
-        from .fallback import FallbackBackend
-        from .kokoro_local import KokoroLocalBackend
+    if spec.family == "omnivoice":
+        from .omnivoice_backend import OmniVoiceBackend
 
-        return FallbackBackend(remote, KokoroLocalBackend(settings))
+        return OmniVoiceBackend(settings)
 
-    if backend == "piper":
-        raise NotImplementedError("the Piper backend is not implemented yet")
-
-    raise ValueError(f"unknown TTS backend {backend!r}")
+    raise ValueError(f"no backend for model family {spec.family!r}")
 
 
-def get_backend(settings: Settings | None = None) -> TTSBackend:
+def _build(settings: Settings, model_id: str) -> TTSBackend:
+    spec = get_model(model_id)
+
+    if not settings.is_remote:
+        return _local_backend(settings, spec)
+
+    from .remote_http import RemoteHttpBackend
+
+    remote = RemoteHttpBackend(
+        settings,
+        model_id=model_id,
+        base_url=settings.node_url_for(model_id),
+    )
+
+    # Falling back to local CPU is a kindness for Kokoro and a trap for the
+    # cloning models: they run tens of times slower there, so a node going
+    # offline would turn a twenty minute render into a multi-day one while
+    # reporting success. Better to fail and say why.
+    if not settings.remote_fallback_local or not spec.cpu_viable:
+        return remote
+
+    from .fallback import FallbackBackend
+
+    return FallbackBackend(remote, _local_backend(settings, spec))
+
+
+def get_backend(settings: Settings | None = None, model_id: str | None = None) -> TTSBackend:
     settings = settings or get_settings()
-    key = f"{settings.tts_backend}:{settings.models_dir}:{settings.kokoro_model}"
+    model_id = model_id or settings.tts_model
+    key = (settings.tts_backend, model_id, str(settings.models_dir), settings.kokoro_model)
 
     instance = _instances.get(key)
     if instance is not None:
@@ -54,7 +79,7 @@ def get_backend(settings: Settings | None = None) -> TTSBackend:
 
     with _lock:
         if key not in _instances:
-            _instances[key] = _build(settings)
+            _instances[key] = _build(settings, model_id)
         return _instances[key]
 
 

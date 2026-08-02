@@ -36,6 +36,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     current_title   TEXT,
     stage           TEXT,
     output_format   TEXT NOT NULL DEFAULT 'mp3',
+    model           TEXT NOT NULL DEFAULT 'kokoro',
+    voice_ref       TEXT,
     artifact_path   TEXT,
     artifact_bytes  INTEGER,
     error           TEXT,
@@ -112,6 +114,10 @@ _ADDED_COLUMNS: dict[str, list[tuple[str, str]]] = {
         ("output_format", "TEXT NOT NULL DEFAULT 'mp3'"),
         ("artifact_path", "TEXT"),
         ("artifact_bytes", "INTEGER"),
+        ("model", "TEXT NOT NULL DEFAULT 'kokoro'"),
+        # The cloned voice's clip hash. Recorded so a finished job says which
+        # recording produced it, and so the cache key can be reconstructed.
+        ("voice_ref", "TEXT"),
     ],
     "job_chapters": [
         ("gain_db", "REAL"),

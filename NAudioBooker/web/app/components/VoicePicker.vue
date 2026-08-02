@@ -1,29 +1,116 @@
 <script setup lang="ts">
-import type { VoiceInfo } from '~/types/api'
+import type { ModelInfo, VoiceClipInfo, VoiceInfo } from '~/types/api'
 
+const props = defineProps<{
+  bookId?: string
+  /** Audio length of the selected chapters, for the render-time estimate. */
+  estSeconds?: number
+}>()
+
+const model = defineModel<string>('model', { required: true })
 const voice = defineModel<string>('voice', { required: true })
 const speed = defineModel<number>('speed', { default: 1.0 })
 
-const props = defineProps<{
-  /** Optional text to speak instead of the built-in sample sentence. */
-  sampleText?: string
-}>()
+const { data: models } = await useFetch<ModelInfo[]>('/api/models', { default: () => [] })
+const { data: voices } = await useFetch<VoiceInfo[]>('/api/voices', { default: () => [] })
+const { data: clips, refresh: refreshClips } = await useFetch<VoiceClipInfo[]>(
+  '/api/voice-clips',
+  { default: () => [] },
+)
 
-const { data: voices, error } = await useFetch<VoiceInfo[]>('/api/voices', {
-  default: () => [],
+const current = computed(() => models.value.find(m => m.id === model.value))
+
+/**
+ * How long this model would take on the selected chapters.
+ *
+ * Shown next to every model because the spread is enormous -- measured on one
+ * GPU, the same book is 24 minutes on Kokoro and over eight hours on
+ * Chatterbox. That is the single most decision-relevant fact here, and it
+ * should not require reading documentation to discover.
+ */
+function estimateFor(m: ModelInfo): string | null {
+  if (!props.estSeconds || !m.gpu_rtf_hint) return null
+  return duration(props.estSeconds / m.gpu_rtf_hint)
+}
+
+/** Warn only when the wait is genuinely long, in wall-clock terms. */
+const LONG_RENDER_SECONDS = 30 * 60
+
+const longRender = computed(() => {
+  const spec = current.value
+  if (!spec?.gpu_rtf_hint || !props.estSeconds) return null
+  const seconds = props.estSeconds / spec.gpu_rtf_hint
+  return seconds >= LONG_RENDER_SECONDS ? duration(seconds) : null
 })
 
-/** Grouped so the English voices are not lost among the other nine languages. */
+const LANGUAGE_NAMES: Record<string, string> = {
+  'en-us': 'American English',
+  'en-gb': 'British English',
+}
+
 const grouped = computed(() => {
   const groups = new Map<string, VoiceInfo[]>()
   for (const v of voices.value) {
-    const key = v.language
-    if (!groups.has(key)) groups.set(key, [])
-    groups.get(key)!.push(v)
+    if (!groups.has(v.language)) groups.set(v.language, [])
+    groups.get(v.language)!.push(v)
   }
   return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b))
 })
 
+// -- uploading a reference clip ---------------------------------------------
+
+const uploading = ref(false)
+const uploadError = ref<string | null>(null)
+const clipName = ref('')
+const clipInput = ref<HTMLInputElement | null>(null)
+
+async function uploadClip(event: Event) {
+  const file = (event.target as HTMLInputElement).files?.[0]
+  if (!file) return
+
+  uploading.value = true
+  uploadError.value = null
+  try {
+    const form = new FormData()
+    form.append('name', clipName.value.trim() || file.name.replace(/\.[^.]+$/, ''))
+    form.append('file', file)
+    const clip = await $fetch<VoiceClipInfo>('/api/voice-clips', { method: 'POST', body: form })
+    await refreshClips()
+    voice.value = clip.id
+    clipName.value = ''
+  }
+  catch (e: unknown) {
+    const err = e as { data?: { detail?: string } }
+    uploadError.value = err.data?.detail ?? 'Could not upload that clip.'
+  }
+  finally {
+    uploading.value = false
+    if (clipInput.value) clipInput.value.value = ''
+  }
+}
+
+async function deleteClip(clip: VoiceClipInfo) {
+  if (!confirm(`Delete the voice "${clip.name}"?`)) return
+  await $fetch(`/api/voice-clips/${clip.id}`, { method: 'DELETE' })
+  await refreshClips()
+}
+
+// Keep the voice valid when the model changes: a cloned clip is meaningless to
+// Kokoro, and a Kokoro voice id is meaningless to a cloning model.
+watch(current, (spec) => {
+  if (!spec) return
+  const isClip = voice.value.startsWith('clip-')
+  if (spec.supports_cloning && !isClip) {
+    voice.value = clips.value[0]?.id ?? ''
+  }
+  else if (!spec.supports_cloning && isClip) {
+    voice.value = voices.value[0]?.id ?? 'af_heart'
+  }
+})
+
+// -- preview ----------------------------------------------------------------
+
+const sampleText = ref('')
 const previewing = ref(false)
 const previewError = ref<string | null>(null)
 const audioUrl = ref<string | null>(null)
@@ -34,104 +121,206 @@ async function play() {
   try {
     const blob = await $fetch<Blob>('/api/preview', {
       method: 'POST',
-      body: { voice: voice.value, speed: speed.value, text: props.sampleText ?? null },
       responseType: 'blob',
+      body: {
+        voice: voice.value,
+        speed: speed.value,
+        model: model.value,
+        text: sampleText.value.trim() || null,
+      },
     })
-    // Release the previous clip; these are a few hundred KB each and the
-    // browser will not reclaim them on its own.
     if (audioUrl.value) URL.revokeObjectURL(audioUrl.value)
     audioUrl.value = URL.createObjectURL(blob)
     await nextTick()
     document.querySelector<HTMLAudioElement>('#voice-preview')?.play()
   }
   catch (e: unknown) {
-    const err = e as { data?: { detail?: string } }
-    previewError.value = err.data?.detail ?? 'Preview failed.'
+    previewError.value = await detailFrom(e)
   }
   finally {
     previewing.value = false
   }
 }
 
+/**
+ * The server's explanation, dug out from behind responseType: 'blob'.
+ *
+ * A successful preview is audio, so the response is read as a blob -- and an
+ * error response is read the same way, leaving err.data a Blob rather than the
+ * parsed body. Every failure therefore showed the same "Preview failed.",
+ * hiding messages that name the exact problem and its fix.
+ */
+async function detailFrom(e: unknown): Promise<string> {
+  const data = (e as { data?: unknown }).data
+
+  if (data instanceof Blob) {
+    try {
+      const parsed = JSON.parse(await data.text())
+      if (typeof parsed?.detail === 'string') return parsed.detail
+    }
+    catch {
+      // Not JSON -- fall through to the generic message.
+    }
+  }
+  else if (typeof (data as { detail?: unknown })?.detail === 'string') {
+    return (data as { detail: string }).detail
+  }
+
+  return 'Preview failed.'
+}
+
 onBeforeUnmount(() => {
   if (audioUrl.value) URL.revokeObjectURL(audioUrl.value)
 })
 
-const LANGUAGE_NAMES: Record<string, string> = {
-  'en-us': 'American English',
-  'en-gb': 'British English',
-  'es': 'Spanish',
-  'fr-fr': 'French',
-  'hi': 'Hindi',
-  'it': 'Italian',
-  'ja': 'Japanese',
-  'pt-br': 'Brazilian Portuguese',
-  'cmn': 'Mandarin',
-}
+const needsClip = computed(() => current.value?.supports_cloning && !clips.value.length)
 </script>
 
 <template>
-  <div class="space-y-3">
-    <!-- Show what the server actually said. A hardcoded guess here ("check the
-         model files") sends people to verify things that were never wrong. -->
-    <div v-if="error" class="alert alert-warning text-sm">
-      <div>
-        <div class="font-medium">
-          No voices available
+  <div class="space-y-4">
+    <!-- Model -->
+    <div class="space-y-2">
+      <label class="form-control">
+        <div class="label py-1">
+          <span class="label-text text-xs mr-1">Model</span>
         </div>
-        <div class="mt-1 font-mono text-xs opacity-80">
-          {{ error.data?.detail ?? error.data?.message ?? error.message }}
-        </div>
-        <div class="mt-1 text-xs opacity-70">
-          <code>GET /health</code> reports which backend is in use and why it failed.
-        </div>
+        <select v-model="model" class="select select-bordered select-sm w-full max-w-md">
+          <option v-for="m in models" :key="m.id" :value="m.id">
+            {{ m.label }}<template v-if="estimateFor(m)"> — about {{ estimateFor(m) }}</template>
+          </option>
+        </select>
+      </label>
+
+      <p v-if="current" class="text-base-content/60 text-xs">
+        {{ current.notes }}
+      </p>
+
+      <!-- The two facts worth interrupting for: it will be slow, and it may
+           not run here at all. -->
+      <div v-if="current && !current.cpu_viable" class="alert alert-info py-2 text-xs">
+        <span>
+          Needs the GPU node.
+          <template v-if="current.node_url">Configured at <code>{{ current.node_url }}</code>.</template>
+          <template v-else>No node is configured, so this will not run.</template>
+        </span>
+      </div>
+      <!-- Keyed on the estimate, not on the model being slow: a slow model on
+           two short chapters is still a few minutes, and calling that an
+           overnight job would be plainly wrong. -->
+      <div v-if="longRender" class="alert alert-warning py-2 text-xs">
+        <span>
+          Roughly <strong>{{ longRender }}</strong> to render this selection.
+        </span>
       </div>
     </div>
 
-    <template v-else>
-      <div class="flex flex-wrap items-end gap-3">
-        <label class="form-control">
-          <div class="label py-1">
-            <span class="label-text text-xs">Voice</span>
-          </div>
-          <select v-model="voice" class="select select-bordered select-sm w-64">
-            <optgroup
-              v-for="[language, items] in grouped"
-              :key="language"
-              :label="LANGUAGE_NAMES[language] ?? language"
-            >
-              <option v-for="v in items" :key="v.id" :value="v.id">
-                {{ v.label }}
-              </option>
-            </optgroup>
-          </select>
-        </label>
-
-        <label class="form-control">
-          <div class="label py-1">
-            <span class="label-text text-xs">Speed — {{ speed.toFixed(2) }}×</span>
-          </div>
-          <input
-            v-model.number="speed"
-            type="range"
-            min="0.7"
-            max="1.4"
-            step="0.05"
-            class="range range-xs w-40"
+    <!-- Voice -->
+    <div v-if="current?.has_builtin_voices" class="flex flex-wrap items-end gap-3">
+      <label class="form-control">
+        <div class="label py-1">
+          <span class="label-text text-xs">Voice</span>
+        </div>
+        <select v-model="voice" class="select select-bordered select-sm w-64">
+          <optgroup
+            v-for="[language, items] in grouped"
+            :key="language"
+            :label="LANGUAGE_NAMES[language] ?? language"
           >
-        </label>
+            <option v-for="v in items" :key="v.id" :value="v.id">
+              {{ v.label }}
+            </option>
+          </optgroup>
+        </select>
+      </label>
+    </div>
 
-        <button class="btn btn-sm" :disabled="previewing" @click="play">
-          <span v-if="previewing" class="loading loading-spinner loading-xs" />
-          {{ previewing ? 'Rendering…' : 'Preview' }}
-        </button>
+    <!-- Cloned voices -->
+    <div v-else-if="current?.supports_cloning" class="space-y-2">
+      <div class="label py-1">
+        <span class="label-text text-xs">Cloned voice</span>
       </div>
 
-      <audio v-if="audioUrl" id="voice-preview" :src="audioUrl" controls class="h-9 w-full max-w-md" />
-
-      <p v-if="previewError" class="text-error text-xs">
-        {{ previewError }}
+      <p v-if="needsClip" class="text-base-content/60 text-xs">
+        This model has no built-in voices. Upload a clear recording of 3–30
+        seconds to clone from.
       </p>
-    </template>
+
+      <ul v-else class="divide-base-200 divide-y">
+        <li v-for="clip in clips" :key="clip.id" class="flex items-center gap-3 py-1.5">
+          <input
+            v-model="voice"
+            type="radio"
+            class="radio radio-sm"
+            :value="clip.id"
+            :aria-label="clip.name"
+          >
+          <span class="min-w-32 lg:min-w-64 truncate text-sm">{{ clip.name }}</span>
+          <span class="text-base-content/40 text-xs">{{ clip.duration_s.toFixed(1) }}s</span>
+          <audio
+            controls
+            preload="none"
+            class="h-8 w-40"
+            :src="`/api/voice-clips/${clip.id}/audio`"
+          />
+          <button class="btn btn-ghost btn-xs text-error" @click="deleteClip(clip)">
+            Delete
+          </button>
+        </li>
+      </ul>
+
+      <div class="flex flex-wrap items-center gap-2">
+        <input
+          v-model="clipName"
+          class="input input-bordered input-sm w-48"
+          placeholder="Name this voice"
+        >
+        <input
+          ref="clipInput"
+          type="file"
+          accept="audio/wav,audio/flac,audio/ogg,.wav,.flac,.ogg"
+          class="file-input file-input-bordered file-input-sm w-64"
+          :disabled="uploading"
+          @change="uploadClip"
+        >
+        <span v-if="uploading" class="loading loading-spinner loading-sm" />
+      </div>
+      <p v-if="uploadError" class="text-error text-xs">
+        {{ uploadError }}
+      </p>
+    </div>
+
+    <!-- Speed and preview -->
+    <div class="flex flex-wrap items-end gap-3">
+      <label class="form-control">
+        <div class="label py-1 mr-1">
+          <span class="label-text text-xs">Speed — {{ speed.toFixed(2) }}×</span>
+        </div>
+        <input
+          v-model.number="speed"
+          type="range"
+          min="0.7"
+          max="1.4"
+          step="0.05"
+          class="range range-xs w-40"
+        >
+      </label>
+      <button class="btn btn-sm" :disabled="previewing || !voice" @click="play">
+        <span v-if="previewing" class="loading loading-spinner loading-xs" />
+        {{ previewing ? 'Rendering…' : 'Preview' }}
+      </button>
+    </div>
+
+    <SamplePhrase v-model="sampleText" :book-id="bookId" />
+
+    <audio
+      v-if="audioUrl"
+      id="voice-preview"
+      :src="audioUrl"
+      controls
+      class="h-9 w-full max-w-md"
+    />
+    <p v-if="previewError" class="text-error text-xs">
+      {{ previewError }}
+    </p>
   </div>
 </template>

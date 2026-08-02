@@ -39,6 +39,9 @@ class FakeBackend:
     def __init__(self, *, available: bool = True) -> None:
         self._available = available
         self.calls: list[tuple[str, str, float]] = []
+        #: Reference clip passed with each call, so tests can assert a cloned
+        #: voice actually reached the backend rather than being dropped.
+        self.references: list[object] = []
 
     def voices(self) -> list[Voice]:
         if not self._available:
@@ -48,11 +51,18 @@ class FakeBackend:
             Voice(id="fk_bob", label="Bob (English, male)", language="en-us", gender="male"),
         ]
 
-    def synthesize(self, text: str, voice: str, speed: float = 1.0) -> AudioChunk:
+    def synthesize(
+        self,
+        text: str,
+        voice: str,
+        speed: float = 1.0,
+        reference=None,
+    ) -> AudioChunk:
         if not self._available:
             raise BackendUnavailable("no model")
         if not text.strip():
             raise TTSError("nothing to synthesize")
+        self.references.append(reference)
         self.calls.append((text, voice, speed))
         n = int(self.sample_rate * len(text) / 100 / speed)
         t = np.arange(n, dtype=np.float32) / self.sample_rate
@@ -135,6 +145,71 @@ def test_voices_endpoint(fake) -> None:
     assert body[0]["gender"] == "female"
 
 
+class MultilingualBackend(FakeBackend):
+    """Stands in for Kokoro's 54 voices across nine languages."""
+
+    def voices(self) -> list[Voice]:
+        return [
+            Voice(id="af_heart", label="Heart", language="en-us", gender="female"),
+            Voice(id="bm_george", label="George", language="en-gb", gender="male"),
+            Voice(id="jf_alpha", label="Alpha", language="ja", gender="female"),
+            Voice(id="zm_yunxi", label="Yunxi", language="cmn", gender="male"),
+            Voice(id="ef_dora", label="Dora", language="es", gender="female"),
+        ]
+
+
+@pytest.fixture
+def multilingual(monkeypatch) -> MultilingualBackend:
+    backend = MultilingualBackend()
+    monkeypatch.setattr("naudiobooker.routes.tts.get_backend", lambda *a, **k: backend)
+    return backend
+
+
+def test_only_english_voices_are_offered(multilingual) -> None:
+    with TestClient(create_app()) as client:
+        body = client.get("/voices").json()
+
+    assert [v["id"] for v in body] == ["af_heart", "bm_george"]
+    assert {v["language"] for v in body} == {"en-us", "en-gb"}
+
+
+def test_all_languages_can_be_requested(multilingual) -> None:
+    """An escape hatch that needs neither a config change nor a restart."""
+    with TestClient(create_app()) as client:
+        body = client.get("/voices", params={"all_languages": True}).json()
+
+    assert len(body) == 5
+
+
+def test_an_empty_language_list_disables_filtering(multilingual, monkeypatch) -> None:
+    from naudiobooker.config import Settings, get_settings
+
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        "naudiobooker.routes.tts.get_settings",
+        lambda: Settings(voice_languages=[]),
+    )
+
+    with TestClient(create_app()) as client:
+        body = client.get("/voices").json()
+
+    assert len(body) == 5
+
+
+def test_filtering_is_case_insensitive(multilingual, monkeypatch) -> None:
+    from naudiobooker.config import Settings
+
+    monkeypatch.setattr(
+        "naudiobooker.routes.tts.get_settings",
+        lambda: Settings(voice_languages=["EN-US"]),
+    )
+
+    with TestClient(create_app()) as client:
+        body = client.get("/voices").json()
+
+    assert [v["id"] for v in body] == ["af_heart"]
+
+
 def test_preview_returns_wav(fake) -> None:
     with TestClient(create_app()) as client:
         res = client.post("/preview", json={"voice": "fk_ann"})
@@ -187,3 +262,57 @@ def test_unavailable_backend_reports_503(monkeypatch) -> None:
 
     assert res.status_code == 503
     assert "model files" in res.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# Protocol conformance
+# ---------------------------------------------------------------------------
+
+
+def real_backend_classes():
+    """Every concrete backend, imported without needing its model installed."""
+    from naudiobooker.tts.chatterbox_backend import ChatterboxBackend
+    from naudiobooker.tts.fallback import FallbackBackend
+    from naudiobooker.tts.kokoro_local import KokoroLocalBackend
+    from naudiobooker.tts.omnivoice_backend import OmniVoiceBackend
+    from naudiobooker.tts.remote_http import RemoteHttpBackend
+
+    return [
+        KokoroLocalBackend,
+        ChatterboxBackend,
+        OmniVoiceBackend,
+        RemoteHttpBackend,
+        FallbackBackend,
+    ]
+
+
+@pytest.mark.parametrize("cls", real_backend_classes(), ids=lambda c: c.__name__)
+def test_every_backend_accepts_the_full_synthesize_signature(cls) -> None:
+    """The worker calls synthesize(text, voice, speed, reference) positionally.
+
+    This exists because adding `reference` to the protocol silently missed
+    KokoroLocalBackend -- the default model -- and no test caught it: every
+    worker test uses a fake, so no real backend was ever called through the
+    protocol. The symptom would have been a TypeError on the first chunk of an
+    ordinary render.
+    """
+    import inspect
+
+    params = list(inspect.signature(cls.synthesize).parameters)
+
+    assert params[:5] == ["self", "text", "voice", "speed", "reference"], (
+        f"{cls.__name__}.synthesize does not match the protocol: {params}"
+    )
+
+
+@pytest.mark.parametrize("cls", real_backend_classes(), ids=lambda c: c.__name__)
+def test_every_backend_declares_the_protocol_methods(cls) -> None:
+    """Methods only.
+
+    model_version, sample_rate and max_chars are deliberately not checked here:
+    several backends set them in __init__ because they depend on settings or on
+    what a remote node reports, so they do not exist on the class. Asserting on
+    the class would only be testing where the attribute happens to be defined.
+    """
+    for name in ("voices", "synthesize", "health"):
+        assert callable(getattr(cls, name, None)), f"{cls.__name__} is missing {name}()"

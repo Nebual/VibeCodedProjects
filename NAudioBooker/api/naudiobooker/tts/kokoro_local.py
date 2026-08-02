@@ -10,9 +10,17 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 
 from ..config import Settings
-from .base import AudioChunk, BackendHealth, BackendUnavailable, TTSError, Voice
+from .base import (
+    AudioChunk,
+    BackendHealth,
+    BackendUnavailable,
+    ReferenceClip,
+    TTSError,
+    Voice,
+)
 
 log = logging.getLogger(__name__)
 
@@ -71,6 +79,8 @@ class KokoroLocalBackend:
 
         self._kokoro = None
         self._provider: str | None = None
+        #: Monotonic timestamp of the last synthesis; drives idle unloading.
+        self.last_used_at: float | None = None
         self._lock = threading.Lock()
 
     # -- model lifecycle ---------------------------------------------------
@@ -187,7 +197,18 @@ class KokoroLocalBackend:
         described = [_describe(v) for v in self._load().get_voices()]
         return sorted(described, key=lambda v: v.sort_key)
 
-    def synthesize(self, text: str, voice: str, speed: float = 1.0) -> AudioChunk:
+    def synthesize(
+        self,
+        text: str,
+        voice: str,
+        speed: float = 1.0,
+        reference: ReferenceClip | None = None,
+    ) -> AudioChunk:
+        # Kokoro has fixed voices and cannot clone, so a reference clip is
+        # accepted and ignored rather than rejected: callers pass it uniformly
+        # and should not have to know which models support it.
+        del reference
+        self.last_used_at = time.monotonic()
         text = text.strip()
         if not text:
             raise TTSError("nothing to synthesize")
@@ -200,6 +221,22 @@ class KokoroLocalBackend:
             raise TTSError(f"Kokoro failed on {len(text)} chars: {exc}") from exc
 
         return AudioChunk(samples=samples, sample_rate=sample_rate)
+
+
+    def unload(self) -> bool:
+        """Release the onnxruntime session.
+
+        Kokoro is small enough that this rarely matters on its own, but a
+        Kokoro node sharing a card with a cloning node should still give the
+        memory back rather than hold it out of habit.
+        """
+        with self._lock:
+            if self._kokoro is None:
+                return False
+            self._kokoro = None
+            self._provider = None
+        log.info("unloaded kokoro")
+        return True
 
     def health(self) -> BackendHealth:
         missing = [p for p in (self._model_path, self._voices_path) if not p.exists()]

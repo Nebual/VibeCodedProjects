@@ -11,7 +11,7 @@ from __future__ import annotations
 import mimetypes
 from typing import Annotated
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 
 from .. import jobs as job_queue
@@ -90,10 +90,17 @@ def get_cover(book_id: str) -> FileResponse:
 
 
 @router.get("/{book_id}/chapters/{index}/text", response_model=ChapterText)
-def get_chapter_text(book_id: str, index: int) -> ChapterText:
+def get_chapter_text(
+    book_id: str,
+    index: int,
+    paragraphs: Annotated[
+        int | None,
+        Query(ge=1, description="Return only the first N paragraphs."),
+    ] = None,
+) -> ChapterText:
     _get_or_404(book_id)
     try:
-        return store.chapter_text(book_id, index)
+        return store.chapter_text(book_id, index, max_paragraphs=paragraphs)
     except store.BookNotFound:
         raise HTTPException(status_code=404, detail="Chapter not found") from None
 

@@ -15,9 +15,35 @@ lost.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 import numpy as np
+
+
+def unload_backend(backend: object) -> bool:
+    """Ask a backend to free its model. True if anything was released."""
+    fn = getattr(backend, "unload", None)
+    return bool(fn()) if callable(fn) else False
+
+
+def prepare_backend(backend: object) -> None:
+    """Tell a backend a batch of work is about to start.
+
+    The remote backend uses this to evict models from sibling nodes sharing a
+    GPU, which has to happen before synthesis rather than during it.
+    """
+    fn = getattr(backend, "prepare", None)
+    if callable(fn):
+        fn()
+
+
+def backend_idle_seconds(backend: object) -> float | None:
+    """Seconds since the backend last synthesized, if it tracks that."""
+    import time
+
+    last = getattr(backend, "last_used_at", None)
+    return None if last is None else time.monotonic() - last
 
 
 class TTSError(Exception):
@@ -34,6 +60,13 @@ class Voice:
     label: str
     language: str
     gender: str | None = None
+    #: Content hash of the reference clip, for a cloned voice. None for the
+    #: fixed voices a model ships with. Part of the synthesis cache key.
+    ref_hash: str | None = None
+
+    @property
+    def is_cloned(self) -> bool:
+        return self.ref_hash is not None
 
     @property
     def sort_key(self) -> tuple[str, str]:
@@ -50,6 +83,17 @@ class AudioChunk:
     @property
     def duration_s(self) -> float:
         return len(self.samples) / self.sample_rate if self.sample_rate else 0.0
+
+
+@dataclass(frozen=True)
+class ReferenceClip:
+    """A cloned voice's reference audio, as handed to a synthesiser."""
+
+    path: Path
+    ref_hash: str
+    #: Transcript of the clip. OmniVoice can auto-transcribe with Whisper, but
+    #: that runs per call, so supplying it once is markedly faster.
+    transcript: str | None = None
 
 
 @dataclass(frozen=True)
@@ -77,6 +121,28 @@ class TTSBackend(Protocol):
 
     def voices(self) -> list[Voice]: ...
 
-    def synthesize(self, text: str, voice: str, speed: float = 1.0) -> AudioChunk: ...
+    def synthesize(
+        self,
+        text: str,
+        voice: str,
+        speed: float = 1.0,
+        reference: ReferenceClip | None = None,
+    ) -> AudioChunk:
+        """Speak ``text``.
+
+        ``reference`` carries a cloned voice's audio. Models without cloning
+        ignore it rather than raising, so the caller does not have to know
+        which kind of model it is holding.
+        """
+        ...
 
     def health(self) -> BackendHealth: ...
+
+    # Optional, duck-typed rather than required, so a backend that holds no
+    # meaningful resources need not implement them:
+    #
+    #   unload() -> bool     drop the loaded model and free its memory
+    #   prepare() -> None    called before a batch of work begins
+    #   last_used_at         monotonic timestamp of the last synthesis
+    #
+    # Use the module helpers below rather than calling them directly.

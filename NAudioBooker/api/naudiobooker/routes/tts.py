@@ -13,8 +13,18 @@ from ..audio import to_wav_bytes
 from ..config import get_settings
 from ..models import PreviewRequest, VoiceInfo
 from ..tts import BackendUnavailable, TTSError, get_backend
+from ..tts.models import ModelSpec, get_model
+from ..voices import VoiceError, resolve_reference
 
 router = APIRouter(tags=["tts"])
+
+
+def _model_or_400(model_id: str) -> ModelSpec:
+    try:
+        return get_model(model_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
 
 #: Long enough to judge a voice's character, short enough to render instantly.
 SAMPLE_TEXT = (
@@ -27,15 +37,26 @@ MAX_PREVIEW_CHARS = 600
 
 
 @router.get("/voices", response_model=list[VoiceInfo])
-def list_voices() -> list[VoiceInfo]:
+def list_voices(all_languages: bool = False) -> list[VoiceInfo]:
+    """Voices offered for narration.
+
+    Filtered here rather than in a backend so the same list comes back whether
+    synthesis is local or on a remote node. ``?all_languages=true`` bypasses the
+    filter without needing a config change or a restart.
+    """
+    settings = get_settings()
+    wanted = {lang.lower() for lang in settings.voice_languages}
+
     try:
         backend = get_backend()
-        return [
-            VoiceInfo(id=v.id, label=v.label, language=v.language, gender=v.gender)
-            for v in backend.voices()
-        ]
+        voices = backend.voices()
     except (BackendUnavailable, NotImplementedError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    if wanted and not all_languages:
+        voices = [v for v in voices if v.language.lower() in wanted]
+
+    return [VoiceInfo(id=v.id, label=v.label, language=v.language, gender=v.gender) for v in voices]
 
 
 @router.post(
@@ -51,9 +72,24 @@ def preview(request: PreviewRequest) -> Response:
             detail=f"Preview text is limited to {MAX_PREVIEW_CHARS} characters",
         )
 
+    # The model the caller picked, not the configured default. Forgetting this
+    # argument is invisible: every request quietly renders on the default model
+    # and the only clue is that a cloned voice "does not exist".
+    spec = _model_or_400(request.model or settings.tts_model)
+
     try:
-        backend = get_backend()
-        chunk = backend.synthesize(text, request.voice or settings.tts_voice, request.speed)
+        reference = resolve_reference(spec, request.voice)
+    except VoiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    try:
+        backend = get_backend(settings, spec.id)
+        chunk = backend.synthesize(
+            text,
+            request.voice or settings.tts_voice,
+            request.speed,
+            reference,
+        )
     except (BackendUnavailable, NotImplementedError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except TTSError as exc:

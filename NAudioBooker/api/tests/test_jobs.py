@@ -291,11 +291,11 @@ def test_a_failing_chapter_does_not_abort_the_others(env, book, backend, monkeyp
     calls = {"n": 0}
     original = backend.synthesize
 
-    def flaky(text, voice, speed=1.0):
+    def flaky(text, voice, speed=1.0, reference=None):
         calls["n"] += 1
         if calls["n"] == 1:
             raise TTSError("synthesis exploded")
-        return original(text, voice, speed)
+        return original(text, voice, speed, reference)
 
     monkeypatch.setattr(backend, "synthesize", flaky)
 
@@ -316,16 +316,21 @@ def test_interrupted_render_resumes_from_cache(env, book, backend, monkeypatch):
     seen = {"n": 0}
     original = backend.synthesize
 
-    def die_after_a_few(text, voice, speed=1.0):
+    def die_after_a_few(text, voice, speed=1.0, reference=None):
         seen["n"] += 1
         if seen["n"] > 6:
             raise Cancelled
-        return original(text, voice, speed)
+        return original(text, voice, speed, reference)
 
     monkeypatch.setattr(backend, "synthesize", die_after_a_few)
     make_job(book)
     process_job(jobs.claim_next_job(), env)
     partial = seen["n"]
+
+    # Guard against this test going hollow. It previously passed while the stub
+    # was raising TypeError on its first call: partial stayed 0 and the cache
+    # assertion below degenerated to "cache_hits >= -1", which is always true.
+    assert partial > 1, "the interruption never happened; the stub was not called"
 
     monkeypatch.setattr(backend, "synthesize", original)
     resumed = make_job(book)

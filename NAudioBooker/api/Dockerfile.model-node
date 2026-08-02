@@ -1,0 +1,100 @@
+# A synthesis node for one torch-based model. Used by ../docker-compose.node.yml.
+#
+# One model per image, deliberately. chatterbox-tts pins transformers==5.2.0 and
+# omnivoice requires >=5.3.0; the resolver reports every combination of the two
+# as unsatisfiable. The conflict bites at Python import time, so no single
+# process can serve both regardless of packaging -- two venvs in one container
+# would need two processes and a supervisor to achieve exactly this isolation.
+#
+#   docker build -f Dockerfile.model-node --build-arg MODEL_EXTRA=omnivoice .
+#
+# Expect ~5 GB per image: torch dominates, and the two models are unlikely to
+# resolve to the same torch version, so the layer is not shared in practice.
+FROM nvidia/cuda:13.0.1-cudnn-runtime-ubuntu24.04
+
+ARG MODEL_EXTRA
+RUN test -n "$MODEL_EXTRA" || (echo "set --build-arg MODEL_EXTRA=chatterbox|omnivoice" && false)
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates curl espeak-ng ffmpeg git \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=ghcr.io/astral-sh/uv:0.9 /uv /usr/local/bin/uv
+
+WORKDIR /app
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_PROJECT_ENVIRONMENT=/app/.venv \
+    UV_PYTHON_INSTALL_DIR=/opt/python
+
+RUN uv python install 3.12
+
+COPY pyproject.toml uv.lock README.md ./
+RUN uv sync --frozen --no-install-project --no-dev
+
+COPY naudiobooker ./naudiobooker
+COPY scripts ./scripts
+RUN uv sync --frozen --no-dev
+
+# The model package is installed outside the lockfile precisely because the two
+# options cannot be locked together.
+RUN uv pip install --python /app/.venv/bin/python "$( \
+        case "$MODEL_EXTRA" in \
+          chatterbox) echo chatterbox-tts ;; \
+          omnivoice)  echo omnivoice ;; \
+          *) echo "unknown MODEL_EXTRA $MODEL_EXTRA" >&2; exit 1 ;; \
+        esac)"
+
+# Chatterbox's watermarker dependency (resemble-perth) imports pkg_resources,
+# which setuptools 81 deprecated and 83 removed outright -- and Python 3.12
+# venvs no longer bundle setuptools at all. perth catches the resulting
+# ImportError and sets PerthImplicitWatermarker = None, so Chatterbox fails
+# much later with "'NoneType' object is not callable" and no mention of
+# setuptools anywhere in the traceback.
+RUN if [ "$MODEL_EXTRA" = "chatterbox" ]; then \
+        uv pip install --python /app/.venv/bin/python 'setuptools<81'; \
+    fi
+
+ENV PATH="/app/.venv/bin:$PATH" \
+    NAB_ROLE=worker-node \
+    NAB_TTS_DEVICE=cuda \
+    # The model package is installed outside the lockfile, because the two
+    # options cannot be locked together. `uv run` reconciles the environment
+    # against the lockfile before running anything, which promptly uninstalls
+    # it -- the same trap as installing it before the final `uv sync`, except
+    # at run time and on someone else's machine. UV_NO_SYNC makes `uv run`
+    # safe; running /app/.venv/bin/python directly is safer still.
+    UV_NO_SYNC=1 \
+    HF_HOME=/models/hf \
+    # huggingface_hub's Xet transfer path talks to cas-server.xethub.hf.co,
+    # which a restrictive egress policy is unlikely to allow. The classic CDN
+    # route works through the same allow-list as any other HTTPS download.
+    HF_HUB_DISABLE_XET=1
+
+# Fail the build rather than ship a node that cannot load its own model.
+#
+# Importing the package is not a sufficient check: Chatterbox imports perfectly
+# well with a broken watermarker and only fails when a model is constructed.
+# So the optional dependencies that get silently swallowed are checked directly.
+RUN python -c "import importlib; \
+    name = {'chatterbox': 'chatterbox', 'omnivoice': 'omnivoice'}['${MODEL_EXTRA}']; \
+    importlib.import_module(name); \
+    print(f'{name} imports OK')" \
+ && if [ "$MODEL_EXTRA" = "chatterbox" ]; then \
+        python -c "import perth; assert perth.PerthImplicitWatermarker is not None, \
+        'perth swallowed an ImportError; PerthImplicitWatermarker is None. \
+Usually a missing pkg_resources -- install setuptools<81.'; \
+        print('perth watermarker OK')"; \
+    fi
+
+EXPOSE 8000
+CMD ["uvicorn", "naudiobooker.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+# Benchmark the model this image was built with:
+#
+#   docker compose -f docker-compose.node.yml exec node-omnivoice \
+#     python scripts/benchmark_tts.py --model omnivoice --device cuda \
+#     --chunks 40 --ref-clip /models/ref.wav
+#
+# Use `python`, not `uv run`. See UV_NO_SYNC above for why.

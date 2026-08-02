@@ -12,7 +12,13 @@ from starlette.concurrency import run_in_threadpool
 from . import __version__
 from .config import env_files_found, get_settings
 from .db import init_db
-from .routes import books_router, jobs_router, node_router, tts_router
+from .routes import (
+    books_router,
+    jobs_router,
+    node_router,
+    tts_router,
+    voices_router,
+)
 from .schemas import HealthResponse, SystemDeps, TTSStatus
 from .tts import get_backend
 
@@ -27,12 +33,28 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if settings.role != "worker-node":
         settings.ensure_dirs()
         init_db(settings.db_path)
+    unloader = None
+    if settings.role == "worker-node" and settings.idle_unload_s > 0:
+        # Only a node does this. On the primary the model is in near-constant
+        # use during a render, and unloading it would just add reload latency.
+        from .tts import get_backend
+        from .tts.idle import IdleUnloader
+
+        try:
+            unloader = IdleUnloader(get_backend(settings), settings.idle_unload_s)
+            unloader.start()
+        except Exception:
+            log.exception("could not start the idle unloader")
+
     log.info(
         "naudiobooker %s starting (role=%s, tts=%s, env_files=%s)",
         __version__, settings.role, settings.tts_backend,
         env_files_found() or "none - using environment only",
     )
     yield
+
+    if unloader is not None:
+        unloader.stop()
 
 
 def create_app() -> FastAPI:
@@ -59,11 +81,13 @@ def create_app() -> FastAPI:
         # to reach book state on a machine that never had any.
         app.include_router(node_router)
         app.include_router(tts_router)
+        app.include_router(voices_router)
     else:
         app.include_router(books_router)
         app.include_router(tts_router)
         app.include_router(jobs_router)
         app.include_router(node_router)
+        app.include_router(voices_router)
 
     def _tts_status() -> TTSStatus:
         """Probe the synthesis backend rather than echoing configuration.
@@ -77,6 +101,7 @@ def create_app() -> FastAPI:
         except Exception as exc:
             return TTSStatus(
                 configured=settings.tts_backend,
+                model=settings.tts_model,
                 available=False,
                 detail=f"backend could not be created: {exc}",
             )
@@ -86,6 +111,7 @@ def create_app() -> FastAPI:
         except Exception as exc:
             return TTSStatus(
                 configured=settings.tts_backend,
+                model=settings.tts_model,
                 active=getattr(backend, "id", None),
                 available=False,
                 detail=str(exc),
@@ -93,6 +119,7 @@ def create_app() -> FastAPI:
 
         return TTSStatus(
             configured=settings.tts_backend,
+            model=settings.tts_model,
             # For the fallback dispatcher this is whichever backend is really
             # in use, which is the entire point of asking.
             active=getattr(backend, "id", None),

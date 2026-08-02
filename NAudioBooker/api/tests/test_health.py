@@ -11,7 +11,10 @@ def test_health_reports_version_and_role() -> None:
     body = res.json()
     assert body["version"] == "0.1.0"
     assert body["role"] == "api"
-    assert body["tts_backend"] == "kokoro"
+    # tts_backend is where synthesis runs; the model is reported separately,
+    # since "Chatterbox Nano, locally" needs both to be expressible.
+    assert body["tts_backend"] == "local"
+    assert body["tts"]["model"] == "kokoro"
     assert set(body["deps"]) == {"ffmpeg", "espeak_ng"}
 
 

@@ -6,12 +6,11 @@ const id = route.params.id as string
 
 const { data: book, error } = await useFetch<BookDetail>(`/api/books/${id}`)
 
-/** Index of the chapter whose extracted text is expanded, if any. */
-// Voice selection is local for now. Phase 3 attaches it to the render job,
-// which is where it needs to be persisted.
-const voice = ref('af_heart')
-const speed = ref(1.0)
+// Remembered across visits: a global default, overridden per book once you
+// have chosen for this one.
+const { model, voice, speed } = useVoicePreference(id)
 
+/** Index of the chapter whose extracted text is expanded, if any. */
 const openChapter = ref<number | null>(null)
 const preview = ref<ChapterText | null>(null)
 const previewLoading = ref(false)
@@ -131,16 +130,20 @@ const includedCount = computed(
           <h2 class="card-title text-base">
             Narration
           </h2>
-          <p class="text-base-content/50 text-xs">
-            Pick a voice and hear it before committing to hours of rendering.
-          </p>
         </div>
-        <VoicePicker v-model:voice="voice" v-model:speed="speed" />
+        <VoicePicker
+          v-model:model="model"
+          v-model:voice="voice"
+          v-model:speed="speed"
+          :book-id="book.id"
+          :est-seconds="book.est_seconds"
+        />
       </div>
     </section>
 
     <RenderPanel
       :book-id="book.id"
+      :model="model"
       :voice="voice"
       :speed="speed"
       :included-chapters="includedCount"

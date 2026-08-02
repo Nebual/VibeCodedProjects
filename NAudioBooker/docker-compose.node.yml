@@ -21,6 +21,28 @@
 # not installed or cannot see the card, and the node will be slower than the
 # machine you were trying to offload from.
 
+#
+# Three services, all optional -- bring up only the models you want:
+#
+#   docker compose -f docker-compose.node.yml up -d node            # Kokoro
+#   docker compose -f docker-compose.node.yml up -d node-omnivoice
+#   docker compose -f docker-compose.node.yml up -d node-chatterbox
+#
+# chatterbox and omnivoice are separate containers because they cannot share a
+# Python environment: chatterbox-tts pins transformers==5.2.0 and omnivoice
+# needs >=5.3.0. The conflict is at import time, so two processes are required
+# whatever the packaging -- two venvs in one container would need a supervisor
+# to arrange the same thing.
+#
+# Both load their model lazily, so only the one you actually use occupies the
+# card. They will not both fit in 8 GB at once; stop the idle one to reclaim it.
+#
+# On the primary host, point each model at its port:
+#
+#   NAB_TTS_BACKEND=remote
+#   NAB_REMOTE_MODEL_URLS={"omnivoice":"http://gpu-box:8002","chatterbox-original":"http://gpu-box:8003"}
+#   NAB_REMOTE_WORKER_URL=http://gpu-box:8001
+#
 services:
   node:
     build:
@@ -61,4 +83,48 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-    restart: unless-stopped
+
+  node-omnivoice:
+    build:
+      context: ./api
+      dockerfile: Dockerfile.model-node
+      args:
+        MODEL_EXTRA: omnivoice
+    environment:
+      NAB_ROLE: worker-node
+      NAB_TTS_MODEL: omnivoice
+      NAB_TTS_DEVICE: cuda
+      NAB_MODELS_DIR: /models
+      NAB_REMOTE_WORKER_TOKEN: ${NAB_REMOTE_WORKER_TOKEN:?set a shared token}
+    volumes:
+      # Weights land in HF_HOME under here, so they survive a container rebuild.
+      - ./models:/models
+    ports:
+      - "8002:8000"
+    deploy:
+      resources:
+        reservations:
+          devices: [{driver: nvidia, count: 1, capabilities: [gpu]}]
+    profiles: ["omnivoice"]
+
+  node-chatterbox:
+    build:
+      context: ./api
+      dockerfile: Dockerfile.model-node
+      args:
+        MODEL_EXTRA: chatterbox
+    environment:
+      NAB_ROLE: worker-node
+      NAB_TTS_MODEL: chatterbox-original
+      NAB_TTS_DEVICE: cuda
+      NAB_MODELS_DIR: /models
+      NAB_REMOTE_WORKER_TOKEN: ${NAB_REMOTE_WORKER_TOKEN:?set a shared token}
+    volumes:
+      - ./models:/models
+    ports:
+      - "8003:8000"
+    deploy:
+      resources:
+        reservations:
+          devices: [{driver: nvidia, count: 1, capabilities: [gpu]}]
+    profiles: ["chatterbox"]

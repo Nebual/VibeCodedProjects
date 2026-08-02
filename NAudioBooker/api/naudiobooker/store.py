@@ -175,7 +175,13 @@ def create_book(epub_bytes: bytes, filename: str) -> BookDetail:
     return detail
 
 
-def chapter_text(book_id: str, index: int) -> ChapterText:
+def chapter_text(book_id: str, index: int, *, max_paragraphs: int | None = None) -> ChapterText:
+    """Extracted paragraphs for one chapter.
+
+    ``max_paragraphs`` exists for callers that only want the opening -- the
+    voice sampler pulls the first few paragraphs of three chapters at once, and
+    a full chapter is tens of kilobytes of JSON it would immediately discard.
+    """
     detail = load_book(book_id)
     chapter = next((c for c in detail.chapters if c.index == index), None)
     if chapter is None:
@@ -183,10 +189,13 @@ def chapter_text(book_id: str, index: int) -> ChapterText:
 
     path = _book_dir(book_id) / _TEXT_DIR / f"{index:03d}.txt"
     raw = path.read_text(encoding="utf-8") if path.exists() else ""
+    paragraphs = [p for p in raw.split("\n\n") if p.strip()]
+    if max_paragraphs is not None:
+        paragraphs = paragraphs[:max_paragraphs]
     return ChapterText(
         index=index,
         title=chapter.title,
-        paragraphs=[p for p in raw.split("\n\n") if p.strip()],
+        paragraphs=paragraphs,
     )
 
 

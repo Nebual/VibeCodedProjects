@@ -100,3 +100,25 @@ export interface JobInfo {
   progress: number
   is_terminal: boolean
 }
+
+export interface ModelInfo {
+  id: string
+  label: string
+  family: string
+  supports_cloning: boolean
+  has_builtin_voices: boolean
+  cpu_viable: boolean
+  gpu_rtf_hint: number | null
+  notes: string
+  node_url: string | null
+  is_default: boolean
+}
+
+export interface VoiceClipInfo {
+  id: string
+  name: string
+  ref_hash: string
+  duration_s: number
+  created_at: string
+  filename: string
+}

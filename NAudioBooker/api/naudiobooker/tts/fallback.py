@@ -15,7 +15,14 @@ from __future__ import annotations
 import logging
 import time
 
-from .base import AudioChunk, BackendHealth, BackendUnavailable, TTSBackend, Voice
+from .base import (
+    AudioChunk,
+    BackendHealth,
+    BackendUnavailable,
+    ReferenceClip,
+    TTSBackend,
+    Voice,
+)
 
 log = logging.getLogger(__name__)
 
@@ -104,10 +111,16 @@ class FallbackBackend:
                 self._demote(exc)
         return self.secondary.voices()
 
-    def synthesize(self, text: str, voice: str, speed: float = 1.0) -> AudioChunk:
+    def synthesize(
+        self,
+        text: str,
+        voice: str,
+        speed: float = 1.0,
+        reference: ReferenceClip | None = None,
+    ) -> AudioChunk:
         if self._primary_available:
             try:
-                chunk = self.primary.synthesize(text, voice, speed)
+                chunk = self.primary.synthesize(text, voice, speed, reference)
                 self._promote()
                 return chunk
             except BackendUnavailable as exc:
@@ -115,7 +128,7 @@ class FallbackBackend:
             # A TTSError is the node working correctly and rejecting this
             # input; retrying locally would just fail the same way.
 
-        return self.secondary.synthesize(text, voice, speed)
+        return self.secondary.synthesize(text, voice, speed, reference)
 
     @property
     def provider(self) -> str | None:

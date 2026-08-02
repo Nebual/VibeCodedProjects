@@ -37,11 +37,26 @@ import soundfile as sf
 from .tts.base import AudioChunk
 
 
-def chunk_key(*, model_version: str, voice: str, speed: float, text: str) -> str:
+def chunk_key(
+    *,
+    model_version: str,
+    voice: str,
+    speed: float,
+    text: str,
+    voice_ref: str | None = None,
+) -> str:
+    """Key for one synthesized chunk.
+
+    ``voice_ref`` is the content hash of a cloned voice's reference clip, and
+    it is not optional in spirit: a cloned voice is named by the user, so the
+    same name can be re-pointed at a completely different recording. Keying on
+    the name alone would serve the old voice from cache forever, and the only
+    symptom would be a book that stubbornly refuses to sound like the new clip.
+    """
     digest = hashlib.sha256()
     # Length-prefixed so no combination of field values can collide with a
     # different combination by concatenating the same way.
-    for part in (model_version, voice, f"{speed:.4f}", text):
+    for part in (model_version, voice, voice_ref or "", f"{speed:.4f}", text):
         encoded = part.encode("utf-8")
         digest.update(str(len(encoded)).encode("ascii"))
         digest.update(b"\0")

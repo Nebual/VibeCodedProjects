@@ -50,6 +50,8 @@ def create_job(
     model_version: str,
     chapters: list[tuple[int, str]],
     output_format: str = "mp3",
+    model: str = "kokoro",
+    voice_ref: str | None = None,
 ) -> JobInfo:
     """Queue a render. ``chapters`` is (index, title) for included chapters."""
     job_id = uuid.uuid4().hex[:12]
@@ -58,14 +60,17 @@ def create_job(
     with db.transaction() as conn:
         conn.execute(
             "INSERT INTO jobs (id, book_id, status, voice, speed, backend,"
-            " model_version, chapters_total, output_format, created_at, updated_at)"
-            " VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?)",
+            " model, voice_ref, model_version, chapters_total, output_format,"
+            " created_at, updated_at)"
+            " VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 job_id,
                 book_id,
                 voice,
                 speed,
                 backend,
+                model,
+                voice_ref,
                 model_version,
                 len(chapters),
                 output_format,

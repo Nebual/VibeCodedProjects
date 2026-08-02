@@ -28,7 +28,10 @@ class TTSStatus(BaseModel):
     the backend really serving requests; ``configured`` is what was asked for.
     """
 
+    #: Where synthesis was asked to run: "local" or "remote".
     configured: TTSBackendId
+    #: Which model was asked for, e.g. "kokoro", "chatterbox-original".
+    model: str = "kokoro"
     active: str | None = None
     available: bool
     detail: str

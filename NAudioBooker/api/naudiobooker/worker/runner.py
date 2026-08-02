@@ -39,7 +39,8 @@ from ..db import init_db
 from ..models import BookDetail, JobInfo
 from ..text import Chunk, chunk_paragraphs
 from ..tts import TTSError, get_backend
-from ..tts.base import TTSBackend
+from ..tts.base import ReferenceClip, TTSBackend
+from ..voices import VoiceLibrary
 
 log = logging.getLogger(__name__)
 
@@ -114,6 +115,29 @@ def _plan_chunks(book_id: str, job: JobInfo, max_chars: int) -> _Progress:
     return progress
 
 
+def _resolve_reference(job: JobInfo) -> ReferenceClip | None:
+    """Find the reference clip a cloned voice points at.
+
+    Resolved once per job rather than per chunk: it is a filesystem lookup, and
+    a book is twenty thousand chunks.
+    """
+    if not job.voice_ref:
+        return None
+
+    library = VoiceLibrary.open()
+    clip = library.by_hash(job.voice_ref)
+    if clip is None:
+        raise TTSError(
+            f"the voice this render was queued with ({job.voice_ref[:12]}) is no "
+            "longer in the voice library; re-upload the clip or pick another voice"
+        )
+    return ReferenceClip(
+        path=library.path_for(clip),
+        ref_hash=clip.ref_hash,
+        transcript=getattr(clip, "transcript", None),
+    )
+
+
 def _check_cancelled(job_id: str, stop: threading.Event | None = None) -> None:
     # Shutdown is checked first and locally: it must not depend on a database
     # round trip, and a stopping worker should not be recorded as a
@@ -134,6 +158,7 @@ def _render_chapter(
     destination: Path,
     progress: _Progress,
     stop: threading.Event | None = None,
+    reference: ReferenceClip | None = None,
 ) -> float:
     """Synthesize one chapter to a WAV file. Returns its duration."""
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -156,10 +181,14 @@ def _render_chapter(
                 voice=job.voice,
                 speed=job.speed,
                 text=chunk.text,
+                # A cloned voice is named by the user, so the name alone does
+                # not identify the audio. Without the clip hash here, pointing
+                # a voice at a new recording would serve the old one forever.
+                voice_ref=job.voice_ref,
             )
             audio = cache.get(key)
             if audio is None:
-                audio = backend.synthesize(chunk.text, job.voice, job.speed)
+                audio = backend.synthesize(chunk.text, job.voice, job.speed, reference)
                 cache.put(key, audio)
             else:
                 progress.cache_hits += 1
@@ -322,12 +351,17 @@ def process_job(
 ) -> None:
     """Render every included chapter of one job."""
     settings = settings or get_settings()
-    backend = get_backend(settings)
+    backend = get_backend(settings, job.model)
     cache = ChunkCache(settings.cache_dir)
     out_dir = _render_dir(settings, job.book_id, job.id)
 
-    log.info("job %s: rendering %s chapters", job.id, len(job.chapters))
+    log.info(
+        "job %s: rendering %s chapters with %s%s",
+        job.id, len(job.chapters), job.model,
+        f" (cloned voice {job.voice_ref[:12]})" if job.voice_ref else "",
+    )
     try:
+        reference = _resolve_reference(job)
         progress = _plan_chunks(job.book_id, job, backend.max_chars)
         jobs.update_progress(job.id, chunks_total=progress.chunks_total)
 
@@ -354,6 +388,7 @@ def process_job(
                     destination=destination,
                     progress=progress,
                     stop=stop,
+                    reference=reference,
                 )
             except Cancelled:
                 raise

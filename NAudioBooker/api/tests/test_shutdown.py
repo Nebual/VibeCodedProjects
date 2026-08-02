@@ -97,11 +97,11 @@ def test_shutdown_mid_render_keeps_completed_chunks(env, book, backend):
     original = backend.synthesize
     calls = {"n": 0}
 
-    def stop_partway(text, voice, speed=1.0):
+    def stop_partway(text, voice, speed=1.0, reference=None):
         calls["n"] += 1
         if calls["n"] == 6:
             stop.set()
-        return original(text, voice, speed)
+        return original(text, voice, speed, reference)
 
     backend.synthesize = stop_partway
     with pytest.raises(ShuttingDown):

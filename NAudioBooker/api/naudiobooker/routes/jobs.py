@@ -17,6 +17,8 @@ from .. import store
 from ..config import get_settings
 from ..models import JobInfo, RenderRequest
 from ..tts import BackendUnavailable, get_backend
+from ..tts.models import get_model
+from ..voices import VoiceError, resolve_reference
 
 router = APIRouter(tags=["jobs"])
 
@@ -62,8 +64,25 @@ def start_render(book_id: str, request: RenderRequest) -> JobInfo:
             detail=f"A render is already {existing.status} for this book.",
         )
 
+    settings = get_settings()
+    # The model chosen in the UI. Dropping it here is silent: create_job
+    # defaults the column to "kokoro", so the job looks well-formed and the
+    # worker dutifully renders the wrong model hours later.
     try:
-        backend = get_backend()
+        spec = get_model(request.model or settings.tts_model)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # Resolved now rather than in the worker so an unusable pairing is rejected
+    # while someone is still looking at the screen.
+    try:
+        reference = resolve_reference(spec, request.voice)
+    except VoiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    try:
+        backend = get_backend(settings, spec.id)
+        model_version = backend.model_version
     except (BackendUnavailable, NotImplementedError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
@@ -72,7 +91,9 @@ def start_render(book_id: str, request: RenderRequest) -> JobInfo:
         voice=request.voice,
         speed=request.speed,
         backend=backend.id,
-        model_version=backend.model_version,
+        model=spec.id,
+        voice_ref=reference.ref_hash if reference else None,
+        model_version=model_version,
         chapters=included,
         output_format=request.output_format,
     )

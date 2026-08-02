@@ -3,6 +3,7 @@ import type { JobInfo } from '~/types/api'
 
 const props = defineProps<{
   bookId: string
+  model: string
   voice: string
   speed: number
   includedChapters: number
@@ -51,7 +52,12 @@ async function start() {
   try {
     job.value = await $fetch<JobInfo>(`/api/books/${props.bookId}/render`, {
       method: 'POST',
-      body: { voice: props.voice, speed: props.speed, output_format: format.value },
+      body: {
+        voice: props.voice,
+        speed: props.speed,
+        model: props.model,
+        output_format: format.value,
+      },
     })
     listen(job.value.id)
   }
@@ -123,6 +129,7 @@ const eta = computed(() => {
             </option>
           </select>
 
+          <span v-if="job" class="badge badge-ghost badge-sm">{{ job.model }}</span>
           <span v-if="job" class="badge badge-sm" :class="STATUS_BADGE[job.status]">
             {{ job.stage && !job.is_terminal ? job.stage : job.status }}
           </span>

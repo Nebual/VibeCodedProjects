@@ -211,7 +211,7 @@ class DeadBackend:
         self.attempts += 1
         raise BackendUnavailable("box is asleep")
 
-    def synthesize(self, text: str, voice: str, speed: float = 1.0) -> AudioChunk:
+    def synthesize(self, text: str, voice: str, speed: float = 1.0, reference=None) -> AudioChunk:
         self.attempts += 1
         raise BackendUnavailable("box is asleep")
 
@@ -283,3 +283,206 @@ def test_input_errors_are_not_retried_locally(node):
         dispatcher.synthesize("   ", "fk_ann")
 
     assert not local.calls
+
+
+# ---------------------------------------------------------------------------
+# Reference clip transfer
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def clip_node(monkeypatch, tmp_path):
+    """A node whose clip cache lives in a temp directory."""
+    settings = Settings(
+        role="worker-node", data_dir=tmp_path / "nodedata", idle_unload_s=0, _env_file=None
+    )
+    backend = FakeBackend()
+    for target in (
+        "naudiobooker.config",
+        "naudiobooker.main",
+        "naudiobooker.routes.node",
+        "naudiobooker.node_clips",
+    ):
+        monkeypatch.setattr(f"{target}.get_settings", lambda: settings, raising=False)
+    monkeypatch.setattr("naudiobooker.routes.node.get_backend", lambda *a, **k: backend)
+    with TestClient(create_app()) as client:
+        yield client, backend, settings
+
+
+def make_clip(tmp_path):
+    """A reference clip on disk, named by the hash of its own bytes."""
+    import hashlib
+
+    import numpy as np
+    import soundfile as sf
+
+    from naudiobooker.tts.base import ReferenceClip
+
+    t = np.arange(24_000 * 3, dtype=np.float32) / 24_000
+    path = tmp_path / "ref.wav"
+    sf.write(path, np.sin(2 * np.pi * 200 * t) * 0.5, 24_000, subtype="PCM_16")
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    return ReferenceClip(path=path, ref_hash=digest, transcript="a spoken line")
+
+
+def test_clip_is_uploaded_once_not_per_chunk(clip_node, tmp_path):
+    """A book is 20,000 chunks; resending the clip each time moves gigabytes."""
+    client, fake, _ = clip_node
+    clip = make_clip(tmp_path)
+    backend = remote_against(client)
+
+    uploads = []
+    original = backend._push_clip
+    backend._push_clip = lambda ref: (uploads.append(ref.ref_hash), original(ref))[1]
+
+    for _ in range(5):
+        backend.synthesize("some words", "clip-x", reference=clip)
+
+    assert len(uploads) == 1
+    assert len(fake.calls) == 5
+    # The clip reached the backend on every call, not just the first.
+    assert all(r is not None for r in fake.references)
+
+
+def test_node_stores_and_reports_the_clip(clip_node, tmp_path):
+    client, _, _ = clip_node
+    clip = make_clip(tmp_path)
+
+    before = client.get(f"/node/clips/{clip.ref_hash}").json()
+    client.post(f"/node/clips/{clip.ref_hash}", content=clip.path.read_bytes())
+    after = client.get(f"/node/clips/{clip.ref_hash}").json()
+
+    assert before["present"] is False
+    assert after["present"] is True
+
+
+def test_node_rejects_a_clip_that_does_not_match_its_hash(clip_node, tmp_path):
+    """Otherwise a clip filed under the wrong hash poisons every cached chunk."""
+    client, _, _ = clip_node
+    clip = make_clip(tmp_path)
+
+    res = client.post(f"/node/clips/{clip.ref_hash}", content=b"different audio entirely")
+
+    assert res.status_code == 400
+    assert "does not match" in res.json()["detail"]
+
+
+def test_node_rejects_a_hash_that_is_not_hex(clip_node):
+    """The hash becomes a filename, so it never reaches the disk unvalidated."""
+    client, _, _ = clip_node
+
+    res = client.post("/node/clips/..%2F..%2Fescape", content=b"x")
+
+    assert res.status_code in (400, 404)
+
+
+def test_synthesis_without_the_clip_present_asks_for_it(clip_node, tmp_path):
+    client, _, _ = clip_node
+    clip = make_clip(tmp_path)
+
+    res = client.post(
+        "/node/synthesize",
+        json={"voice": "clip-x", "text": "hello", "voice_ref": clip.ref_hash},
+    )
+
+    assert res.status_code == 409
+    assert "not on this node" in res.json()["detail"]
+
+
+def test_client_recovers_when_the_node_loses_its_clip(clip_node, tmp_path):
+    """A node restart or wiped volume must not fail a render in progress."""
+    client, fake, settings = clip_node
+    clip = make_clip(tmp_path)
+    backend = remote_against(client)
+
+    backend.synthesize("first", "clip-x", reference=clip)
+
+    # Simulate the node losing its cache while the client still believes it.
+    for stored in (settings.data_dir / "node-clips").glob("*.wav"):
+        stored.unlink()
+
+    chunk = backend.synthesize("second", "clip-x", reference=clip)
+
+    assert len(chunk.samples) > 0
+    assert len(fake.calls) == 2
+
+
+# ---------------------------------------------------------------------------
+# Routing a model to the node that actually serves it
+# ---------------------------------------------------------------------------
+
+
+def _node_reporting(backend_id: str) -> httpx.MockTransport:
+    """A node that claims to be running `backend_id`."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "available": True,
+                "detail": "ok",
+                "backend": backend_id,
+                "model_version": f"{backend_id}-1",
+                "sample_rate": 24_000,
+                "max_chars": 300,
+            },
+        )
+
+    return httpx.MockTransport(handler)
+
+
+def _remote_for(model_id: str, backend_id: str) -> RemoteHttpBackend:
+    settings = Settings(tts_backend="remote", remote_worker_url="http://node.test")
+    remote = RemoteHttpBackend(settings, model_id=model_id, base_url="http://node.test")
+    remote._client = httpx.Client(
+        base_url="http://node.test", transport=_node_reporting(backend_id)
+    )
+    return remote
+
+
+def test_remote_refuses_a_node_running_a_different_model() -> None:
+    """node_url_for() falls back to the shared NAB_REMOTE_WORKER_URL for any
+    model without its own entry, so a missing entry aims a cloning request at
+    whichever node is the default -- silently, and with a puzzling failure
+    much later."""
+    remote = _remote_for("chatterbox-original", "kokoro")
+
+    with pytest.raises(BackendUnavailable) as excinfo:
+        _ = remote.model_version
+
+    message = str(excinfo.value)
+    assert "kokoro" in message and "chatterbox" in message
+    # The message must name the setting to change, not just the disagreement.
+    assert "NAB_REMOTE_MODEL_URLS" in message
+
+
+def test_remote_accepts_a_node_running_the_right_model() -> None:
+    assert _remote_for("chatterbox-original", "chatterbox").model_version == "chatterbox-1"
+
+
+def test_remote_accepts_a_node_whose_backend_it_does_not_recognise() -> None:
+    """An unfamiliar id is not evidence of a mismatch: a node proxying onward
+    reports "remote", and a newer node may run a backend this build predates."""
+    assert _remote_for("kokoro", "remote").model_version == "remote-1"
+    assert _remote_for("kokoro", "some-future-model").model_version == "some-future-model-1"
+
+
+def test_remote_refuses_the_wrong_node_before_synthesizing() -> None:
+    """The check has to sit on the synthesis path, not only on model_version.
+
+    Preview calls synthesize() directly and never reads model_version, so a
+    guard that lived only there let a Chatterbox preview reach a Kokoro node --
+    which failed with "voice not found", pointing at the voice rather than at
+    the routing.
+    """
+    remote = _remote_for("chatterbox-original", "kokoro")
+
+    with pytest.raises(BackendUnavailable, match="NAB_REMOTE_MODEL_URLS"):
+        remote.synthesize("some words", "clip-narrator")
+
+
+def test_health_reports_a_node_serving_the_wrong_model() -> None:
+    health = _remote_for("omnivoice", "kokoro").health()
+
+    assert health.available is False
+    assert "NAB_REMOTE_MODEL_URLS" in health.detail

@@ -8,7 +8,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _API_DIR = Path(__file__).resolve().parents[1]
@@ -25,7 +25,12 @@ worker-node  -- stateless remote synthesiser (the Windows/3070 box); exposes
                 only /synthesize and /health, and touches no book state
 """
 
-TTSBackendId = Literal["kokoro", "piper", "remote"]
+#: Where synthesis runs. Legacy model names are still accepted here and are
+#: normalised below, so an existing .env with NAB_TTS_BACKEND=kokoro keeps
+#: working.
+TTSBackendId = Literal["local", "remote", "kokoro", "piper"]
+
+_LEGACY_BACKENDS = {"kokoro": "kokoro", "piper": "piper"}
 
 #: Env files consulted, in increasing order of precedence.
 ENV_FILE_CANDIDATES = (_PROJECT_ROOT / ".env", _API_DIR / ".env", Path(".env"))
@@ -73,10 +78,18 @@ class Settings(BaseSettings):
     # different places depending on how it was launched.
     data_dir: Path = _PROJECT_ROOT / "data"
 
-    # TTS
-    tts_backend: TTSBackendId = "kokoro"
+    # TTS. Two independent choices that used to be one field: which model, and
+    # whether it runs here or on the node. Conflating them made "Chatterbox
+    # Nano, locally" impossible to express.
+    tts_backend: TTSBackendId = "local"
+    tts_model: str = "kokoro"
     tts_voice: str = "af_heart"
     tts_speed: float = 1.0
+
+    #: Languages offered in the voice picker. Kokoro ships 54 voices across
+    #: nine languages, and the 26 non-English ones bury the useful ones in a
+    #: dropdown. Set to an empty list to show everything.
+    voice_languages: list[str] = Field(default_factory=lambda: ["en-us", "en-gb"])
 
     # Model weights. Kept outside data_dir because they are large, immutable
     # and shared between every book, so they should not be backed up or synced
@@ -97,6 +110,12 @@ class Settings(BaseSettings):
     #: present, otherwise CPU. Force either way for troubleshooting.
     tts_device: Literal["auto", "cpu", "cuda"] = "auto"
 
+    #: Unload the model after this many seconds idle, freeing its VRAM for a
+    #: sibling node on the same card. Only worker-nodes do this; 0 disables it.
+    #: Sixty seconds is short on purpose -- a reload costs seconds, whereas
+    #: discovering the other model cannot start costs a failed render.
+    idle_unload_s: float = 60.0
+
     # Worker
     #: How long the worker sleeps when the queue is empty.
     worker_poll_interval_s: float = 2.0
@@ -112,6 +131,10 @@ class Settings(BaseSettings):
     # set; the dispatcher falls back to local synthesis if the node is
     # unreachable, so an unset/offline node degrades rather than fails.
     remote_worker_url: str | None = None
+    #: Per-model node URLs, as {"omnivoice": "http://box:8002"}. Needed because
+    #: Chatterbox and OmniVoice cannot share an environment, so each runs in its
+    #: own container on its own port. Falls back to remote_worker_url.
+    remote_model_urls: dict[str, str] = Field(default_factory=dict)
     remote_worker_token: str | None = None
     remote_worker_timeout_s: float = 120.0
     #: Fall back to local CPU synthesis when the node cannot be reached.
@@ -139,6 +162,28 @@ class Settings(BaseSettings):
     def ensure_dirs(self) -> None:
         for d in (self.data_dir, self.books_dir, self.cache_dir):
             d.mkdir(parents=True, exist_ok=True)
+
+
+    @model_validator(mode="after")
+    def _normalise_legacy_backend(self) -> "Settings":
+        """Accept the old NAB_TTS_BACKEND=<model> spelling.
+
+        The field used to name a model. Someone's working .env should not stop
+        working because the field was split in two.
+        """
+        legacy = _LEGACY_BACKENDS.get(self.tts_backend)
+        if legacy is not None:
+            self.tts_model = legacy
+            self.tts_backend = "local"
+        return self
+
+    @property
+    def is_remote(self) -> bool:
+        return self.tts_backend == "remote"
+
+    def node_url_for(self, model_id: str) -> str | None:
+        """Which node serves this model, if any."""
+        return self.remote_model_urls.get(model_id) or self.remote_worker_url
 
 
 @lru_cache

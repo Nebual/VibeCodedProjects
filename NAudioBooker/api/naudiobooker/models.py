@@ -71,6 +71,34 @@ class VoiceInfo(BaseModel):
     label: str
     language: str
     gender: str | None = None
+    #: Set for a cloned voice; part of the synthesis cache key.
+    ref_hash: str | None = None
+
+
+class VoiceClipInfo(BaseModel):
+    id: str
+    name: str
+    ref_hash: str
+    duration_s: float
+    created_at: str
+    filename: str
+
+
+class ModelInfo(BaseModel):
+    id: str
+    label: str
+    family: str
+    supports_cloning: bool
+    has_builtin_voices: bool
+    cpu_viable: bool
+    #: Indicative audio-seconds per second on a mid-range GPU. The benchmark
+    #: script is the authority; this only exists so the UI can warn before
+    #: someone starts a render that will run overnight.
+    gpu_rtf_hint: float | None = None
+    notes: str = ""
+    #: Which node would serve this model, when synthesis is remote.
+    node_url: str | None = None
+    is_default: bool = False
 
 
 class PreviewRequest(BaseModel):
@@ -78,6 +106,24 @@ class PreviewRequest(BaseModel):
     #: Empty means "use the built-in sample sentence".
     text: str | None = None
     speed: float = Field(default=1.0, ge=0.5, le=2.0)
+    #: Model to preview with. Defaults to the configured one.
+    model: str | None = None
+
+
+class NodeSynthesizeRequest(BaseModel):
+    """What the primary sends a node for one chunk.
+
+    The reference clip is named by hash, not sent inline: a clip is a couple of
+    hundred kilobytes and a book is twenty thousand chunks, so inlining it would
+    push gigabytes across the LAN to say the same thing over and over. The node
+    fetches it once and keeps it.
+    """
+
+    voice: str
+    text: str
+    speed: float = Field(default=1.0, ge=0.5, le=2.0)
+    voice_ref: str | None = None
+    ref_text: str | None = None
 
 
 class NodeInfo(BaseModel):
@@ -110,6 +156,8 @@ class RenderRequest(BaseModel):
     voice: str
     speed: float = Field(default=1.0, ge=0.5, le=2.0)
     output_format: OutputFormat = "mp3"
+    #: Which model to render with. Defaults to the configured one.
+    model: str | None = None
 
 
 class JobChapterInfo(BaseModel):
@@ -135,6 +183,9 @@ class JobInfo(BaseModel):
     voice: str
     speed: float
     backend: str
+    model: str = "kokoro"
+    #: Reference clip hash, when rendering in a cloned voice.
+    voice_ref: str | None = None
     model_version: str
     chapters_total: int
     chapters_done: int
