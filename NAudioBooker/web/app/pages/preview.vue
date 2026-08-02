@@ -12,13 +12,49 @@
  * page works everywhere.
  */
 
+/**
+ * Metadata for link unfurls, computed during setup rather than on mount:
+ * a crawler does not run JavaScript, so anything applied later is invisible
+ * to it. Reading route.query directly here is safe -- it is available on the
+ * server, unlike the localStorage preference.
+ *
+ * og:video rather than og:audio because Discord has no audio embed. og:audio
+ * is unimplemented there, and a direct link to an audio file gets no player;
+ * a plain MP4 pointed at by og:video does embed.
+ */
+const route = useRoute()
+
+const shared = computed(() => {
+  const q = route.query
+  const pick = (v: unknown) => (Array.isArray(v) ? v.at(-1) : v) as string | undefined
+  const params = new URLSearchParams()
+  for (const key of ['text', 'voice', 'model', 'speed', 'exaggeration', 'cfg_weight']) {
+    const value = pick(q[key])
+    if (value) params.set(key, value)
+  }
+  return { text: pick(q.text), params: params.toString() }
+})
+
+const origin = useRequestURL().origin
+
 useHead({ title: 'Preview — NAudioBooker' })
+useSeoMeta({
+  ogTitle: 'NAudioBooker preview',
+  // The spoken words are the useful part of the unfurl.
+  ogDescription: () => shared.value.text ?? 'Speak any text in any voice.',
+  ogType: 'video.other',
+  // Absolute: a crawler has no page to resolve a relative URL against.
+  ogVideo: () => (shared.value.text ? `${origin}/api/preview.mp4?${shared.value.params}` : undefined),
+  ogVideoType: () => (shared.value.text ? 'video/mp4' : undefined),
+  ogVideoWidth: () => (shared.value.text ? 640 : undefined),
+  ogVideoHeight: () => (shared.value.text ? 360 : undefined),
+  twitterCard: 'player',
+})
 
 // No book id, so the sample phrases are the stock ones and the preference is
 // the global default rather than a per-book override.
 const { model, voice, speed, tuning } = useVoicePreference()
 
-const route = useRoute()
 const text = ref('')
 const picker = ref<{ activeTuning: Record<string, number>, play: () => void } | null>(null)
 
@@ -95,11 +131,15 @@ const directUrl = computed(() => {
   return `/api/preview?${params}`
 })
 
-const copied = ref(false)
-async function copyUrl() {
-  await navigator.clipboard.writeText(new URL(directUrl.value, location.origin).toString())
-  copied.value = true
-  setTimeout(() => (copied.value = false), 1500)
+/** The same settings as a link to this page -- what you paste into Discord. */
+const pageUrl = computed(() => directUrl.value.replace('/api/preview?', '/preview?'))
+
+const copied = ref<string | null>(null)
+async function copy(which: 'api' | 'page') {
+  const url = which === 'api' ? directUrl.value : pageUrl.value
+  await navigator.clipboard.writeText(new URL(url, location.origin).toString())
+  copied.value = which
+  setTimeout(() => (copied.value = null), 1500)
 }
 </script>
 
@@ -143,14 +183,28 @@ async function copyUrl() {
           parameters, so swapping <code>/api/preview</code> for <code>/preview</code>
           gives a link that opens here and plays on arrival.
         </p>
-        <div class="flex flex-wrap items-center gap-2">
-          <code class="bg-base-200 rounded-box min-w-0 flex-1 overflow-x-auto p-2 text-xs">
-            {{ directUrl }}
-          </code>
-          <button class="btn btn-ghost btn-sm" @click="copyUrl">
-            {{ copied ? 'Copied' : 'Copy' }}
-          </button>
+        <div class="space-y-2">
+          <div v-for="row in [
+                 { key: 'api' as const, label: 'Audio', url: directUrl },
+                 { key: 'page' as const, label: 'Page', url: pageUrl },
+               ]"
+               :key="row.key"
+               class="flex flex-wrap items-center gap-2"
+          >
+            <span class="text-base-content/50 w-12 shrink-0 text-xs">{{ row.label }}</span>
+            <code class="bg-base-200 rounded-box min-w-0 flex-1 overflow-x-auto p-2 text-xs">
+              {{ row.url }}
+            </code>
+            <button class="btn btn-ghost btn-sm" @click="copy(row.key)">
+              {{ copied === row.key ? 'Copied' : 'Copy' }}
+            </button>
+          </div>
         </div>
+        <p class="text-base-content/40 text-xs">
+          Paste the page link into Discord and it unfurls with a player, via an
+          MP4 rendition at <code>/api/preview.mp4</code> — Discord embeds video
+          but has no audio embed at all.
+        </p>
       </div>
     </section>
   </div>

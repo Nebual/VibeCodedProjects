@@ -122,6 +122,9 @@ class PreviewRequest(BaseModel):
     speed: float = Field(default=1.0, ge=0.5, le=2.0)
     #: Model to preview with. Defaults to the configured one.
     model: str | None = None
+    #: "mp4" wraps the audio in a video with a blank frame, for places that
+    #: will not play bare audio -- Discord embeds video and not audio.
+    format: Literal["wav", "mp4"] = "wav"
     #: Per-request tuning, as {"exaggeration": 0.7}. Only the knobs the chosen
     #: model declares are meaningful; the rest are ignored by the backend.
     options: dict[str, float] = Field(default_factory=dict)

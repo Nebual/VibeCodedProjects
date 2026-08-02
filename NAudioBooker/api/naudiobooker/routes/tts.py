@@ -12,7 +12,7 @@ import numpy as np
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 
-from ..audio import to_wav_bytes
+from ..audio import audio_to_mp4, to_wav_bytes
 from ..cache import ChunkCache, chunk_key
 from ..config import get_settings
 from ..models import PreviewRequest, VoiceInfo
@@ -57,7 +57,7 @@ def _join(pieces: list[AudioChunk]) -> AudioChunk:
     )
 
 
-def _download_name(spec: ModelSpec, voice: str, speed: float) -> str:
+def _download_name(spec: ModelSpec, voice: str, speed: float, ext: str = "wav") -> str:
     """A filename that says which combination this was.
 
     Comparing voices means ending up with a folder of downloads, and
@@ -72,7 +72,7 @@ def _download_name(spec: ModelSpec, voice: str, speed: float) -> str:
     # like a serial number, "1.25x" reads like a speed.
     if abs(speed - 1.0) > 1e-3:
         stem += f"-{speed:.2f}x"
-    return f"preview-{stem}.wav"
+    return f"preview-{stem}.{ext}"
 
 
 #: Long enough to judge a voice's character, short enough to render instantly.
@@ -199,9 +199,24 @@ def preview(request: PreviewRequest) -> Response:
     except TTSError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    wav = to_wav_bytes(chunk)
+    if request.format == "mp4":
+        return Response(
+            content=audio_to_mp4(wav),
+            media_type="video/mp4",
+            headers={
+                "Cache-Control": "no-store",
+                "X-Audio-Duration": f"{chunk.duration_s:.2f}",
+                "X-Cache": "hit" if cached else "miss",
+                "Content-Disposition": (
+                    f'inline; filename="{_download_name(spec, voice, request.speed, "mp4")}"'
+                ),
+            },
+        )
+
     filename = _download_name(spec, voice, request.speed)
     return Response(
-        content=to_wav_bytes(chunk),
+        content=wav,
         media_type="audio/wav",
         headers={
             # The audio is cached server-side by content; letting the browser

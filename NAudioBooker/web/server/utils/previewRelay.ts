@@ -10,6 +10,8 @@ import type { H3Event } from 'h3'
  * drift into answering differently.
  */
 export interface PreviewBody {
+  /** "mp4" wraps the audio in a video, for embeds that will not play audio. */
+  format?: 'wav' | 'mp4'
   text?: string | null
   voice?: string
   model?: string
@@ -29,6 +31,84 @@ export interface RelayOptions {
    * into an address bar.
    */
   buffered?: boolean
+}
+
+/**
+ * Text limit for the GET form.
+ *
+ * The POST endpoint accepts 20,000 characters, but that cannot survive a URL:
+ * browsers start truncating around 2,000 and many proxies reject a request
+ * line over 8 KB. Capping well below that turns a silently mangled preview
+ * into a clear error naming the form that has no such limit.
+ */
+const MAX_TEXT = 1000
+
+/** Knobs a caller can set per request. Unknown ones are ignored by the model. */
+const TUNING_KNOBS = ['exaggeration', 'cfg_weight'] as const
+
+function one(value: unknown): string | undefined {
+  // A repeated parameter arrives as an array; take the last, which is what
+  // someone appending to a URL almost certainly meant.
+  const raw = Array.isArray(value) ? value.at(-1) : value
+  return typeof raw === 'string' && raw.length > 0 ? raw : undefined
+}
+
+function num(value: unknown, name: string): number | undefined {
+  const raw = one(value)
+  if (raw === undefined) return undefined
+  const parsed = Number(raw)
+  if (!Number.isFinite(parsed)) {
+    throw createError({
+      statusCode: 400,
+      statusMessage: 'Bad Request',
+      message: `${name} must be a number, got ${JSON.stringify(raw)}`,
+    })
+  }
+  return parsed
+}
+
+/**
+ * Build a preview request out of a query string.
+ *
+ * Shared by /api/preview and /api/preview.mp4, which differ only in what they
+ * ask the API to encode -- the parameters, the limits and the error messages
+ * are identical and should stay that way.
+ */
+export function previewFromQuery(event: H3Event): PreviewBody {
+  const query = getQuery(event)
+
+  const text = one(query.text)?.trim()
+  if (!text) {
+    throw createError({
+      statusCode: 400,
+      statusMessage: 'Bad Request',
+      message: 'Pass the words to speak as ?text=... (or POST to /api/preview).',
+    })
+  }
+  if (text.length > MAX_TEXT) {
+    throw createError({
+      statusCode: 413,
+      statusMessage: 'Payload Too Large',
+      message:
+        `That is ${text.length} characters; the GET form is capped at ${MAX_TEXT} `
+        + 'because longer will not survive a URL. POST to /api/preview instead, '
+        + 'which accepts 20,000.',
+    })
+  }
+
+  const options: Record<string, number> = {}
+  for (const knob of TUNING_KNOBS) {
+    const value = num(query[knob], knob)
+    if (value !== undefined) options[knob] = value
+  }
+
+  return {
+    text,
+    voice: one(query.voice) ?? '',
+    model: one(query.model),
+    speed: num(query.speed, 'speed') ?? 1.0,
+    options,
+  }
 }
 
 export async function relayPreview(

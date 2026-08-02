@@ -169,6 +169,15 @@ const audioUrl = ref<string | null>(null)
 const downloadName = ref('preview.wav')
 /** Whether the last preview came back from the cache rather than the model. */
 const fromCache = ref(false)
+/**
+ * Set when the browser refused to start playback on its own.
+ *
+ * Every browser blocks a programmatic play() that no click led to, which is
+ * exactly the case when /preview is opened from a link carrying ?text. The
+ * audio is loaded and one press away, so this only exists to say so -- a
+ * silent player looks like a failure.
+ */
+const autoplayBlocked = ref(false)
 
 async function play() {
   previewing.value = true
@@ -192,11 +201,14 @@ async function play() {
     downloadName.value = filenameFrom(response.headers) ?? 'preview.wav'
     fromCache.value = response.headers.get('x-cache') === 'hit'
     await nextTick()
-    // Rejected when the browser's autoplay policy blocks a programmatic
-    // play() -- which is the normal case for a preview triggered by a link
-    // rather than a click. The player is loaded and ready regardless, so
-    // there is nothing to report.
-    document.querySelector<HTMLAudioElement>('#voice-preview')?.play().catch(() => {})
+    autoplayBlocked.value = false
+    try {
+      await document.querySelector<HTMLAudioElement>('#voice-preview')?.play()
+    }
+    catch {
+      // No user gesture led here, so the browser declined. Not an error.
+      autoplayBlocked.value = true
+    }
   }
   catch (e: unknown) {
     previewError.value = await detailFrom(e)
@@ -433,6 +445,9 @@ const needsClip = computed(() => current.value?.supports_cloning && !clips.value
       >
         Download
       </a>
+      <span v-if="autoplayBlocked" class="text-base-content/60 text-xs">
+        Ready — press play.
+      </span>
       <span v-if="fromCache" class="text-base-content/40 text-xs">
         from cache
       </span>

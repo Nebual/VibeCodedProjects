@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import subprocess
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -109,3 +110,67 @@ def probe_duration(path: Path) -> float:
         return float(result.stdout.strip())
     except ValueError as exc:
         raise EncodeError(f"ffprobe gave no duration for {path.name}") from exc
+
+
+#: Frame size and rate for the still-image video track below. Small and slow:
+#: it exists only to satisfy players that will not accept an audio-only MP4,
+#: and every extra pixel is bytes spent conveying nothing.
+_CARD_SIZE = "640x360"
+_CARD_FPS = 10
+_CARD_COLOUR = "0x1d232a"
+
+
+def audio_to_mp4(wav_bytes: bytes, *, bitrate: str = "96k") -> bytes:
+    """Wrap audio in an MP4 with a still-image video track.
+
+    For sharing a preview somewhere that will not play bare audio. Discord is
+    the case in hand: it has no audio embed at all -- og:audio is unimplemented
+    and a direct link to an audio file gets no player -- but it will embed an
+    MP4 advertised through og:video. An audio-only MP4 is not reliably treated
+    as a video, hence the blank frame.
+
+    Encoded rather than cached: a still frame at 10 fps costs a few hundred
+    kilobytes a minute and about a twentieth of a second, which is far less
+    than the synthesis that produced the audio.
+    """
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "audio.wav"
+        destination = Path(work) / "card.mp4"
+        source.write_bytes(wav_bytes)
+
+        _run(
+            [
+                "ffmpeg",
+                "-y",
+                "-loglevel",
+                "error",
+                # An endless colour source; -shortest below cuts it to the audio.
+                "-f",
+                "lavfi",
+                "-i",
+                f"color=c={_CARD_COLOUR}:s={_CARD_SIZE}:r={_CARD_FPS}",
+                "-i",
+                str(source),
+                "-c:v",
+                "libx264",
+                "-tune",
+                "stillimage",
+                "-preset",
+                "veryfast",
+                # yuv420p because anything else fails to play in a lot of places.
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-b:a",
+                bitrate,
+                "-shortest",
+                # Metadata at the front, so a player can start without the whole file.
+                "-movflags",
+                "+faststart",
+                "-f",
+                "mp4",
+                str(destination),
+            ]
+        )
+        return destination.read_bytes()
