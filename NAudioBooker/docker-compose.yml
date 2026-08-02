@@ -1,0 +1,52 @@
+services:
+  api:
+    build: ./api
+    environment:
+      NAB_ROLE: api
+      NAB_DATA_DIR: /data
+      NAB_MODELS_DIR: /models
+      NAB_CORS_ORIGINS: '["http://localhost:3000"]'
+    volumes:
+      - ./data:/data
+      - ./models:/models:ro
+    ports:
+      # Only needed for direct API access during debugging; the web container
+      # reaches it over the compose network.
+      - "8000:8000"
+    restart: unless-stopped
+
+  worker:
+    build: ./api
+    command: ["python", "-m", "naudiobooker.worker"]
+    environment:
+      NAB_ROLE: worker
+      NAB_DATA_DIR: /data
+      NAB_MODELS_DIR: /models
+      # Kokoro stops scaling past a handful of cores; leave the rest of the
+      # machine usable. See PLAN.md for the measured numbers.
+      NAB_ONNX_THREADS: "4"
+    volumes:
+      - ./data:/data
+      - ./models:/models:ro
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    environment:
+      # NUXT_API_BASE is the runtime override for runtimeConfig.apiBase.
+      # NAB_API_BASE only takes effect at build time; set both so the value is
+      # correct however the image is started.
+      NUXT_API_BASE: http://api:8000
+      NAB_API_BASE: http://api:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+# Phase 5 adds the remote GPU node, which runs on the Windows box from its own
+# compose file rather than this one.

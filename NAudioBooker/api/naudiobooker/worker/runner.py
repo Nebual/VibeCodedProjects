@@ -1,0 +1,413 @@
+"""The render worker: drains the job queue, one chapter at a time.
+
+Runs as its own process (``python -m naudiobooker.worker``) so a synthesis
+crash cannot take the API down with it, and so a render can saturate its
+threads without making the UI unresponsive.
+
+Audio is streamed to disk as it is produced rather than accumulated. A single
+Calibre-split chapter can run to two and a half hours, which at 24 kHz float32
+is roughly 860 MB in memory -- fine to write, ruinous to hold.
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+import threading
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import numpy as np
+import soundfile as sf
+
+from .. import jobs, store
+from ..audio import (
+    EncodeError,
+    GainPlan,
+    M4BChapter,
+    TrackTags,
+    build_m4b,
+    measure,
+    plan_gain,
+    tag_mp3,
+    wav_to_mp3,
+)
+from ..cache import ChunkCache, chunk_key
+from ..config import Settings, get_settings
+from ..db import init_db
+from ..models import BookDetail, JobInfo
+from ..text import Chunk, chunk_paragraphs
+from ..tts import TTSError, get_backend
+from ..tts.base import TTSBackend
+
+log = logging.getLogger(__name__)
+
+#: Silence inserted between chunks. Paragraph breaks get a longer pause; this
+#: is the one structural signal the source text hands us for free.
+SENTENCE_GAP_S = 0.30
+PARAGRAPH_GAP_S = 0.65
+
+#: How often the worker checks whether it has been asked to stop. Cheap (one
+#: indexed SELECT) so it can run between every chunk.
+CANCEL_CHECK_EVERY = 5
+
+
+class Cancelled(Exception):
+    """The job was cancelled while running."""
+
+
+@dataclass
+class _Progress:
+    """Job-wide counters, kept here so chapter loops stay readable."""
+
+    chunks_total: int = 0
+    chunks_done: int = 0
+    cache_hits: int = 0
+    audio_seconds: float = 0.0
+    chapters_done: int = 0
+    plan: dict[int, list[Chunk]] = field(default_factory=dict)
+
+
+#: Characters that are legal in a filename on Linux but break on Windows or in
+#: a zip. Output lands on other people's machines, so be conservative.
+_UNSAFE_FILENAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def _render_dir(settings: Settings, book_id: str, job_id: str) -> Path:
+    return settings.books_dir / book_id / "render" / job_id
+
+
+def _safe_filename(text: str, limit: int = 60) -> str:
+    cleaned = _UNSAFE_FILENAME.sub("", text).strip().rstrip(".")
+    cleaned = " ".join(cleaned.split())
+    return cleaned[:limit].strip() or "Untitled"
+
+
+def _silence(seconds: float, sample_rate: int) -> np.ndarray:
+    return np.zeros(int(seconds * sample_rate), dtype=np.float32)
+
+
+def _plan_chunks(book_id: str, job: JobInfo, max_chars: int) -> _Progress:
+    """Chunk every chapter before synthesising any of it.
+
+    Costs a second of text processing and buys an honest progress bar: without
+    a real total, a nine-hour render can only show a spinner.
+    """
+    progress = _Progress()
+    for chapter in job.chapters:
+        text = store.chapter_text(book_id, chapter.chapter_index)
+        chunks = chunk_paragraphs(text.paragraphs, max_chars)
+        progress.plan[chapter.chapter_index] = chunks
+        progress.chunks_total += len(chunks)
+        jobs.update_chapter(job.id, chapter.chapter_index, chunks_total=len(chunks))
+    return progress
+
+
+def _check_cancelled(job_id: str) -> None:
+    if jobs.read_status(job_id) in ("cancelling", "cancelled"):
+        raise Cancelled
+
+
+def _render_chapter(
+    *,
+    job: JobInfo,
+    chapter_index: int,
+    chunks: list[Chunk],
+    backend: TTSBackend,
+    cache: ChunkCache,
+    destination: Path,
+    progress: _Progress,
+) -> float:
+    """Synthesize one chapter to a WAV file. Returns its duration."""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    tmp = destination.with_suffix(".partial.wav")
+
+    duration = 0.0
+    done_here = 0
+    with sf.SoundFile(
+        tmp, "w", samplerate=backend.sample_rate, channels=1, subtype="PCM_16"
+    ) as out:
+        for position, chunk in enumerate(chunks):
+            if position % CANCEL_CHECK_EVERY == 0:
+                _check_cancelled(job.id)
+
+            # Keyed on the model, not the backend: a chunk made on the GPU node
+            # and the same chunk made locally are interchangeable, and must
+            # stay so across a mid-job fallback.
+            key = chunk_key(
+                model_version=backend.model_version,
+                voice=job.voice,
+                speed=job.speed,
+                text=chunk.text,
+            )
+            audio = cache.get(key)
+            if audio is None:
+                audio = backend.synthesize(chunk.text, job.voice, job.speed)
+                cache.put(key, audio)
+            else:
+                progress.cache_hits += 1
+
+            out.write(np.asarray(audio.samples, dtype=np.float32))
+            duration += audio.duration_s
+
+            gap = PARAGRAPH_GAP_S if chunk.ends_paragraph else SENTENCE_GAP_S
+            if position < len(chunks) - 1:
+                out.write(_silence(gap, backend.sample_rate))
+                duration += gap
+
+            progress.chunks_done += 1
+            done_here += 1
+            if done_here % 10 == 0 or position == len(chunks) - 1:
+                jobs.update_chapter(job.id, chapter_index, chunks_done=done_here)
+                jobs.update_progress(
+                    job.id,
+                    chunks_done=progress.chunks_done,
+                    cache_hits=progress.cache_hits,
+                    audio_seconds=progress.audio_seconds + duration,
+                )
+
+    tmp.replace(destination)
+    return duration
+
+
+@dataclass
+class _Rendered:
+    """A finished chapter WAV, ready to normalise and encode."""
+
+    chapter_index: int
+    title: str
+    wav: Path
+    duration_s: float
+    plan: GainPlan | None = None
+
+
+def _finalize(job: JobInfo, settings: Settings, book: BookDetail, out_dir: Path) -> None:
+    """Normalise, encode and tag everything the synthesis pass produced.
+
+    Runs after synthesis rather than during it because loudness can only be
+    measured once a chapter is complete -- normalising chunk by chunk would
+    make every paragraph a slightly different volume.
+    """
+    jobs.update_progress(job.id, stage="encoding", current_title=None)
+
+    finished = jobs.get_job(job.id)
+    rendered: list[_Rendered] = []
+    for chapter in finished.chapters:
+        wav = out_dir / f"{chapter.chapter_index:03d}.wav"
+        if chapter.status == "done" and wav.exists():
+            rendered.append(
+                _Rendered(
+                    chapter_index=chapter.chapter_index,
+                    title=chapter.title,
+                    wav=wav,
+                    duration_s=chapter.audio_seconds,
+                )
+            )
+
+    if not rendered:
+        return
+
+    cover = store.cover_file(job.book_id)
+    author = ", ".join(book.authors) or "Unknown author"
+    year = str(book.created_at.year)
+    mp3_dir = out_dir / "mp3"
+
+    for position, item in enumerate(rendered, start=1):
+        _check_cancelled(job.id)
+
+        loudness = measure(item.wav)
+        item.plan = plan_gain(loudness)
+        log.info(
+            "job %s: chapter %s rms=%.1f peak=%.1f dBFS -> gain %+.1f dB, limiting %.1f dB",
+            job.id,
+            item.chapter_index,
+            loudness.rms_dbfs,
+            loudness.peak_dbfs,
+            item.plan.gain_db,
+            item.plan.limiting_db,
+        )
+
+        mp3 = mp3_dir / f"{position:02d} {_safe_filename(item.title)}.mp3"
+        wav_to_mp3(
+            item.wav,
+            mp3,
+            gain_db=item.plan.gain_db,
+            limit_dbfs=item.plan.limit_dbfs,
+            bitrate=settings.mp3_bitrate,
+        )
+        tag_mp3(
+            mp3,
+            TrackTags(
+                title=item.title,
+                album=book.title,
+                artist=author,
+                track=position,
+                total_tracks=len(rendered),
+                year=year,
+            ),
+            cover=cover,
+        )
+        jobs.update_chapter(
+            job.id, item.chapter_index, path=str(mp3), gain_db=round(item.plan.gain_db, 2)
+        )
+
+    artifact: Path | None = None
+    if job.output_format in ("m4b", "both"):
+        _check_cancelled(job.id)
+        jobs.update_progress(job.id, stage="building m4b")
+        artifact = out_dir / f"{_safe_filename(book.title)}.m4b"
+        build_m4b(
+            [
+                M4BChapter(
+                    title=r.title,
+                    source=r.wav,
+                    duration_s=r.duration_s,
+                    gain_db=r.plan.gain_db if r.plan else 0.0,
+                    limit_dbfs=r.plan.limit_dbfs if r.plan else None,
+                )
+                for r in rendered
+            ],
+            artifact,
+            title=book.title,
+            artist=author,
+            year=year,
+            cover=cover,
+            bitrate=settings.m4b_bitrate,
+            work_dir=out_dir,
+        )
+
+    # The intermediate WAVs are enormous -- roughly 170 MB per hour -- and
+    # everything in them now exists as MP3 or M4B. Rebuilding them costs
+    # nothing anyway: every chunk is still in the cache.
+    for item in rendered:
+        item.wav.unlink(missing_ok=True)
+
+    if artifact is None:
+        artifact = mp3_dir
+    size = (
+        artifact.stat().st_size
+        if artifact.is_file()
+        else sum(f.stat().st_size for f in artifact.rglob("*") if f.is_file())
+    )
+    jobs.update_progress(job.id, stage="complete", artifact_path=str(artifact), artifact_bytes=size)
+
+
+def process_job(job: JobInfo, settings: Settings | None = None) -> None:
+    """Render every included chapter of one job."""
+    settings = settings or get_settings()
+    backend = get_backend(settings)
+    cache = ChunkCache(settings.cache_dir)
+    out_dir = _render_dir(settings, job.book_id, job.id)
+
+    log.info("job %s: rendering %s chapters", job.id, len(job.chapters))
+    try:
+        progress = _plan_chunks(job.book_id, job, backend.max_chars)
+        jobs.update_progress(job.id, chunks_total=progress.chunks_total)
+
+        for chapter in job.chapters:
+            _check_cancelled(job.id)
+            chunks = progress.plan.get(chapter.chapter_index, [])
+            destination = out_dir / f"{chapter.chapter_index:03d}.wav"
+
+            if not chunks:
+                jobs.update_chapter(job.id, chapter.chapter_index, status="skipped")
+                progress.chapters_done += 1
+                continue
+
+            jobs.update_chapter(job.id, chapter.chapter_index, status="running")
+            jobs.update_progress(job.id, current_title=chapter.title)
+
+            try:
+                duration = _render_chapter(
+                    job=job,
+                    chapter_index=chapter.chapter_index,
+                    chunks=chunks,
+                    backend=backend,
+                    cache=cache,
+                    destination=destination,
+                    progress=progress,
+                )
+            except Cancelled:
+                raise
+            except TTSError as exc:
+                # One bad chapter should not throw away the other twenty that
+                # rendered fine. Record it and carry on.
+                log.exception("job %s: chapter %s failed", job.id, chapter.chapter_index)
+                jobs.update_chapter(job.id, chapter.chapter_index, status="failed", error=str(exc))
+                continue
+
+            progress.audio_seconds += duration
+            progress.chapters_done += 1
+            jobs.update_chapter(
+                job.id,
+                chapter.chapter_index,
+                status="done",
+                audio_seconds=duration,
+                path=str(destination),
+            )
+            jobs.update_progress(
+                job.id,
+                chapters_done=progress.chapters_done,
+                audio_seconds=progress.audio_seconds,
+            )
+
+        book = store.load_book(job.book_id)
+        try:
+            _finalize(job, settings, book, out_dir)
+        except Cancelled:
+            raise
+        except EncodeError as exc:
+            # Synthesis is the expensive part and it succeeded; say so rather
+            # than reporting a generic failure that implies the audio is gone.
+            log.exception("job %s: encoding failed", job.id)
+            jobs.finish_job(job.id, "failed", f"Audio rendered but encoding failed: {exc}")
+            return
+
+        failed = [c for c in jobs.get_job(job.id).chapters if c.status == "failed"]
+        if failed:
+            jobs.finish_job(job.id, "failed", f"{len(failed)} chapter(s) failed to render")
+        else:
+            jobs.finish_job(job.id, "done")
+        log.info("job %s: finished", job.id)
+
+    except Cancelled:
+        log.info("job %s: cancelled", job.id)
+        jobs.finish_job(job.id, "cancelled")
+    except Exception as exc:
+        log.exception("job %s: failed", job.id)
+        jobs.finish_job(job.id, "failed", str(exc))
+
+
+@dataclass
+class RenderWorker:
+    settings: Settings
+    stop: threading.Event = field(default_factory=threading.Event)
+
+    def run(self) -> None:
+        init_db(self.settings.db_path)
+        reclaimed = jobs.reclaim_orphaned_jobs()
+        if reclaimed:
+            # Safe to requeue: every chunk already synthesized is in the cache,
+            # so a restart re-does almost no work.
+            log.info("requeued %s job(s) left running by a previous worker", reclaimed)
+
+        log.info("worker ready (backend=%s)", self.settings.tts_backend)
+        while not self.stop.is_set():
+            job = jobs.claim_next_job()
+            if job is None:
+                self.stop.wait(self.settings.worker_poll_interval_s)
+                continue
+            process_job(job, self.settings)
+
+
+def run_forever(settings: Settings | None = None) -> None:
+    settings = settings or get_settings()
+    settings.ensure_dirs()
+    worker = RenderWorker(settings=settings)
+    try:
+        worker.run()
+    except KeyboardInterrupt:
+        log.info("worker stopping")
+        worker.stop.set()
+        time.sleep(0.1)

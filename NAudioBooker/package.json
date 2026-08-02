@@ -1,0 +1,23 @@
+{
+  "name": "naudiobooker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Turn an EPUB into an audiobook",
+  "packageManager": "pnpm@11.18.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "concurrently -n api,worker,web -c magenta,yellow,green \"pnpm run dev:api\" \"pnpm run dev:worker\" \"pnpm run dev:web\"",
+    "dev:api": "cd api && uv run uvicorn naudiobooker.main:app --reload --host 0.0.0.0 --port 8000",
+    "dev:worker": "cd api && uv run python -m naudiobooker.worker",
+    "dev:web": "pnpm --filter web dev",
+    "build": "pnpm --filter web build",
+    "test:api": "cd api && uv run pytest",
+    "lint:api": "cd api && uv run ruff check .",
+    "format:api": "cd api && uv run ruff format ."
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}

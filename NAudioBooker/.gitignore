@@ -1,0 +1,28 @@
+# node
+node_modules/
+.nuxt/
+.output/
+.data/
+.pnpm-store/
+dist/
+*.log
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# app data: uploaded epubs, rendered audio, chunk cache, sqlite
+data/
+
+# models are large and fetched on first run
+models/
+
+# local env overrides
+.env
+.env.local
+
+# test fixtures kept locally rather than in history (large binaries)
+Sample Epub/

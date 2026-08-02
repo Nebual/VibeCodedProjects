@@ -1,0 +1,109 @@
+"""Runtime configuration.
+
+Every setting is overridable by environment variable with the ``NAB_`` prefix,
+e.g. ``NAB_ROLE=worker-node``, ``NAB_TTS_BACKEND=remote``.
+"""
+
+from functools import lru_cache
+from pathlib import Path
+from typing import Literal
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+Role = Literal["api", "worker", "worker-node"]
+"""
+api          -- serves HTTP, owns the database, dispatches jobs
+worker       -- drains the job queue on the primary host (same filesystem)
+worker-node  -- stateless remote synthesiser (the Windows/3070 box); exposes
+                only /synthesize and /health, and touches no book state
+"""
+
+TTSBackendId = Literal["kokoro", "piper", "remote"]
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_prefix="NAB_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    role: Role = "api"
+
+    # Storage. Everything the app generates lives under data_dir so a single
+    # bind mount covers uploads, rendered audio, the chunk cache and the db.
+    data_dir: Path = Path("../data")
+
+    # TTS
+    tts_backend: TTSBackendId = "kokoro"
+    tts_voice: str = "af_heart"
+    tts_speed: float = 1.0
+
+    # Model weights. Kept outside data_dir because they are large, immutable
+    # and shared between every book, so they should not be backed up or synced
+    # alongside a user's library.
+    models_dir: Path = Path("../models")
+    #: fp32, deliberately. The int8 build is a third of the size but measured
+    #: 5x SLOWER on CPU on both machines tested -- quantised kernels lose badly
+    #: to onnxruntime's optimised fp32 paths for this model's op mix.
+    kokoro_model: str = "kokoro-v1.0.onnx"
+    kokoro_voices: str = "voices-v1.0.bin"
+
+    #: onnxruntime intra-op threads. Kokoro stops scaling past a handful of
+    #: cores and gets slower once SMT siblings are used, so more is not better.
+    #: Four leaves the machine usable for whatever else it hosts while giving
+    #: up little throughput. 0 hands the choice to onnxruntime (all cores).
+    onnx_threads: int = 4
+    #: "auto" uses CUDA when onnxruntime-gpu is installed and a device is
+    #: present, otherwise CPU. Force either way for troubleshooting.
+    tts_device: Literal["auto", "cpu", "cuda"] = "auto"
+
+    # Worker
+    #: How long the worker sleeps when the queue is empty.
+    worker_poll_interval_s: float = 2.0
+
+    # Output encoding. Speech at 24 kHz mono needs far less than music: 96 kbps
+    # MP3 is transparent for narration, and AAC holds up at a lower rate still.
+    # (ACX submission would want 192 kbps CBR at 44.1 kHz -- these defaults are
+    # for listening, not for delivery to a distributor.)
+    mp3_bitrate: str = "96k"
+    m4b_bitrate: str = "64k"
+
+    # Remote GPU worker (Phase 5). When tts_backend is "remote" these must be
+    # set; the dispatcher falls back to local synthesis if the node is
+    # unreachable, so an unset/offline node degrades rather than fails.
+    remote_worker_url: str | None = None
+    remote_worker_token: str | None = None
+    remote_worker_timeout_s: float = 120.0
+    #: Fall back to local CPU synthesis when the node cannot be reached.
+    #: Turn off only if you would rather a render fail than finish slowly.
+    remote_fallback_local: bool = True
+
+    # Server
+    host: str = "0.0.0.0"
+    port: int = 8000
+    cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])
+
+    @property
+    def books_dir(self) -> Path:
+        return self.data_dir / "books"
+
+    @property
+    def cache_dir(self) -> Path:
+        """Content-addressed synthesised chunks. See PLAN.md."""
+        return self.data_dir / "cache"
+
+    @property
+    def db_path(self) -> Path:
+        return self.data_dir / "naudiobooker.db"
+
+    def ensure_dirs(self) -> None:
+        for d in (self.data_dir, self.books_dir, self.cache_dir):
+            d.mkdir(parents=True, exist_ok=True)
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()

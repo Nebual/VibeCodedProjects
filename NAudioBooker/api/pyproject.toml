@@ -1,0 +1,48 @@
+[project]
+name = "naudiobooker"
+version = "0.1.0"
+description = "EPUB to audiobook conversion service"
+readme = "README.md"
+# Pinned to 3.12: onnxruntime, soundfile and the rest of the Phase 2 audio
+# stack do not reliably ship wheels for newer interpreters yet, and building
+# them from source is not worth it.
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "lxml>=5.3",
+    "python-multipart>=0.0.20",
+    "kokoro-onnx>=0.4",
+    "soundfile>=0.12",
+    "numpy>=1.26",
+    "mutagen>=1.47",
+    "httpx>=0.28",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.8",
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "httpx>=0.28",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["naudiobooker"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

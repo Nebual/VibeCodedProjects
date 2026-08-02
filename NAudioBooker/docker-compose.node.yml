@@ -1,0 +1,47 @@
+# Remote synthesis node — runs on the GPU machine, not the Linux host.
+#
+#   docker compose -f docker-compose.node.yml up --build
+#
+# Needs the NVIDIA Container Toolkit. On Windows that means Docker Desktop with
+# the WSL2 backend and a current driver; `docker run --rm --gpus all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi`
+# should print your card before
+# you try this.
+#
+# Running it outside Docker is often simpler on Windows:
+#
+#   uv sync
+#   uv pip install onnxruntime-gpu       # replaces onnxruntime
+#   set NAB_ROLE=worker-node
+#   set NAB_MODELS_DIR=C:\path\to\models
+#   set NAB_REMOTE_WORKER_TOKEN=<shared secret>
+#   uv run uvicorn naudiobooker.main:app --host 0.0.0.0 --port 8001
+#
+# Either way, check GET /node/health and confirm the log says
+# "Kokoro running on CUDAExecutionProvider". If it says CPU, onnxruntime-gpu is
+# not installed or cannot see the card, and the node will be slower than the
+# machine you were trying to offload from.
+
+services:
+  node:
+    build:
+      context: ./api
+      dockerfile: Dockerfile.gpu
+    environment:
+      NAB_ROLE: worker-node
+      NAB_MODELS_DIR: /models
+      NAB_TTS_DEVICE: cuda
+      # Must match NAB_REMOTE_WORKER_TOKEN on the Linux host. The node will
+      # synthesize for anyone who can reach it if this is unset.
+      NAB_REMOTE_WORKER_TOKEN: ${NAB_REMOTE_WORKER_TOKEN:?set a shared token}
+    volumes:
+      - ./models:/models:ro
+    ports:
+      - "8001:8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped

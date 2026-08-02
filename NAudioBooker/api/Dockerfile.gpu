@@ -1,0 +1,57 @@
+# Synthesis node with CUDA. Used by ../docker-compose.node.yml.
+#
+# Based on the CUDA runtime image rather than python:slim because
+# onnxruntime-gpu links against the CUDA and cuDNN shared libraries and will
+# silently fall back to CPU if it cannot find them.
+FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+
+# Ubuntu 22.04 ships Python 3.10 and has no python3.12 packages at all, so the
+# interpreter has to come from somewhere else. uv is already here to manage the
+# virtualenv and can fetch a standalone 3.12 itself, which avoids adding a
+# third-party PPA and keeps the image independent of whatever the distro
+# happens to package this year.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates curl espeak-ng ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=ghcr.io/astral-sh/uv:0.9 /uv /usr/local/bin/uv
+
+WORKDIR /app
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_PROJECT_ENVIRONMENT=/app/.venv \
+    UV_PYTHON_INSTALL_DIR=/opt/python
+
+RUN uv python install 3.12
+
+# Dependencies first, so a source-only change does not re-resolve the world.
+COPY pyproject.toml uv.lock README.md ./
+RUN uv sync --frozen --no-install-project --no-dev
+
+COPY naudiobooker ./naudiobooker
+RUN uv sync --frozen --no-dev
+
+# The GPU swap goes last, and must stay last. `uv sync` reconciles the
+# environment against the lockfile, so doing this any earlier would have the
+# next sync reinstall the CPU build straight over the top -- leaving an image
+# that looks like a GPU node and quietly runs on CPU.
+#
+# onnxruntime and onnxruntime-gpu install the same `onnxruntime` module, so the
+# CPU build has to come out before the GPU one goes in.
+RUN uv pip uninstall --python /app/.venv/bin/python onnxruntime \
+    && uv pip install --python /app/.venv/bin/python onnxruntime-gpu
+
+ENV PATH="/app/.venv/bin:$PATH" \
+    NAB_ROLE=worker-node \
+    NAB_TTS_DEVICE=cuda
+
+# Fail the build rather than ship an image that cannot see its own GPU stack.
+# This only checks that the provider is compiled in; whether a device is
+# actually visible depends on the runtime, and /node/health reports that.
+RUN python -c "import onnxruntime as ort; \
+    assert 'CUDAExecutionProvider' in ort.get_available_providers(), \
+    f'no CUDA provider in {ort.get_available_providers()}'"
+
+EXPOSE 8000
+CMD ["uvicorn", "naudiobooker.main:app", "--host", "0.0.0.0", "--port", "8000"]

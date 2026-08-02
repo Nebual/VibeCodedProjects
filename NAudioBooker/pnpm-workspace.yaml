@@ -1,0 +1,7 @@
+packages:
+  - web
+
+# esbuild's postinstall resolves its platform-native binary; Vite (and so Nuxt)
+# will not build without it.
+allowBuilds:
+  esbuild: true
