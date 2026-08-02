@@ -46,6 +46,12 @@ The **Bulk** button next to the search box takes a pasted block of notes — one
 line, or comma separated — and matches each line against what's already on the list,
 so restocking is a paste rather than a dozen taps.
 
+**Take a photo.** Inside the Bulk dialog you can snap a photo of a handwritten or
+printed list instead of typing. It's OCR'd and the transcription drops into the same
+paste box for you to glance over before matching — so a misread (handwriting isn't
+perfect) is a quick edit, not a bad match. OCR runs on a local model; see
+[Photo OCR](#photo-ocr) for the service it talks to.
+
 Matching works on word tokens, not whole strings. Quantities (`x2`, `2x`, bare
 numbers) and filler words (`the`, `some`, `any`) are dropped, then it looks for the
 item's words appearing *in order* inside the note — which is what lets
@@ -60,6 +66,25 @@ The results view pairs each pasted line with what it hit and lets you disagree:
 inexact matches offer **Change**, which undoes the match, stops suggesting the
 rejected item, and lets you type an alternative. Unmatched lines can be edited until
 they match, or added outright with **+**.
+
+## Photo OCR
+
+The take-a-photo flow needs a local OCR model running. It's a `llama-server` instance
+serving **Qwen2.5-VL** (an image-to-text model), GPU-accelerated on an AMD RX 580 via
+Vulkan, packaged as a compose service:
+
+```bash
+docker compose up -d ocr     # first boot downloads ~2.5GB, then stays resident
+```
+
+The browser never talks to it directly — the app's `POST /api/ocr` route resizes-nothing
+(the client already shrank the photo to ~768px) and forwards it, so the GPU box stays off
+the public internet. The route reaches the model at `http://localhost:8191`; override with
+`OCR_SERVER_URL` if you run it elsewhere. Per-photo latency is ~5s on the RX 580.
+
+Why Vulkan and not ROCm: the RX 580 is Polaris, which modern ROCm (and Ollama's AMD path)
+dropped, so the container drives the card through Mesa RADV instead. The `ocr-benchmark/`
+directory has the latency harness used to pick the model, resolution, and GPU-vs-CPU call.
 
 ## Syncing
 
@@ -79,6 +104,7 @@ device clock skew against the server clock, which keeps last-writer-wins honest.
 | `/l/{name}` | That list |
 | `GET /api/lists/{name}?rev=N` | Snapshot; `{unchanged: true}` if `rev` is current |
 | `POST /api/lists/{name}` | `{ops: Item[]}` — merge these items, get the snapshot back |
+| `POST /api/ocr` | `{image: dataUrl}` — transcribe a photo of a list to `{text}` |
 
 ## Tests
 

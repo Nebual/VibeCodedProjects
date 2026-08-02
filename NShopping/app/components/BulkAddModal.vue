@@ -24,9 +24,12 @@ interface Entry {
 
 const dialog = useTemplateRef<HTMLDialogElement>('dialog')
 const textarea = useTemplateRef<HTMLTextAreaElement>('textarea')
+const photoInput = useTemplateRef<HTMLInputElement>('photoInput')
 const draft = ref('')
 const entries = ref<Entry[]>([])
 const submitted = ref(false)
+const ocrLoading = ref(false)
+const ocrError = ref('')
 let nextKey = 0
 
 const candidates = computed(() => props.list.live.value.map(item => ({ id: item.id, name: item.name })))
@@ -55,6 +58,55 @@ function close() {
 }
 
 defineExpose({ open })
+
+/** Opens the camera (or file picker on desktop) for the take-a-photo flow. */
+function triggerPhoto() {
+  ocrError.value = ''
+  photoInput.value?.click()
+}
+
+/** Shrinks a photo to a long edge of `maxEdge`px (respecting EXIF rotation) as a JPEG data URL. */
+async function toResizedDataUrl(file: File, maxEdge = 768): Promise<string> {
+  const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' })
+  const scale = Math.min(1, maxEdge / Math.max(bitmap.width, bitmap.height))
+  const width = Math.max(1, Math.round(bitmap.width * scale))
+  const height = Math.max(1, Math.round(bitmap.height * scale))
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  canvas.getContext('2d')!.drawImage(bitmap, 0, 0, width, height)
+  bitmap.close()
+  return canvas.toDataURL('image/jpeg', 0.9)
+}
+
+/** OCRs the chosen photo and drops the transcription into the draft, for you to review before matching. */
+async function onPhoto(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = '' // let the same file be chosen again after an error
+  if (!file) return
+
+  ocrLoading.value = true
+  ocrError.value = ''
+  try {
+    const image = await toResizedDataUrl(file)
+    const { text } = await $fetch<{ text: string }>('/api/ocr', { method: 'POST', body: { image } })
+    const lines = text.trim()
+    if (!lines) {
+      ocrError.value = 'No text found in that photo.'
+      return
+    }
+    // Append, so a photo can top up notes you've already typed. Nothing is matched yet.
+    draft.value = draft.value.trim() ? `${draft.value.trim()}\n${lines}` : lines
+    nextTick(() => textarea.value?.focus())
+  }
+  catch {
+    ocrError.value = 'Couldn’t read that photo. Is the OCR server running?'
+  }
+  finally {
+    ocrLoading.value = false
+  }
+}
 
 /** Marks an existing item as to-buy, remembering its prior state so the match can be undone. */
 function claim(entry: Entry, item: Item, score: number) {
@@ -130,6 +182,32 @@ function unresolve(entry: Entry) {
           class="textarea textarea-bordered h-56 w-full font-mono text-sm"
           placeholder="the Breton crackers&#10;eggs x2&#10;black beans totally empty I think"
         />
+
+        <input
+          ref="photoInput"
+          type="file"
+          accept="image/*"
+          capture="environment"
+          class="hidden"
+          @change="onPhoto"
+        >
+        <div class="mt-2 flex items-center gap-2">
+          <button
+            type="button"
+            class="btn btn-ghost btn-sm gap-2"
+            :disabled="ocrLoading"
+            @click="triggerPhoto"
+          >
+            <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M4 7h3l2-2h6l2 2h3v12H4z" stroke-linejoin="round" />
+              <circle cx="12" cy="13" r="3.5" />
+            </svg>
+            {{ ocrLoading ? 'Reading photo…' : 'Take a photo' }}
+            <span v-if="ocrLoading" class="loading loading-spinner loading-xs" />
+          </button>
+          <span v-if="ocrError" class="text-xs text-error">{{ ocrError }}</span>
+        </div>
+
         <div class="modal-action">
           <button type="button" class="btn btn-ghost" @click="close">
             Cancel

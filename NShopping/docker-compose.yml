@@ -1,0 +1,44 @@
+# Persistent OCR service for the take-a-photo flow: llama-server running Qwen2.5-VL,
+# GPU-accelerated on an AMD RX 580 (Polaris) through Mesa RADV / Vulkan — no ROCm, which
+# no longer supports Polaris. Reuses the image built for ocr-benchmark/.
+#
+#   docker compose up -d ocr        # start (first boot downloads ~2.5GB, then stays warm)
+#   docker compose logs -f ocr      # watch model load / requests
+#
+# The app reaches it at http://localhost:8191 by default (override with OCR_SERVER_URL).
+services:
+  ocr:
+    build:
+      context: ./ocr-benchmark
+    # Expose the GPU. Only /dev/dri is needed for Vulkan; /dev/kfd (ROCm) is deliberately not.
+    devices:
+      - /dev/dri:/dev/dri
+    # Override the image's benchmark entrypoint: keep the model resident and serve HTTP.
+    entrypoint: ["/usr/local/bin/llama-server"]
+    command:
+      - -hf
+      - ggml-org/Qwen2.5-VL-3B-Instruct-GGUF:Q4_K_M
+      - -ngl
+      - "99"              # all layers on the GPU
+      - --host
+      - "0.0.0.0"         # bind inside the container so the published port works
+      - --port
+      - "8191"
+      - -c
+      - "8192"
+    # Publish to the host loopback only — same-box app, never the public internet.
+    ports:
+      - "127.0.0.1:8191:8191"
+    # Persist downloaded weights so restarts don't re-download.
+    volumes:
+      - ocr-cache:/root/.cache
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8191/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 300s  # first start downloads + loads the model
+
+volumes:
+  ocr-cache:
