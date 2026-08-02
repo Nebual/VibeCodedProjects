@@ -24,6 +24,11 @@ const { data: existing } = await useFetch<JobInfo[]>(`/api/books/${props.bookId}
 if (existing.value.length) job.value = existing.value[0]!
 
 function listen(id: string) {
+  // EventSource is a browser API. Nothing should reach here during server
+  // rendering now that the watcher below waits for mount, but a stray caller
+  // must degrade to "no live updates" rather than 500 the whole page.
+  if (import.meta.server) return
+
   close()
   source = new EventSource(`/api/jobs/${id}/events`)
   source.onmessage = (event) => {
@@ -43,9 +48,17 @@ function close() {
 onBeforeUnmount(close)
 
 // Reconnect when a render is already running (page reload, navigation back).
-watchEffect(() => {
-  const current = job.value
-  if (current && !current.is_terminal && !source) listen(current.id)
+//
+// Registered after mount rather than during setup. A watchEffect created in
+// setup runs immediately on the server too, so loading a book that happened to
+// be mid-render opened an EventSource during SSR and returned a 500 -- while
+// navigating to the same page from the library worked, because that path only
+// ever runs in the browser.
+onMounted(() => {
+  watchEffect(() => {
+    const current = job.value
+    if (current && !current.is_terminal && !source) listen(current.id)
+  })
 })
 
 async function start() {
