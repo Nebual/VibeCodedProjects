@@ -55,13 +55,18 @@ async function remove(book: BookSummary) {
 
 <template>
   <div class="space-y-8">
-    <section>
-      <h1 class="text-2xl font-semibold">
-        Library
-      </h1>
-      <p class="text-base-content/60 mt-1 text-sm">
-        Upload an EPUB, check how it was split into chapters, then convert it.
-      </p>
+    <section class="flex flex-wrap items-start justify-between gap-3">
+      <div>
+        <h1 class="text-2xl font-semibold">
+          Library
+        </h1>
+        <p class="text-base-content/60 mt-1 text-sm">
+          Upload an EPUB, check how it was split into chapters, then convert it.
+        </p>
+      </div>
+      <NuxtLink to="/preview" class="btn btn-sm btn-ghost">
+        Preview a voice
+      </NuxtLink>
     </section>
 
     <!-- Upload -->

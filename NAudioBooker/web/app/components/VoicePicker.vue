@@ -65,7 +65,9 @@ const activeTuning = computed(() => {
 
 const isTuned = computed(() => Object.keys(activeTuning.value).length > 0)
 
-defineExpose({ activeTuning })
+// Exposed for /preview, which prefills from the query string and then asks
+// for the preview itself.
+defineExpose({ activeTuning, play: () => play() })
 
 /**
  * How long this model would take on the selected chapters.
@@ -157,7 +159,9 @@ watch(current, (spec) => {
 
 // -- preview ----------------------------------------------------------------
 
-const sampleText = ref('')
+/** The words to speak. A model so a parent can prefill it -- /preview takes
+ *  it from the query string so a link can carry the text. */
+const sampleText = defineModel<string>('text', { default: '' })
 const previewing = ref(false)
 const previewError = ref<string | null>(null)
 const audioUrl = ref<string | null>(null)
@@ -188,7 +192,11 @@ async function play() {
     downloadName.value = filenameFrom(response.headers) ?? 'preview.wav'
     fromCache.value = response.headers.get('x-cache') === 'hit'
     await nextTick()
-    document.querySelector<HTMLAudioElement>('#voice-preview')?.play()
+    // Rejected when the browser's autoplay policy blocks a programmatic
+    // play() -- which is the normal case for a preview triggered by a link
+    // rather than a click. The player is loaded and ready regardless, so
+    // there is nothing to report.
+    document.querySelector<HTMLAudioElement>('#voice-preview')?.play().catch(() => {})
   }
   catch (e: unknown) {
     previewError.value = await detailFrom(e)
@@ -210,29 +218,24 @@ function filenameFrom(headers: Headers): string | null {
  * error response is read the same way, leaving err.data a Blob rather than the
  * parsed body. Every failure therefore showed the same "Preview failed.",
  * hiding messages that name the exact problem and its fix.
+ *
+ * Only the decoding is done here; readApiDetail knows the shapes, and the
+ * Nitro route needs exactly the same knowledge.
  */
 async function detailFrom(e: unknown): Promise<string> {
   const data = (e as { data?: unknown }).data
 
   if (data instanceof Blob) {
-    try {
-      const parsed = JSON.parse(await data.text())
-      if (typeof parsed?.detail === 'string') return parsed.detail
-    }
-    catch {
-      // Not JSON -- fall through to the generic message.
-    }
+    const detail = readApiDetailFromText(await data.text())
+    if (detail) return detail
   }
-  else if (typeof (data as { detail?: unknown })?.detail === 'string') {
-    return (data as { detail: string }).detail
+  else if (data && typeof data === 'object') {
+    const detail = readApiDetail(data)
+    if (detail) return detail
   }
 
   return 'Preview failed.'
 }
-
-onBeforeUnmount(() => {
-  if (audioUrl.value) URL.revokeObjectURL(audioUrl.value)
-})
 
 const needsClip = computed(() => current.value?.supports_cloning && !clips.value.length)
 </script>

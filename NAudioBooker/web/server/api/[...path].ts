@@ -7,21 +7,6 @@
  * job progress (Phase 3) and audio downloads (Phase 4) work without buffering
  * an entire book into memory.
  */
-export default defineEventHandler(async (event) => {
-  const { apiBase } = useRuntimeConfig()
-  const path = getRouterParam(event, 'path') ?? ''
-  const query = getRequestURL(event).search
-
-  try {
-    return await proxyRequest(event, `${apiBase}/${path}${query}`)
-  } catch (cause) {
-    // A connection failure here almost always means the Python service is not
-    // running, which is worth saying plainly rather than surfacing ECONNREFUSED.
-    throw createError({
-      statusCode: 502,
-      statusMessage: 'Bad Gateway',
-      message: `Cannot reach the NAudioBooker API at ${apiBase}. Is it running?`,
-      cause,
-    })
-  }
-})
+export default defineEventHandler(event =>
+  proxyToApi(event, getRouterParam(event, 'path') ?? ''),
+)
