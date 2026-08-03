@@ -50,9 +50,7 @@ def store(ref_hash: str, data: bytes) -> Path:
 
     actual = hashlib.sha256(data).hexdigest()
     if actual != ref_hash:
-        raise ClipRejected(
-            f"content hash {actual[:12]} does not match the name {ref_hash[:12]}"
-        )
+        raise ClipRejected(f"content hash {actual[:12]} does not match the name {ref_hash[:12]}")
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     tmp = destination.with_suffix(f".{os.getpid()}.tmp")

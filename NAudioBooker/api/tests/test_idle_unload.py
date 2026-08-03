@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 
 import httpx
@@ -146,9 +147,9 @@ def test_node_unload_requires_the_token(node, monkeypatch):
     monkeypatch.setattr(settings, "remote_worker_token", "s3cret")
 
     assert client.post("/node/unload").status_code == 401
-    assert client.post(
-        "/node/unload", headers={"Authorization": "Bearer s3cret"}
-    ).status_code == 200
+    assert (
+        client.post("/node/unload", headers={"Authorization": "Bearer s3cret"}).status_code == 200
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -195,28 +196,124 @@ def test_a_backend_is_not_its_own_sibling():
     assert "http://gpu-box:8002" not in backend._sibling_urls()
 
 
-def test_prepare_asks_siblings_to_unload_once():
-    calls: list[str] = []
+def _node(loaded: bool, calls: list[str]):
+    """A transport standing in for the node and its siblings."""
 
     def handler(request: httpx.Request) -> httpx.Response:
         calls.append(str(request.url))
+        if request.url.path == "/node/health":
+            return httpx.Response(200, json={"available": True, "loaded": loaded})
         return httpx.Response(200, json={"unloaded": True})
 
+    return httpx.MockTransport(handler)
+
+
+def _unloads(calls: list[str]) -> list[str]:
+    return sorted(c for c in calls if c.endswith("/node/unload"))
+
+
+def test_prepare_evicts_siblings_when_the_node_is_cold():
+    calls: list[str] = []
     backend = remote(
         {"omnivoice": "http://gpu-box:8002", "chatterbox-original": "http://gpu-box:8003"},
         base="http://gpu-box:8002",
     )
-    backend._client = httpx.Client(transport=httpx.MockTransport(handler))
+    backend._client = httpx.Client(
+        base_url="http://gpu-box:8002",
+        transport=_node(loaded=False, calls=calls),
+    )
 
     backend.prepare()
-    backend.prepare()
-    backend.prepare()
 
-    # Once per sibling, not once per call -- and certainly not once per chunk.
-    assert sorted(calls) == [
+    assert _unloads(calls) == [
         "http://gpu-box:8001/node/unload",
         "http://gpu-box:8003/node/unload",
     ]
+
+
+def test_a_warm_node_needs_no_eviction():
+    """Nothing has to be freed for a model that is already resident.
+
+    This is what makes a ten minute idle window affordable: coming back to a
+    still-loaded node costs one health check, not an unload of its siblings
+    and a reload of itself.
+    """
+    calls: list[str] = []
+    backend = remote({"omnivoice": "http://gpu-box:8002"}, base="http://gpu-box:8002")
+    backend._client = httpx.Client(
+        base_url="http://gpu-box:8002",
+        transport=_node(loaded=True, calls=calls),
+    )
+
+    backend.prepare()
+
+    assert _unloads(calls) == []
+
+
+def test_repeated_prepares_do_not_re_check_the_node():
+    """A render calls prepare once per chunk; it must not cost a round trip."""
+    calls: list[str] = []
+    backend = remote({"omnivoice": "http://gpu-box:8002"}, base="http://gpu-box:8002")
+    backend._client = httpx.Client(
+        base_url="http://gpu-box:8002",
+        transport=_node(loaded=False, calls=calls),
+    )
+
+    for _ in range(5):
+        backend.prepare()
+
+    assert sum(1 for c in calls if c.endswith("/node/health")) == 1
+    assert len(_unloads(calls)) == 1
+
+
+def test_eviction_happens_again_after_the_card_may_have_changed_hands():
+    """The bug a ten minute idle window would otherwise have introduced.
+
+    Eviction used to fire once per backend instance, on the reasoning that a
+    sibling unloads itself within a minute anyway. Use A, then B, then A again
+    inside a ten minute window and A had already spent its one eviction while
+    B still held the card -- an out-of-memory error naming the wrong model.
+    """
+    calls: list[str] = []
+    backend = remote({"omnivoice": "http://gpu-box:8002"}, base="http://gpu-box:8002")
+    backend._client = httpx.Client(
+        base_url="http://gpu-box:8002",
+        transport=_node(loaded=False, calls=calls),
+    )
+
+    backend.prepare()
+    assert len(_unloads(calls)) == 1
+
+    # A sibling ran in the meantime, so this node is cold again.
+    backend._card_held_until = 0.0
+    backend.prepare()
+
+    assert len(_unloads(calls)) == 2, "the second visit did not free the card"
+
+
+def test_concurrent_prepares_evict_once():
+    """Several chunks in flight must not each fire their own round of unloads."""
+    calls: list[str] = []
+    backend = remote({"omnivoice": "http://gpu-box:8002"}, base="http://gpu-box:8002")
+    backend._client = httpx.Client(
+        base_url="http://gpu-box:8002",
+        transport=_node(loaded=False, calls=calls),
+    )
+
+    start = threading.Event()
+
+    def call() -> None:
+        start.wait()
+        backend.prepare()
+
+    workers = [threading.Thread(target=call) for _ in range(8)]
+    for w in workers:
+        w.start()
+    start.set()
+    for w in workers:
+        w.join()
+
+    assert len(_unloads(calls)) == 1, f"evicted {len(_unloads(calls))} times"
 
 
 def test_an_unreachable_sibling_is_not_an_error():
@@ -229,3 +326,176 @@ def test_an_unreachable_sibling_is_not_an_error():
     backend._client = httpx.Client(transport=httpx.MockTransport(handler))
 
     backend.prepare()  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# Warming, and the timeout it exists to avoid
+# ---------------------------------------------------------------------------
+
+
+def _warming_node(calls: list[str], *, loaded: bool = False):
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(f"{request.method} {request.url.path}")
+        if request.url.path == "/node/health":
+            return httpx.Response(200, json={"available": True, "loaded": loaded})
+        if request.url.path == "/node/warm":
+            return httpx.Response(200, json={"loaded": True, "detail": "loaded"})
+        return httpx.Response(200, json={"unloaded": True})
+
+    return httpx.MockTransport(handler)
+
+
+def _warming_backend(calls: list[str], *, loaded: bool = False):
+    backend = remote({"omnivoice": "http://gpu-box:8002"}, base="http://gpu-box:8002")
+    backend._client = httpx.Client(
+        base_url="http://gpu-box:8002", transport=_warming_node(calls, loaded=loaded)
+    )
+    backend._model_version = "omnivoice-1"
+    return backend
+
+
+def test_a_cold_node_is_loaded_before_synthesis_not_during_it():
+    """The load has to happen on a call whose timeout expects it.
+
+    It used to happen inside /node/synthesize, inheriting the ordinary request
+    timeout -- so a preview against a cold cloning model timed out rather than
+    just being slow.
+    """
+    calls: list[str] = []
+    _warming_backend(calls).prepare()
+
+    assert "POST /node/warm" in calls, "the model was left to load during synthesis"
+    assert calls.index("POST /node/unload") < calls.index("POST /node/warm")
+
+
+def test_loading_uses_the_longer_timeout():
+    """Sized for a load, not for a chunk -- a first load downloads weights."""
+    seen: list[float | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/node/health":
+            return httpx.Response(200, json={"available": True, "loaded": False})
+        if request.url.path == "/node/warm":
+            seen.append(request.extensions.get("timeout", {}).get("read"))
+            return httpx.Response(200, json={"loaded": True})
+        return httpx.Response(200, json={"unloaded": True})
+
+    backend = remote({"omnivoice": "http://gpu-box:8002"}, base="http://gpu-box:8002")
+    backend._client = httpx.Client(
+        base_url="http://gpu-box:8002", transport=httpx.MockTransport(handler)
+    )
+    backend._model_version = "omnivoice-1"
+
+    backend.prepare()
+
+    assert seen == [backend._warm_timeout]
+    assert backend._warm_timeout > backend._timeout
+
+
+def test_a_warm_node_is_not_asked_to_load_again():
+    calls: list[str] = []
+    _warming_backend(calls, loaded=True).prepare()
+
+    assert "POST /node/warm" not in calls
+    assert "POST /node/unload" not in calls
+
+
+def test_warming_marks_the_node_as_holding_the_card():
+    """Otherwise the preview straight after would evict and reload again."""
+    backend = _warming_backend([], loaded=True)
+
+    backend.warm()
+
+    assert backend._holds_card()
+
+
+def test_a_failed_warm_is_not_an_error():
+    """It is an optimisation; the preview itself should report the real fault."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/node/health":
+            return httpx.Response(200, json={"available": True, "loaded": True})
+        raise httpx.ConnectError("node is down")
+
+    backend = remote({"omnivoice": "http://gpu-box:8002"}, base="http://gpu-box:8002")
+    backend._client = httpx.Client(
+        base_url="http://gpu-box:8002", transport=httpx.MockTransport(handler)
+    )
+    backend._model_version = "omnivoice-1"
+
+    assert backend.warm() is False
+
+
+def test_health_does_not_load_the_model():
+    """The probe must not do the thing it is probing for.
+
+    /node/health used to read `device`, which loads the model to discover
+    which execution provider onnxruntime picked. That made it useless as a
+    "are you loaded?" check twice over: the answer was always yes, and asking
+    loaded the model *before* the sibling holding the card had been evicted --
+    the out-of-memory error the eviction exists to prevent.
+    """
+    from fastapi.testclient import TestClient
+
+    from naudiobooker.config import Settings
+    from naudiobooker.main import create_app
+    from naudiobooker.tts.kokoro_local import KokoroLocalBackend
+
+    settings = Settings(role="worker-node")
+    backend = KokoroLocalBackend(settings)
+    loads: list[int] = []
+    backend._load = lambda: loads.append(1)  # type: ignore[method-assign]
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("naudiobooker.config.get_settings", lambda: settings)
+        mp.setattr("naudiobooker.main.get_settings", lambda: settings)
+        mp.setattr("naudiobooker.routes.node.get_settings", lambda: settings)
+        mp.setattr("naudiobooker.routes.node.get_backend", lambda *a, **k: backend)
+        with TestClient(create_app()) as client:
+            body = client.get("/node/health").json()
+
+    assert loads == [], "health loaded the model just to answer"
+    assert body["loaded"] is False
+    assert body["provider"] is None
+
+
+def test_warm_endpoint_never_500s_when_the_node_is_down():
+    """Warming is optional; a node that is down is a report, not a failure.
+
+    It used to raise straight through: describing the node contacts it, and
+    that call sat outside the try, so an unreachable node produced a 500 and
+    the UI showed a generic error instead of the reason.
+    """
+    from fastapi.testclient import TestClient
+
+    from naudiobooker.config import Settings
+    from naudiobooker.main import create_app
+    from naudiobooker.tts.remote_http import RemoteHttpBackend
+
+    settings = Settings(
+        tts_backend="remote",
+        remote_worker_url="http://gpu-box:8002",
+        remote_model_urls={"chatterbox-original": "http://gpu-box:8003"},
+    )
+    backend = RemoteHttpBackend(
+        settings, model_id="chatterbox-original", base_url="http://gpu-box:8003"
+    )
+
+    def dead(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("no route to host")
+
+    backend._client = httpx.Client(
+        base_url="http://gpu-box:8003", transport=httpx.MockTransport(dead)
+    )
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("naudiobooker.routes.voices.get_settings", lambda: settings)
+        mp.setattr("naudiobooker.routes.voices.get_backend", lambda *a, **k: backend)
+        with TestClient(create_app()) as client:
+            warm = client.post("/models/chatterbox-original/warm")
+            status = client.get("/models/chatterbox-original/warm")
+
+    assert warm.status_code == 200
+    assert warm.json()["warmed"] is False
+    assert status.status_code == 200
+    assert status.json()["warm"] is False

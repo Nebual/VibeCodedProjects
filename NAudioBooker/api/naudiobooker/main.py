@@ -48,7 +48,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     log.info(
         "naudiobooker %s starting (role=%s, tts=%s, env_files=%s)",
-        __version__, settings.role, settings.tts_backend,
+        __version__,
+        settings.role,
+        settings.tts_backend,
         env_files_found() or "none - using environment only",
     )
     yield

@@ -5,8 +5,10 @@ running so either can answer at any moment. Without this, whichever model was
 used first keeps its allocation forever and the second node fails to load with
 an out-of-memory error that says nothing about the real cause.
 
-Sixty seconds is deliberately short. Reloading costs a few seconds; discovering
-that the other model cannot start costs a failed render.
+The window is a trade: too long and a sibling waits on VRAM it cannot have,
+too short and every preview pays a cold load. It is ten minutes now, which
+only became safe once the client stopped relying on this timer to free the
+card -- it asks a node whether it is loaded and evicts explicitly.
 """
 
 from __future__ import annotations
@@ -36,9 +38,7 @@ class IdleUnloader:
         if self._idle_after_s <= 0:
             log.info("idle unloading disabled")
             return
-        self._thread = threading.Thread(
-            target=self._run, name="idle-unloader", daemon=True
-        )
+        self._thread = threading.Thread(target=self._run, name="idle-unloader", daemon=True)
         self._thread.start()
         log.info("will unload the model after %.0fs idle", self._idle_after_s)
 

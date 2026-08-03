@@ -38,6 +38,16 @@ def prepare_backend(backend: object) -> None:
         fn()
 
 
+def backend_is_loaded(backend: object) -> bool | None:
+    """Whether a backend currently holds its weights, if it can say.
+
+    None from a backend that does not track it -- which is different from
+    False, and the caller has to treat it as "cannot tell" rather than "cold".
+    """
+    value = getattr(backend, "loaded", None)
+    return bool(value) if isinstance(value, bool) else None
+
+
 def backend_idle_seconds(backend: object) -> float | None:
     """Seconds since the backend last synthesized, if it tracks that."""
     import time

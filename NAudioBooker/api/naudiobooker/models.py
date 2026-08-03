@@ -165,6 +165,9 @@ class NodeInfo(BaseModel):
     provider: str | None = None
     #: False means the node accepts unauthenticated synthesis requests.
     authenticated: bool = False
+    #: Whether the weights are on the card right now. The client uses this to
+    #: decide whether a sibling has to be evicted before it can load.
+    loaded: bool | None = None
 
 
 class ChapterText(BaseModel):

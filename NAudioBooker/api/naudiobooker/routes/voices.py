@@ -9,7 +9,8 @@ from fastapi.responses import FileResponse
 
 from ..config import get_settings
 from ..models import ModelInfo, TuningKnobInfo, VoiceClipInfo
-from ..tts.models import ALL_MODELS
+from ..tts import BackendUnavailable, TTSError, get_backend
+from ..tts.models import ALL_MODELS, get_model
 from ..voices import VoiceError, VoiceLibrary
 
 router = APIRouter(tags=["voices"])
@@ -49,6 +50,74 @@ def list_models() -> list[ModelInfo]:
     ]
 
 
+def _node_backend_for(model_id: str):
+    """The backend for a model, plus whether it lives on a node at all."""
+    try:
+        spec = get_model(model_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    try:
+        return spec, get_backend(get_settings(), spec.id), None
+    except (BackendUnavailable, NotImplementedError) as exc:
+        return spec, None, str(exc)
+
+
+@router.get("/models/{model_id}/warm")
+def warm_status(model_id: str) -> dict:
+    """Whether this model is loaded on its node.
+
+    Asked when a model is selected, so the UI can offer to warm it or say it
+    already is. Costs one cheap health check; it never triggers a load, which
+    is the whole reason /node/health stopped doing that.
+    """
+    spec, backend, error = _node_backend_for(model_id)
+    if backend is None:
+        return {"warm": None, "warmable": False, "detail": error}
+
+    is_warm = getattr(backend, "is_warm", None)
+    if not callable(is_warm):
+        # A local backend loads in this process on first use; there is no
+        # separate machine to get ahead of, so there is nothing to offer.
+        return {"warm": None, "warmable": False, "detail": "runs locally"}
+
+    try:
+        return {"warm": bool(is_warm()), "warmable": True, "detail": spec.label}
+    except BackendUnavailable as exc:
+        return {"warm": None, "warmable": True, "detail": str(exc)}
+
+
+@router.post("/models/{model_id}/warm")
+def warm_model(model_id: str) -> dict:
+    """Start loading a model so the first preview does not wait for it.
+
+    Called when a model is picked in the UI. Deliberately best-effort: a
+    failure here is a slower preview, never a broken one, so it reports rather
+    than raises.
+    """
+    spec, backend, error = _node_backend_for(model_id)
+    if backend is None:
+        return {"warmed": False, "detail": error}
+
+    warm = getattr(backend, "warm", None)
+    if not callable(warm):
+        # A local backend loads on first use in this same process; there is no
+        # separate machine to get ahead of.
+        return {"warmed": False, "detail": "nothing to warm for a local model"}
+
+    try:
+        warmed = bool(warm())
+    except (BackendUnavailable, TTSError) as exc:
+        # Never a 500: warming is optional, and the caller only needs to know
+        # it did not happen and why.
+        return {"warmed": False, "detail": str(exc)}
+
+    return {
+        "warmed": warmed,
+        "detail": f"{spec.label} is ready" if warmed else f"could not warm {spec.label}",
+    }
+
+
 @router.get("/voice-clips", response_model=list[VoiceClipInfo])
 def list_clips() -> list[VoiceClipInfo]:
     return [VoiceClipInfo(**clip.to_json()) for clip in _library().all()]
@@ -83,9 +152,7 @@ def get_clip_audio(clip_id: str) -> FileResponse:
     clip = library.get(clip_id)
     if clip is None:
         raise HTTPException(status_code=404, detail="No such voice clip")
-    return FileResponse(
-        library.path_for(clip), media_type="audio/wav", filename=f"{clip.name}.wav"
-    )
+    return FileResponse(library.path_for(clip), media_type="audio/wav", filename=f"{clip.name}.wav")
 
 
 @router.delete("/voice-clips/{clip_id}", status_code=204)

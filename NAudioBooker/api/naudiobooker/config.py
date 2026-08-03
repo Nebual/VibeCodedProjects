@@ -112,9 +112,14 @@ class Settings(BaseSettings):
 
     #: Unload the model after this many seconds idle, freeing its VRAM for a
     #: sibling node on the same card. Only worker-nodes do this; 0 disables it.
-    #: Sixty seconds is short on purpose -- a reload costs seconds, whereas
-    #: discovering the other model cannot start costs a failed render.
-    idle_unload_s: float = 60.0
+    #:
+    #: Ten minutes, because a cloning model costs seconds to load and that
+    #: load lands squarely on the first preview after any pause -- which is
+    #: most of them, when comparing voices. It was sixty seconds while the
+    #: client evicted siblings only once per backend instance; the client now
+    #: asks the node whether it is loaded and evicts when it is not, so a long
+    #: window no longer risks two models racing for one card.
+    idle_unload_s: float = 600.0
 
     # Worker
     #: How long the worker sleeps when the queue is empty.
@@ -158,6 +163,11 @@ class Settings(BaseSettings):
     remote_model_urls: dict[str, str] = Field(default_factory=dict)
     remote_worker_token: str | None = None
     remote_worker_timeout_s: float = 120.0
+    #: Separate, and much longer, because loading a cloning model onto the card
+    #: is nothing like synthesising a chunk on one. The load used to happen
+    #: inside the synthesize call and inherit its 120s, so a cold preview timed
+    #: out rather than being slow -- a first-ever load also downloads weights.
+    remote_warm_timeout_s: float = 300.0
     #: Fall back to local CPU synthesis when the node cannot be reached.
     #: Turn off only if you would rather a render fail than finish slowly.
     remote_fallback_local: bool = True

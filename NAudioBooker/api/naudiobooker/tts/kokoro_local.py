@@ -193,6 +193,15 @@ class KokoroLocalBackend:
             return ["CUDAExecutionProvider", "CPUExecutionProvider"]
         return ["CPUExecutionProvider"]
 
+    @property
+    def loaded(self) -> bool:
+        """Whether the weights are on the device right now.
+
+        Reported to the client so it can tell a cold call from a warm one
+        without loading anything to find out.
+        """
+        return self._kokoro is not None
+
     # -- TTSBackend --------------------------------------------------------
 
     def voices(self) -> list[Voice]:
@@ -224,7 +233,6 @@ class KokoroLocalBackend:
             raise TTSError(f"Kokoro failed on {len(text)} chars: {exc}") from exc
 
         return AudioChunk(samples=samples, sample_rate=sample_rate)
-
 
     def unload(self) -> bool:
         """Release the onnxruntime session.

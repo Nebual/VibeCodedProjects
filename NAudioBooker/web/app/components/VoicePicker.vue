@@ -144,6 +144,69 @@ async function deleteClip(clip: VoiceClipInfo) {
   await refreshClips()
 }
 
+/**
+ * Loading the model onto its node, on request.
+ *
+ * A cloning model costs tens of seconds to bring onto the card, and that cost
+ * otherwise lands on whoever clicks Preview first. Warming is offered rather
+ * than done automatically: it evicts whatever else is on the card, which is
+ * not something to do because a dropdown changed.
+ *
+ * Only for models that live on a node -- a local one loads in-process on
+ * first use, so there is nothing to get ahead of.
+ */
+type WarmState = 'unknown' | 'cold' | 'warming' | 'warm' | 'unavailable'
+
+const warmState = ref<WarmState>('unknown')
+const warmError = ref<string | null>(null)
+
+const canWarm = computed(() => Boolean(current.value && !current.value.cpu_viable && current.value.node_url))
+
+async function refreshWarmth(modelId: string) {
+  warmError.value = null
+  warmState.value = 'unknown'
+  try {
+    const status = await $fetch<{ warm: boolean | null, warmable: boolean }>(
+      `/api/models/${modelId}/warm`,
+    )
+    if (!status.warmable) warmState.value = 'unavailable'
+    else warmState.value = status.warm ? 'warm' : 'cold'
+  }
+  catch {
+    // The node may simply be down; the preview itself will say so properly.
+    warmState.value = 'cold'
+  }
+}
+
+async function warmNow() {
+  const modelId = model.value
+  warmState.value = 'warming'
+  warmError.value = null
+  try {
+    const result = await $fetch<{ warmed: boolean, detail: string }>(
+      `/api/models/${modelId}/warm`,
+      { method: 'POST' },
+    )
+    // Ignore a result that arrived after the model was switched away.
+    if (model.value !== modelId) return
+    warmState.value = result.warmed ? 'warm' : 'cold'
+    if (!result.warmed) warmError.value = result.detail
+  }
+  catch (e: unknown) {
+    if (model.value !== modelId) return
+    warmState.value = 'cold'
+    // detailFrom's fallback names the preview, which is the wrong thing here.
+    const detail = await detailFrom(e)
+    warmError.value = detail === 'Preview failed.' ? 'Could not warm the model.' : detail
+  }
+}
+
+watch(current, (spec) => {
+  if (import.meta.server) return
+  if (spec && !spec.cpu_viable && spec.node_url) refreshWarmth(spec.id)
+  else warmState.value = 'unavailable'
+}, { immediate: true })
+
 // Keep the voice valid when the model changes: a cloned clip is meaningless to
 // Kokoro, and a Kokoro voice id is meaningless to a cloning model.
 watch(current, (spec) => {
@@ -274,12 +337,35 @@ const needsClip = computed(() => current.value?.supports_cloning && !clips.value
       <!-- The two facts worth interrupting for: it will be slow, and it may
            not run here at all. -->
       <div v-if="current && !current.cpu_viable" class="alert alert-soft alert-info py-2 text-xs">
-        <span>
-          Needs the GPU node.
-          <template v-if="current.node_url">Configured at <code>{{ current.node_url }}</code>.</template>
-          <template v-else>No node is configured, so this will not run.</template>
+        <span class="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span>
+            Needs the GPU node.
+            <template v-if="current.node_url">Configured at <code>{{ current.node_url }}</code>.</template>
+            <template v-else>No node is configured, so this will not run.</template>
+          </span>
+
+          <!-- Loading takes tens of seconds and otherwise lands on the first
+               Preview. Offered rather than automatic: warming evicts whatever
+               else is on the card. -->
+          <template v-if="canWarm">
+            <span v-if="warmState === 'warm'" class="text-success font-medium">
+              Warm
+            </span>
+            <button
+              v-else
+              class="btn btn-xs"
+              :disabled="warmState === 'warming' || warmState === 'unknown'"
+              @click="warmNow"
+            >
+              <span v-if="warmState === 'warming'" class="loading loading-spinner loading-xs" />
+              {{ warmState === 'warming' ? 'Warming…' : 'Warm' }}
+            </button>
+          </template>
         </span>
       </div>
+      <p v-if="warmError" class="text-error text-xs">
+        {{ warmError }}
+      </p>
       <!-- Keyed on the estimate, not on the model being slow: a slow model on
            two short chapters is still a few minutes, and calling that an
            overnight job would be plainly wrong. -->

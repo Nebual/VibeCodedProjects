@@ -18,7 +18,12 @@ from ..audio import to_wav_bytes
 from ..config import get_settings
 from ..models import NodeInfo, NodeSynthesizeRequest
 from ..tts import BackendUnavailable, TTSError, get_backend
-from ..tts.base import BackendHealth, ModelOptions, ReferenceClip, unload_backend
+from ..tts.base import (
+    ModelOptions,
+    ReferenceClip,
+    backend_is_loaded,
+    unload_backend,
+)
 
 router = APIRouter(tags=["node"])
 
@@ -53,15 +58,14 @@ def node_health() -> NodeInfo:
         backend = get_backend(settings)
         health = backend.health()
 
-        # Loads the model on first call. Worth the one-off second: without it
-        # the answer to "is this node actually using the GPU?" is unknowable,
-        # and that question is the whole reason the node exists.
-        provider = None
-        if health.available:
-            try:
-                provider = getattr(backend, "device", None)
-            except BackendUnavailable as exc:
-                health = BackendHealth(available=False, detail=str(exc))
+        # Read, never triggered. Kokoro's `device` property loads the model
+        # to discover which provider onnxruntime chose -- which made this
+        # endpoint unusable as a probe: the client asks "are you loaded?"
+        # before evicting a sibling, and answering by loading is precisely the
+        # out-of-memory error the eviction exists to prevent. It also made the
+        # answer always yes. `provider` reports the same thing once something
+        # has actually loaded it, which /node/warm and synthesis both do.
+        provider = getattr(backend, "provider", None)
 
         return NodeInfo(
             available=health.available,
@@ -72,6 +76,7 @@ def node_health() -> NodeInfo:
             max_chars=backend.max_chars,
             provider=provider,
             authenticated=bool(settings.remote_worker_token),
+            loaded=backend_is_loaded(backend),
         )
     except (BackendUnavailable, NotImplementedError) as exc:
         return NodeInfo(
@@ -82,6 +87,7 @@ def node_health() -> NodeInfo:
             sample_rate=0,
             max_chars=0,
             authenticated=bool(settings.remote_worker_token),
+            loaded=backend_is_loaded(backend),
         )
 
 
@@ -108,6 +114,37 @@ def node_unload(
     return {
         "unloaded": freed,
         "detail": "model released" if freed else "nothing was loaded",
+    }
+
+
+@router.post("/node/warm")
+def node_warm(authorization: Annotated[str | None, Header()] = None) -> dict:
+    """Load the model now, so the next request does not pay for it.
+
+    A cloning model costs seconds to bring onto the card, and that cost lands
+    on whoever clicks Preview first. Loading it when the model is *selected*
+    moves the wait to while they are still typing.
+
+    Idempotent and safe to call when already loaded; it simply reports so.
+    """
+    _check_token(authorization)
+    try:
+        backend = get_backend()
+    except (BackendUnavailable, NotImplementedError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    already = backend_is_loaded(backend) is True
+    if not already:
+        loader = getattr(backend, "_load", None)
+        if callable(loader):
+            try:
+                loader()
+            except (BackendUnavailable, TTSError) as exc:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    return {
+        "loaded": backend_is_loaded(backend) is not False,
+        "detail": "already loaded" if already else "loaded",
     }
 
 

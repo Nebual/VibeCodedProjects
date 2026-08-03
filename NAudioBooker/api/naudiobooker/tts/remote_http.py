@@ -10,6 +10,7 @@ from __future__ import annotations
 import io
 import logging
 import threading
+import time
 
 import httpx
 import soundfile as sf
@@ -27,6 +28,11 @@ from .base import (
 )
 
 log = logging.getLogger(__name__)
+
+#: How long after touching a node we assume it still has the card. Long enough
+#: to cover the gap between chunks of a render, short enough that switching
+#: models in the UI is noticed on the next call.
+_CARD_HELD_S = 20.0
 
 
 class RemoteHttpBackend:
@@ -48,11 +54,15 @@ class RemoteHttpBackend:
         self._settings = settings
         self._model_id = model_id or settings.tts_model
         self._base = base_url.rstrip("/")
-        self._evicted = False
+        #: Monotonic deadline until which we assume this node still holds the
+        #: card, so a render does not re-check between every chunk.
+        self._card_held_until = 0.0
+        self._prepare_lock = threading.Lock()
         #: Clips known to be on the node, so each is uploaded at most once.
         self._clips_on_node: set[str] = set()
         self._token = settings.remote_worker_token
         self._timeout = settings.remote_worker_timeout_s
+        self._warm_timeout = settings.remote_warm_timeout_s
 
         # Filled in from the node on first contact. Defaults are placeholders
         # that must never reach a cache key, which is why _describe() raises
@@ -192,22 +202,65 @@ class RemoteHttpBackend:
         return sorted(set(siblings))
 
     def prepare(self) -> None:
-        """Free the card before loading onto it.
+        """Make sure the card is free before this node has to load onto it.
 
         These models will not both fit in 8 GB, and the failure without this is
         an out-of-memory error naming the model that was *loading*, never the
-        one still holding the memory. Done once per backend instance -- the
-        siblings unload themselves after a minute idle anyway, so this only has
-        to cover the handover.
-        """
-        # Locked because the worker can now have several chunks in flight at
-        # once: an unguarded check-then-set lets every one of them decide it is
-        # the first and fire its own round of unload requests at the siblings.
-        with self._lock:
-            if self._evicted:
-                return
-            self._evicted = True
+        one still holding the memory.
 
+        This used to evict once per backend instance, on the reasoning that a
+        sibling unloads itself after a minute idle anyway. Raising the idle
+        window to ten minutes broke that reasoning outright: use A, then B,
+        then A again, and A's instance has already spent its one eviction while
+        B is still sitting on the card. So the decision is made from what the
+        node reports instead of from a flag.
+        """
+        # Locked because the worker can have several chunks in flight: without
+        # it every one of them decides the card needs freeing and fires its own
+        # round of unload requests at the siblings.
+        with self._prepare_lock:
+            # A node we were using seconds ago still holds the card; nobody can
+            # have taken it. Skips a round trip on every chunk of a render.
+            if self._holds_card():
+                return
+
+            if not self._node_has_model_loaded():
+                self._evict_siblings()
+                # Load here rather than leaving it to the synthesize call.
+                # Bringing a cloning model onto the card takes tens of seconds
+                # and a first-ever load downloads weights; inside synthesize
+                # that ran against the ordinary request timeout and a cold
+                # preview timed out instead of merely being slow.
+                self._load_now()
+
+            self._card_held_until = time.monotonic() + _CARD_HELD_S
+
+    def is_warm(self) -> bool:
+        """Whether the node has its weights loaded right now.
+
+        Cheap, and never loads anything -- /node/health stopped doing that
+        precisely so this could be asked without answering it in the process.
+        """
+        return self._node_has_model_loaded()
+
+    def _holds_card(self) -> bool:
+        return time.monotonic() < self._card_held_until
+
+    def _node_has_model_loaded(self) -> bool:
+        """Whether the node already has its weights resident.
+
+        A node too old to report the field says nothing, which is treated as
+        cold -- evicting a sibling that was not holding anything is harmless,
+        whereas skipping an eviction that was needed is an OOM.
+        """
+        try:
+            response = self._client.get("/node/health", timeout=5.0)
+            response.raise_for_status()
+            return bool(response.json().get("loaded"))
+        except (httpx.HTTPError, ValueError):
+            return False
+
+    def _evict_siblings(self) -> None:
         for url in self._sibling_urls():
             try:
                 response = self._client.post(f"{url}/node/unload", timeout=20.0, json={})
@@ -223,6 +276,37 @@ class RemoteHttpBackend:
                 # A sibling that is down cannot be holding the card, so this is
                 # never a reason to fail.
                 log.debug("could not reach sibling %s: %s", url, exc)
+
+    def warm(self) -> bool:
+        """Bring the model onto the card before it is needed.
+
+        Goes through prepare() first, which frees the card and does the load.
+        Warming without freeing would just be an out-of-memory error earlier
+        than usual.
+        """
+        try:
+            # Inside the try: describing the node contacts it, so an
+            # unreachable node raises here rather than at prepare().
+            self._ensure_described()
+            self.prepare()
+        except BackendUnavailable as exc:
+            # Warming is an optimisation. Failing it must not stop a preview
+            # that would have worked, just make it slower.
+            log.info("could not warm %s: %s", self._base, exc)
+            return False
+        return self._load_now()
+
+    def _load_now(self) -> bool:
+        """Ask the node to load, on a timeout sized for loading."""
+        try:
+            response = self._client.post("/node/warm", timeout=self._warm_timeout, json={})
+            response.raise_for_status()
+            return bool(response.json().get("loaded"))
+        except (httpx.HTTPError, ValueError) as exc:
+            # An older node has no /node/warm. Synthesis will load it instead,
+            # which is what used to happen anyway.
+            log.info("could not preload %s: %s", self._base, exc)
+            return False
 
     def _push_clip(self, reference: ReferenceClip) -> None:
         """Upload a reference clip the node does not have yet."""
@@ -275,6 +359,7 @@ class RemoteHttpBackend:
         # past it and failed on the node with a message about a missing voice.
         self._ensure_described()
         self.prepare()
+        self._card_held_until = time.monotonic() + _CARD_HELD_S
         if reference is not None:
             self._ensure_clip(reference)
 

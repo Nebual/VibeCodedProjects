@@ -127,6 +127,15 @@ class OmniVoiceBackend:
             self._device = device
             return self._model
 
+    @property
+    def loaded(self) -> bool:
+        """Whether the weights are on the device right now.
+
+        Reported to the client so it can tell a cold call from a warm one
+        without loading anything to find out.
+        """
+        return self._model is not None
+
     # -- TTSBackend --------------------------------------------------------
 
     def voices(self) -> list[Voice]:

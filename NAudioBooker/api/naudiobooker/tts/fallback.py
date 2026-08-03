@@ -134,6 +134,17 @@ class FallbackBackend:
         return self.secondary.synthesize(text, voice, speed, reference, options)
 
     @property
+    def loaded(self) -> bool | None:
+        """Residency of whichever backend is actually in use.
+
+        Without this a node running the dispatcher reports None -- "cannot
+        tell" -- and the client conservatively evicts a sibling on every visit.
+        """
+        from .base import backend_is_loaded
+
+        return backend_is_loaded(self.primary if self._primary_available else self.secondary)
+
+    @property
     def provider(self) -> str | None:
         return getattr(self._active(), "provider", None)
 

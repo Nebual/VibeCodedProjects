@@ -252,8 +252,7 @@ def test_preview_accepts_text_longer_than_the_model_takes_in_one_call(fake) -> N
     # same cache key, so the model would be called once and the other chunks
     # served from cache -- and the test would be measuring the cache instead.
     sentences = [
-        f"This is sentence number {n} and it exists to make the passage long."
-        for n in range(30)
+        f"This is sentence number {n} and it exists to make the passage long." for n in range(30)
     ]
     text = " ".join(sentences)
     assert len(text) > fake.max_chars

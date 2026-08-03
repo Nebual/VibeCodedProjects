@@ -147,6 +147,15 @@ class ChatterboxBackend:
             self._sample_rate = int(getattr(self._model, "sr", 24_000))
             return self._model
 
+    @property
+    def loaded(self) -> bool:
+        """Whether the weights are on the device right now.
+
+        Reported to the client so it can tell a cold call from a warm one
+        without loading anything to find out.
+        """
+        return self._model is not None
+
     # -- TTSBackend --------------------------------------------------------
 
     def voices(self) -> list[Voice]:
