@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import io
+import shutil
+import subprocess
 
 import numpy as np
 import pytest
@@ -12,8 +14,13 @@ from naudiobooker.cache import chunk_key
 from naudiobooker.voices import MAX_CLIP_S, TARGET_SAMPLE_RATE, VoiceError, VoiceLibrary
 
 
-def clip_bytes(seconds: float = 5.0, rate: int = 24_000, freq: float = 180.0,
-               amplitude: float = 0.6, channels: int = 1) -> bytes:
+def clip_bytes(
+    seconds: float = 5.0,
+    rate: int = 24_000,
+    freq: float = 180.0,
+    amplitude: float = 0.6,
+    channels: int = 1,
+) -> bytes:
     t = np.arange(int(rate * seconds), dtype=np.float32) / rate
     wave = (np.sin(2 * np.pi * freq * t) * amplitude).astype(np.float32)
     if channels > 1:
@@ -187,3 +194,134 @@ def test_removing_one_of_two_names_keeps_shared_audio(library):
 
 def test_removing_something_that_is_not_there(library):
     assert library.remove("clip-nope") is False
+
+
+# ---------------------------------------------------------------------------
+# Formats libsndfile cannot read on its own
+# ---------------------------------------------------------------------------
+
+
+def _encode(tmp_path, samples, rate, args, name):
+    """Round-trip samples through ffmpeg into a compressed container."""
+    source = tmp_path / "source.wav"
+    sf.write(source, samples, rate)
+    out = tmp_path / name
+    subprocess.run(
+        ["ffmpeg", "-y", "-loglevel", "error", "-i", str(source), *args, str(out)],
+        check=True,
+        capture_output=True,
+    )
+    return out.read_bytes()
+
+
+def _speechlike(seconds=6.0, rate=44_100):
+    t = np.arange(int(seconds * rate)) / rate
+    return (np.sin(2 * np.pi * 180 * t) * 0.4 * (0.6 + 0.4 * np.sin(2 * np.pi * 3 * t))).astype(
+        np.float32
+    )
+
+
+needs_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize(
+    ("name", "args"),
+    [
+        ("clip.mp3", ["-c:a", "libmp3lame", "-b:a", "128k"]),
+        ("clip.m4a", ["-c:a", "aac", "-b:a", "128k"]),
+    ],
+    ids=["mp3", "m4a"],
+)
+def test_compressed_uploads_are_accepted(library, tmp_path, name, args) -> None:
+    """Both work, by different routes.
+
+    libsndfile reads MP3 itself; M4A it cannot open at all, so that one goes
+    through the ffmpeg fallback. Worth covering both, since the two arrive by
+    the same door and only one of them used to get in.
+    """
+    clip = library.add("Phone recording", _encode(tmp_path, _speechlike(), 44_100, args, name))
+
+    assert clip.duration_s == pytest.approx(6.0, abs=0.2)
+    assert library.path_for(clip).exists()
+    # Stored normalised, whatever arrived: 24 kHz mono WAV.
+    stored, rate = sf.read(library.path_for(clip))
+    assert rate == 24_000
+    assert stored.ndim == 1
+
+
+@needs_ffmpeg
+def test_embedded_artwork_does_not_reach_the_audio(library, tmp_path) -> None:
+    """An M4A off a phone routinely carries cover art.
+
+    ffmpeg drops the picture stream by itself when writing WAV, so this does
+    not guard the -vn flag -- removing it changes nothing. What it does guard
+    is that an artwork-bearing file decodes to real audio at all, which is the
+    file people will actually be uploading.
+    """
+    source = tmp_path / "source.wav"
+    sf.write(source, _speechlike(), 44_100)
+    cover = tmp_path / "cover.jpg"
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=red:s=64x64",
+            "-frames:v",
+            "1",
+            str(cover),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    withart = tmp_path / "art.m4a"
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-loglevel",
+            "error",
+            "-i",
+            str(source),
+            "-i",
+            str(cover),
+            "-map",
+            "0:a",
+            "-map",
+            "1:v",
+            "-c:a",
+            "aac",
+            "-c:v",
+            "mjpeg",
+            "-disposition:v",
+            "attached_pic",
+            str(withart),
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+    clip = library.add("With artwork", withart.read_bytes())
+
+    assert clip.duration_s == pytest.approx(6.0, abs=0.2)
+    stored, rate = sf.read(library.path_for(clip))
+    assert rate == 24_000
+    # Real audio, not image bytes reinterpreted as samples.
+    assert 0.05 < float(np.sqrt(np.mean(stored**2))) < 1.0
+
+
+@pytest.mark.parametrize(
+    ("label", "data"),
+    [("empty", b""), ("not audio", b"this is a text file, not audio at all")],
+)
+def test_undecodable_uploads_are_rejected_with_the_formats_listed(library, label, data) -> None:
+    with pytest.raises(VoiceError) as excinfo:
+        library.add(label, data)
+
+    message = str(excinfo.value)
+    assert "MP3" in message and "M4A" in message, "the message must list what does work"

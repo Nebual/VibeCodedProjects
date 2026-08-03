@@ -318,7 +318,8 @@ const needsClip = computed(() => current.value?.supports_cloning && !clips.value
 
       <p v-if="needsClip" class="text-base-content/60 text-xs">
         This model has no built-in voices. Upload a clear recording of 3–30
-        seconds to clone from.
+        seconds to clone from — WAV, FLAC, OGG, MP3 or M4A, including straight
+        off a phone.
       </p>
 
       <ul v-else class="divide-base-200 divide-y">
@@ -353,7 +354,7 @@ const needsClip = computed(() => current.value?.supports_cloning && !clips.value
         <input
           ref="clipInput"
           type="file"
-          accept="audio/wav,audio/flac,audio/ogg,.wav,.flac,.ogg"
+          accept="audio/*,.wav,.flac,.ogg,.mp3,.m4a,.aac,.opus"
           class="file-input file-input-bordered file-input-sm w-64"
           :disabled="uploading"
           @change="uploadClip"

@@ -14,6 +14,9 @@ import hashlib
 import io
 import json
 import re
+import shutil
+import subprocess
+import tempfile
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -199,11 +202,12 @@ class VoiceLibrary:
     def _decode(data: bytes) -> tuple[np.ndarray, int]:
         try:
             samples, sample_rate = sf.read(io.BytesIO(data), dtype="float32", always_2d=True)
-        except Exception as exc:
-            raise VoiceError(
-                "Could not read that audio. WAV, FLAC and OGG work; "
-                "for MP3 or M4A, convert it first."
-            ) from exc
+        except Exception:
+            # libsndfile covers WAV, FLAC, OGG and -- since 1.1 -- MP3, but not
+            # M4A/AAC, which is what a phone records. Refusing those meant
+            # telling people to go and convert the file themselves, using the
+            # ffmpeg this already depends on. So do it for them.
+            samples, sample_rate = _decode_with_ffmpeg(data)
 
         mono = samples.mean(axis=1).astype(np.float32)
         if sample_rate != TARGET_SAMPLE_RATE:
@@ -270,3 +274,58 @@ def resolve_reference(
         # through when present.
         transcript=getattr(clip, "transcript", None),
     )
+
+
+def _decode_with_ffmpeg(data: bytes) -> tuple[np.ndarray, int]:
+    """Decode anything ffmpeg understands into samples libsndfile can read.
+
+    Reached only when libsndfile cannot open the file itself, which in
+    practice means M4A/AAC -- everything a phone records.
+
+    Output stays at the source rate and channel count so the normalisation
+    below it is the same for every upload, whichever decoder got there first.
+
+    ``-vn`` is belt and braces rather than load-bearing: an M4A off a phone
+    routinely carries embedded artwork, and ffmpeg's default stream selection
+    already drops it when the output is WAV. It is spelled out so that stays
+    true if the output format ever changes to one that could carry video.
+    """
+    if shutil.which("ffmpeg") is None:
+        raise VoiceError(
+            "Could not read that audio. WAV, FLAC, OGG and MP3 work directly; "
+            "M4A and other compressed formats need ffmpeg, which is not installed."
+        )
+
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "upload"
+        decoded = Path(work) / "decoded.wav"
+        source.write_bytes(data)
+
+        result = subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-loglevel",
+                "error",
+                "-i",
+                str(source),
+                "-vn",
+                "-c:a",
+                "pcm_f32le",
+                "-f",
+                "wav",
+                str(decoded),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0 or not decoded.exists():
+            tail = "\n".join(result.stderr.strip().splitlines()[-2:])
+            raise VoiceError(
+                "Could not read that audio. WAV, FLAC, OGG, MP3 and M4A all "
+                f"work; this file could not be decoded. {tail}".strip()
+            )
+
+        samples, sample_rate = sf.read(decoded, dtype="float32", always_2d=True)
+
+    return samples, sample_rate
