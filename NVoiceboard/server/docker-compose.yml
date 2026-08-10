@@ -1,0 +1,19 @@
+# Phase 0: calibration only. No network exposure.
+#
+# Phase 1 replaces `bench` with an `stt` service published on 127.0.0.1:8192.
+# When that happens the port MUST be bound to loopback explicitly:
+#
+#     ports:
+#       - "127.0.0.1:8192:8192"     # correct
+#       - "8192:8192"               # WRONG - Docker's iptables rules bypass UFW
+#                                   # and this exposes the ASR server publicly,
+#                                   # with nginx not even in the path.
+
+services:
+  bench:
+    build: .
+    volumes:
+      - ./model:/app/model:ro
+    # Keep the container off every network. Phase 0 touches nothing but the CPU.
+    network_mode: none
+    command: python bench.py --model /app/model --threads 1,2,4,6,8
