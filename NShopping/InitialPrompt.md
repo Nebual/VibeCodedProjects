@@ -47,3 +47,12 @@ don't show "undo" if it didn't change anything
 In the bulk view, the user should be able to disagree with a non-exact match, and type in an alternative
 
 Its also a bit visually confusing to read what matched with what - perhaps have the bulk item on the left, and the match on the right (with buttons to accept/add to the furthest right).
+
+New feature: tagging grocery items with a soft colour (to organize by area of the store, eg. all produce gets green colour and listed together, all bread products get yellow, frozen gets light blue etc) and optionally with a symbol (star, i-mdi-store-remove for non-Costco). These tags will usually be added in bulk, so lets have a flow where we can bulk apply a colour/tag by selecting multiple items and then applying a tag to them. Lets also allow setting tags in the Bulk Add review UI.
+
+Also, when processing OCR images of text, lets interpret "+" and "-" in between words as meaning "two separate items", eg.
+```
+- crackers    # just means 'crackers'
+- tuna - nutritional yeast + garlic     # means 3 separate items
+```
+

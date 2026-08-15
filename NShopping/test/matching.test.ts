@@ -27,6 +27,68 @@ describe('splitBulkInput', () => {
   })
 })
 
+describe('splitBulkInput — "+" and "-" running items onto one line', () => {
+  // The worked example from the feature request.
+  it('reads a detached + or - as the start of another item', () => {
+    expect(splitBulkInput('tuna - nutritional yeast + garlic')).toEqual(['tuna', 'nutritional yeast', 'garlic'])
+  })
+
+  it('still reads a leading marker as a bullet rather than a separator', () => {
+    expect(splitBulkInput('- crackers')).toEqual(['crackers'])
+    expect(splitBulkInput('- tuna - nutritional yeast + garlic')).toEqual(['tuna', 'nutritional yeast', 'garlic'])
+  })
+
+  // The whole point of requiring whitespace on both sides.
+  it('leaves compound names intact', () => {
+    expect(splitBulkInput('half-and-half')).toEqual(['half-and-half'])
+    expect(splitBulkInput('gluten-free bread')).toEqual(['gluten-free bread'])
+    expect(splitBulkInput('7-up')).toEqual(['7-up'])
+    expect(splitBulkInput('vitamin B+')).toEqual(['vitamin B+'])
+  })
+
+  it('drops a separator left dangling at the end of a line', () => {
+    expect(splitBulkInput('tuna -\ngarlic')).toEqual(['tuna', 'garlic'])
+    expect(splitBulkInput('- milk +')).toEqual(['milk'])
+  })
+
+  it('treats en and em dashes the same way', () => {
+    expect(splitBulkInput('tuna – garlic')).toEqual(['tuna', 'garlic'])
+    expect(splitBulkInput('tuna — garlic')).toEqual(['tuna', 'garlic'])
+  })
+
+  it('drops segments left holding nothing but punctuation', () => {
+    expect(splitBulkInput('milk\n-\n+\neggs')).toEqual(['milk', 'eggs'])
+  })
+
+  // "+" is a bullet as well as a separator; without that it becomes part of the name.
+  it('reads a leading + as a bullet, like every other marker', () => {
+    expect(splitBulkInput('+ milk\n+ eggs\n+ bread')).toEqual(['milk', 'eggs', 'bread'])
+    expect(splitBulkInput('+ tuna + garlic')).toEqual(['tuna', 'garlic'])
+  })
+
+  // A double-struck dash, or an em-dash that OCR read as two characters.
+  it('splits on a doubled separator rather than swallowing the second item', () => {
+    expect(splitBulkInput('tuna -- garlic')).toEqual(['tuna', 'garlic'])
+    expect(splitBulkInput('tuna --- garlic')).toEqual(['tuna', 'garlic'])
+  })
+
+  // Splitting turns a trailing quantity into its own segment, and a bare number is a row
+  // that can never match anything — it could only ever be deleted.
+  it('drops a trailing quantity left stranded by the split', () => {
+    expect(splitBulkInput('apples - 2')).toEqual(['apples'])
+    expect(splitBulkInput('milk - 2%')).toEqual(['milk'])
+    expect(splitBulkInput('eggs x2')).toEqual(['eggs x2'])
+  })
+
+  it('splits an indented bullet without leaving an empty first item', () => {
+    expect(splitBulkInput('   - tuna - garlic')).toEqual(['tuna', 'garlic'])
+  })
+
+  it('composes with the other separators', () => {
+    expect(splitBulkInput('milk, tuna - garlic\nbread + jam')).toEqual(['milk', 'tuna', 'garlic', 'bread', 'jam'])
+  })
+})
+
 describe('meaningfulTokens', () => {
   it('drops quantities', () => {
     expect(meaningfulTokens('eggs x2')).toEqual(['eggs'])

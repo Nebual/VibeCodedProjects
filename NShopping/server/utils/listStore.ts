@@ -5,6 +5,7 @@ import path from 'node:path'
 import { createError } from 'h3'
 import type { Item, ListFile } from '#shared/types'
 import { backupNameFor, isBackupName, isReadableListName, isValidListName } from '#shared/listName'
+import { isTagColor, isTagSymbol } from '#shared/tags'
 
 const DATA_DIR = process.env.NSHOPPING_DATA_DIR
   ? path.resolve(process.env.NSHOPPING_DATA_DIR)
@@ -112,6 +113,11 @@ function sanitize(raw: unknown): Item | null {
     boughtAt: typeof item.boughtAt === 'number' && Number.isFinite(item.boughtAt) ? item.boughtAt : null,
     stateAt,
     updatedAt: num(item.updatedAt, stateAt),
+    // Unknown tags are dropped, not preserved. A tag the server can't name is one the
+    // clients can't render either, and silently keeping it would let a typo'd colour
+    // ride along in the file for ever.
+    ...(isTagColor(item.color) ? { color: item.color } : {}),
+    ...(isTagSymbol(item.symbol) ? { symbol: item.symbol } : {}),
     ...(item.deleted ? { deleted: true as const } : {}),
   }
 }

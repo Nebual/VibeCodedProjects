@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { Item } from '#shared/types'
+import type { TagPatch } from '#shared/tags'
 import { generateListName, parseBackupName } from '#shared/listName'
 
 const props = defineProps<{ name: string }>()
@@ -9,7 +10,7 @@ const backup = parseBackupName(props.name)
 const readOnly = backup !== null
 
 const list = useShoppingList(props.name, { readOnly })
-const { sorted, loaded, syncState, addItem, toggle, deleteItem } = list
+const { sorted, loaded, syncState, addItem, toggle, deleteItem, setTags } = list
 
 const bulkModal = useTemplateRef<{ open: () => void }>('bulkModal')
 
@@ -86,6 +87,70 @@ function confirmDelete() {
   confirmModal.value?.close()
 }
 
+// ------------------------------------------------------------------ tagging
+
+/**
+ * Tagging is a mode rather than a control on every row. Colours describe areas of the
+ * store, so they are almost always assigned a dozen at a time — "everything I just added
+ * is produce" — and a per-row picker would turn that into a dozen separate errands. It
+ * also keeps the row itself uncluttered for the thing it is actually for, which is
+ * ticking items off one-handed in a shop.
+ */
+const selecting = ref(false)
+const selectedIds = ref(new Set<string>())
+
+const selectedItems = computed(() => sorted.value.filter(item => selectedIds.value.has(item.id)))
+
+/**
+ * What the picker shows as currently set. Only when the whole selection agrees — over a
+ * mixed one it deliberately shows nothing active rather than the first item's tag, which
+ * would misreport what a single tap is about to overwrite.
+ */
+function sharedTag<K extends 'color' | 'symbol'>(key: K): Item[K] | undefined {
+  const [first, ...rest] = selectedItems.value
+  if (!first) return undefined
+  return rest.every(item => item[key] === first[key]) ? first[key] : undefined
+}
+
+const selectionColor = computed(() => sharedTag('color'))
+const selectionSymbol = computed(() => sharedTag('symbol'))
+
+function startSelecting() {
+  closeDropdowns()
+  selecting.value = true
+  selectedIds.value = new Set()
+}
+
+function stopSelecting() {
+  selecting.value = false
+  selectedIds.value = new Set()
+}
+
+function clearSelection() {
+  selectedIds.value = new Set()
+}
+
+// Replaced rather than mutated. Vue would track `.add` on a reactive Set perfectly
+// well; the point is that `selectedItems` and the picker read this on every render, and a
+// fresh Set keeps that a plain value swap rather than a collection whose identity persists
+// across a mode the user can leave and re-enter.
+function toggleSelect(item: Item) {
+  const next = new Set(selectedIds.value)
+  if (!next.delete(item.id)) next.add(item.id)
+  selectedIds.value = next
+}
+
+/** Everything the search is currently showing — the fast path is filter, then tag the lot. */
+function selectAllVisible() {
+  selectedIds.value = new Set(visible.value.map(item => item.id))
+}
+
+function applyTag(patch: TagPatch) {
+  setTags(selectedItems.value, patch)
+  // The selection survives on purpose: a colour and then a symbol is two taps, not two
+  // rounds of re-selecting the same twelve items.
+}
+
 // --------------------------------------------------------------------- menu
 
 const shareModal = useTemplateRef<HTMLDialogElement>('shareModal')
@@ -147,6 +212,7 @@ const syncLabel = computed(() => readOnly
             </svg>
           </div>
           <ul tabindex="0" class="dropdown-content menu z-20 w-52 rounded-box border border-base-300 bg-base-100 p-2 shadow-lg">
+            <li v-if="!readOnly"><button type="button" @click="startSelecting">Select &amp; tag</button></li>
             <li><button type="button" @click="newList">New list</button></li>
             <li><button type="button" @click="openShare">Share</button></li>
             <li class="menu-title text-xs">
@@ -227,8 +293,11 @@ const syncLabel = computed(() => readOnly
               :item="item"
               :now="now"
               :read-only="readOnly"
+              :selectable="selecting"
+              :selected="selectedIds.has(item.id)"
               @toggle="toggle(item)"
               @remove="askDelete(item)"
+              @select="toggleSelect(item)"
             />
           </template>
         </ul>
@@ -241,6 +310,39 @@ const syncLabel = computed(() => readOnly
         </p>
       </template>
     </main>
+
+    <!-- Pinned to the bottom, within thumb reach, since the other hand is holding a trolley. -->
+    <div
+      v-if="selecting"
+      class="sticky bottom-0 z-30 -mx-4 mt-3 flex flex-col gap-2 border-t border-base-300 bg-base-200/95 px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 backdrop-blur"
+    >
+      <div class="flex items-center gap-2">
+        <span class="text-sm font-medium">{{ selectedItems.length }} selected</span>
+        <button type="button" class="btn btn-ghost btn-xs" @click="selectAllVisible">
+          {{ needle ? 'Select all shown' : 'Select all' }}
+        </button>
+        <button v-if="selectedItems.length" type="button" class="btn btn-ghost btn-xs" @click="clearSelection">
+          Clear
+        </button>
+        <span class="flex-1" />
+        <button type="button" class="btn btn-sm" @click="stopSelecting">
+          Done
+        </button>
+      </div>
+
+      <TagPicker
+        :color="selectionColor"
+        :symbol="selectionSymbol"
+        :disabled="!selectedItems.length"
+        role="group"
+        aria-label="Tag the selected items"
+        @pick="applyTag"
+      />
+
+      <p v-if="!selectedItems.length" class="text-xs text-base-content/60">
+        Tick the items that live in the same part of the shop, then give them a colour.
+      </p>
+    </div>
 
     <BulkAddModal v-if="!readOnly" ref="bulkModal" :list="list" />
 

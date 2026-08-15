@@ -15,9 +15,13 @@ const OCR_TIMEOUT_MS = Number(process.env.OCR_TIMEOUT_MS ?? 60_000)
 // This just rejects obviously-wrong bodies early. Data URLs are ~1.37x the raw bytes.
 const MAX_IMAGE_CHARS = 8 * 1024 * 1024
 
+// "no bullet characters" is about the marker that opens a line. A "+" or "-" written
+// *between* two words is not decoration — it is how people run two items onto one line,
+// and splitBulkInput relies on it surviving, so the prompt asks for it back explicitly.
 const PROMPT = 'OCR this image. Transcribe every line of handwritten and printed text '
-  + 'exactly as written, one item per line. Output only the transcription, with no '
-  + 'commentary and no bullet characters.'
+  + 'exactly as written, one item per line. Do not open a line with a bullet character. '
+  + 'Keep any "+" or "-" that appears between words, exactly where it is. '
+  + 'Output only the transcription, with no commentary.'
 
 interface ChatCompletion {
   choices?: { message?: { content?: string } }[]

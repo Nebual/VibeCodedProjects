@@ -1,12 +1,21 @@
 import type { Item, ListResponse } from '#shared/types'
+import type { TagPatch } from '#shared/tags'
 import { CORRECTION_WINDOW } from '#shared/types'
+import { tagRank } from '#shared/tags'
 
 /** Marking things bought shouldn't yank rows out from under a tapping finger. */
 const SORT_DELAY = 5000
 /** Batch edits into one round trip, so a burst of ticks is a single request. */
 const SYNC_DELAY = 3000
 /** How often to look for other devices' changes. */
-const POLL_INTERVAL = 4000
+const POLL_INTERVAL = 3000
+/**
+ * Matches MAX_OPS_PER_REQUEST in the store, which rejects anything larger. Tagging can
+ * queue more than this in a single tap — "select all" on a well-used list, then a colour
+ * — and without batching that becomes a 413 the retry loop can never clear, leaving the
+ * list stuck offline.
+ */
+const MAX_OPS_PER_FLUSH = 500
 
 export type SyncState = 'idle' | 'pending' | 'syncing' | 'error'
 
@@ -38,14 +47,24 @@ export function useShoppingList(listName: string, options: { readOnly?: boolean 
   let syncTimer: ReturnType<typeof setTimeout> | undefined
   let pollTimer: ReturnType<typeof setInterval> | undefined
   let disposed = false
+  let flushing = false
 
   const live = computed(() => Object.values(items.value).filter(item => !item.deleted))
 
   function compare(a: Item, b: Item): number {
     if (a.bought !== b.bought) return a.bought ? 1 : -1
-    // To buy: whatever was added most recently sits at the top, where you just typed it.
-    if (!a.bought) return b.addedAt - a.addedAt
-    // Bought: most recently bought first, fading away down the page.
+    if (!a.bought) {
+      // Colour first, so everything from one area of the store is reached in one stop.
+      // Untagged ranks ahead of every colour, which keeps the old behaviour where what
+      // you just typed is waiting at the top of the page.
+      const byColor = tagRank(a.color) - tagRank(b.color)
+      if (byColor) return byColor
+      // Within an area: most recently added first, as before.
+      return b.addedAt - a.addedAt
+    }
+    // Bought: most recently bought first, fading away down the page. Deliberately not
+    // grouped — this pile is a record of what just happened, and shopping order is no
+    // longer the useful order once a thing is in the trolley.
     return (b.boughtAt ?? b.stateAt) - (a.boughtAt ?? a.stateAt)
   }
 
@@ -94,19 +113,28 @@ export function useShoppingList(listName: string, options: { readOnly?: boolean 
   /** Merges a server snapshot in, last-writer-wins. Local edits carry newer stamps, so they survive. */
   function applyRemote(remote: Item[]) {
     let dirty = false
+    let regroup = false
     for (const incoming of remote) {
       const existing = items.value[incoming.id]
       if (existing && incoming.updatedAt <= existing.updatedAt) continue
+      // Colour is a sort key, so another device tagging a dozen things has to be allowed
+      // to regroup the list. `reconcileOrder` alone would only ever file *new* ids, and
+      // the grouping — the whole point of a colour — would never appear over here.
+      if (existing && existing.color !== incoming.color) regroup = true
       items.value[incoming.id] = incoming
       dirty = true
     }
     if (dirty) reconcileOrder()
+    if (regroup) scheduleSort()
   }
 
   async function flush(): Promise<void> {
-    if (disposed || !pending.size) return
-    const ops = [...pending.values()]
-    pending.clear()
+    // Batching makes a multi-round-trip flush routine, and two in the air at once would
+    // let the older response land last and walk `rev` backwards.
+    if (disposed || flushing || !pending.size) return
+    flushing = true
+    const ops = [...pending.values()].slice(0, MAX_OPS_PER_FLUSH)
+    for (const op of ops) pending.delete(op.id)
     syncState.value = 'syncing'
 
     try {
@@ -115,6 +143,11 @@ export function useShoppingList(listName: string, options: { readOnly?: boolean 
       rev.value = res.rev
       if (res.items) applyRemote(res.items)
       syncState.value = pending.size ? 'pending' : 'idle'
+      // Whatever didn't fit in this batch goes out immediately behind it.
+      if (pending.size) {
+        clearTimeout(syncTimer)
+        syncTimer = setTimeout(() => void flush(), 0)
+      }
     }
     catch {
       // Put the ops back, but never over a newer edit the user made while we were in flight.
@@ -122,6 +155,9 @@ export function useShoppingList(listName: string, options: { readOnly?: boolean 
       syncState.value = 'error'
       clearTimeout(syncTimer)
       syncTimer = setTimeout(() => void flush(), SYNC_DELAY * 2)
+    }
+    finally {
+      flushing = false
     }
   }
 
@@ -188,6 +224,40 @@ export function useShoppingList(listName: string, options: { readOnly?: boolean 
   }
 
   /**
+   * Applies a tag to many items at once. Timestamps other than `updatedAt` are left
+   * alone: tagging says where a thing lives in the shop, not that anything happened to
+   * it, and bumping `addedAt` here would make every row claim it was added just now.
+   */
+  function setTags(targets: Item[], patch: TagPatch) {
+    if (readOnly) return
+    const at = now()
+
+    for (const target of targets) {
+      // Re-read through the map: a caller may be holding a snapshot from before the
+      // last sync, and writing that back would undo whatever else has landed since.
+      const current = items.value[target.id]
+      if (!current || current.deleted) continue
+
+      const next: Item = { ...current, updatedAt: at }
+      if (patch.color !== undefined) {
+        if (patch.color) next.color = patch.color
+        else delete next.color
+      }
+      if (patch.symbol !== undefined) {
+        if (patch.symbol) next.symbol = patch.symbol
+        else delete next.symbol
+      }
+
+      items.value[next.id] = next
+      markDirty(next)
+    }
+
+    // Regroups once the user stops tagging, rather than shuffling rows out from under
+    // the next tap in a run of them.
+    scheduleSort()
+  }
+
+  /**
    * Puts an item back exactly as it was, timestamps and all. Used to undo a bulk match
    * without inventing a new "bought 0 minutes ago".
    */
@@ -218,9 +288,12 @@ export function useShoppingList(listName: string, options: { readOnly?: boolean 
   /** Closing the tab mid-window shouldn't silently drop the last few ticks. */
   function flushOnExit() {
     if (!pending.size) return
-    const body = JSON.stringify({ ops: [...pending.values()] })
+    // Capped like flush(): an oversized batch is rejected whole, and on the way out there
+    // is no retry left to notice. Better to land the first 500 tags than none of them.
+    const ops = [...pending.values()].slice(0, MAX_OPS_PER_FLUSH)
+    const body = JSON.stringify({ ops })
     const sent = navigator.sendBeacon?.(`/api/lists/${listName}`, new Blob([body], { type: 'application/json' }))
-    if (sent) pending.clear()
+    if (sent) for (const op of ops) pending.delete(op.id)
   }
 
   onMounted(async () => {
@@ -246,5 +319,5 @@ export function useShoppingList(listName: string, options: { readOnly?: boolean 
     window.removeEventListener('pagehide', flushOnExit)
   })
 
-  return { items, sorted, live, loaded, syncState, addItem, toggle, setBought, deleteItem, restoreItem, now }
+  return { items, sorted, live, loaded, syncState, addItem, toggle, setBought, setTags, deleteItem, restoreItem, now }
 }

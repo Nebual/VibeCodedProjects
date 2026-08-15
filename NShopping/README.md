@@ -23,10 +23,11 @@ pnpm start       # http://localhost:8187
 
 ## How it behaves
 
-**Ordering.** Things still to buy sit at the top, newest first. Bought items fade
-out below, most recently bought first. Ticking an item does *not* immediately
-re-sort — the list holds its position until you've been idle for 5 seconds, so a
-row never jumps away mid-tap.
+**Ordering.** Things still to buy sit at the top, newest first, then everything
+carrying a colour tag, grouped by colour (see [Tags](#tags)). Bought items fade out
+below, most recently bought first. Ticking an item does *not* immediately re-sort —
+the list holds its position until you've been idle for 5 seconds, so a row never
+jumps away mid-tap.
 
 **Buying vs. correcting.** Each item records when it was added to the list and when
 it was last actually bought. If you tick something off within 20 minutes of adding
@@ -39,6 +40,30 @@ appears once an item is bought, so an active list can't be gutted by a stray tap
 **Theme.** Follows the OS by default; the menu can pin light or dark. The choice is
 applied by a tiny inline script in `<head>` so an override never flashes the wrong
 theme on load.
+
+## Tags
+
+An item can carry a **colour** and a **symbol**. A colour stands for an area of the
+shop — green for produce, yellow for bread, light blue for frozen — and the list
+groups by it, so one colour is one stop rather than seven laps of the aisles. Which
+colour means what is yours to decide; the app only fixes the order they come in.
+
+Untagged items stay at the top of the "to buy" block rather than being filed at the
+bottom, because that's where something you've only just typed is worth seeing.
+
+Symbols mark an item out *within* its group and never move it: a **star**, and a
+**Not at Costco** shopfront for things that need a different shop. (That label lives
+in `TAG_SYMBOL_LABELS` in `shared/tags.ts` — rename it and nothing else moves, since
+the stored id is the neutral `other-store`.)
+
+**Applying them in bulk.** Tags are nearly always assigned a dozen at a time, so the
+flow is built for that: **Select & tag** in the menu turns the checkboxes into a
+selection, and a bar at the bottom applies a colour or symbol to everything ticked.
+The selection survives applying one, so colour-then-symbol is two taps rather than
+two rounds of re-selecting. Searching first and then **Select all shown** is the
+quick way to tag a whole aisle at once.
+
+Tags can also be set while reviewing a bulk add — see below.
 
 ## Bulk add
 
@@ -62,10 +87,26 @@ Plurals are folded explicitly (`pecans` → `pecan`) so the typo budget can stay
 five letters or fewer must match exactly, because at that length nearly every near
 miss is a different product — `pecans` must not match **Pears**.
 
+Lines are split on newlines, commas and semicolons — and also on a `+` or `-` left
+standing *between* words, which is how a photographed list runs several items onto
+one line: `tuna - nutritional yeast + garlic` is three things, while a leading
+`- crackers` is just a bullet. Whitespace on both sides is what does the work, so
+`half-and-half`, `gluten-free bread` and `vitamin B+` stay in one piece. The
+trade-off is deliberate: a genuine aside like `milk - the 2% one` becomes two lines,
+which is one tap to delete, whereas a silently swallowed item isn't noticed until
+you're home.
+
 The results view pairs each pasted line with what it hit and lets you disagree:
 inexact matches offer **Change**, which undoes the match, stops suggesting the
 rejected item, and lets you type an alternative. Unmatched lines can be edited until
 they match, or added outright with **+**.
+
+Each row also carries a tag button. It aims the picker at the foot of the dialog at
+that row — or leave it aimed at **all** rows to tag the whole paste in one go, which
+is the common case when a photo is one trip's worth of one aisle. A row that hasn't
+resolved to anything yet still holds its tag, and hands it over the moment it does;
+a row that matches an item which is *already* tagged shows that tag rather than
+quietly clearing it.
 
 ## Photo OCR
 
@@ -94,6 +135,10 @@ changed*, never the whole list, and the server merges them per-item on a
 last-writer-wins basis — so two people shopping off the same list at once don't
 overwrite each other unless they happen to touch the very same item.
 
+A push carries at most 500 items, which is the server's limit; bulk tagging can queue
+more than that in a single tap, so the rest follows in the next batch rather than
+becoming a rejection the retry loop can't clear.
+
 Deletes are tombstones so they propagate rather than getting resurrected by a
 device that hadn't heard yet; they're pruned after 30 days. Clients correct for
 device clock skew against the server clock, which keeps last-writer-wins honest.
@@ -113,10 +158,11 @@ pnpm test
 ```
 
 Vitest covers the pure logic, which is where the fiddly rules live: bulk-add matching
-(`test/matching.test.ts`), list and backup name validation including path traversal
-(`test/listName.test.ts`), and the JSON store's last-writer-wins merge, input hardening
-and once-a-day backups (`test/listStore.test.ts`). They run in plain node — no Nuxt
-boot — with `#shared` aliased by hand in `vitest.config.ts`.
+and line splitting (`test/matching.test.ts`), the tag vocabulary and the ordering it
+implies (`test/tags.test.ts`), list and backup name validation including path traversal
+(`test/listName.test.ts`), and the JSON store's last-writer-wins merge, input hardening,
+tag round-tripping and once-a-day backups (`test/listStore.test.ts`). They run in plain
+node — no Nuxt boot — with `#shared` aliased by hand in `vitest.config.ts`.
 
 Vite's transform cache is pointed at `/tmp` because this project sits on a network
 mount; override with `VITEST_CACHE_DIR` if that doesn't suit.

@@ -1,7 +1,17 @@
+import type { TagColor, TagSymbol } from './tags'
+
 /** A single grocery item. Shared verbatim between client, server and the JSON files on disk. */
 export interface Item {
   id: string
   name: string
+  /**
+   * Area of the store, as a colour. Absent means untagged — the field is dropped rather
+   * than set to null so that clearing a tag and never having had one look identical on
+   * disk and to last-writer-wins merging.
+   */
+  color?: TagColor
+  /** Marks an item out within its colour group. Does not affect sorting. */
+  symbol?: TagSymbol
   /** When the item last entered the "to buy" state. */
   addedAt: number
   bought: boolean

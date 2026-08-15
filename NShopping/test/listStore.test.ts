@@ -201,3 +201,38 @@ describe('daily backups', () => {
     expect(names((await getList(today())).items)).toEqual(['Milk'])
   })
 })
+
+describe('tags round-tripping', () => {
+  it('stores a colour and a symbol', async () => {
+    await applyOps(listName, [item('a', 'Kale', { color: 'green', symbol: 'star' })])
+    expect((await getList(listName)).items[0]).toMatchObject({ color: 'green', symbol: 'star' })
+  })
+
+  it('drops a tag it cannot name rather than letting it ride along in the file', async () => {
+    await applyOps(listName, [{ ...item('a', 'Kale'), color: 'chartreuse', symbol: 'wingdings' }])
+    const stored = (await getList(listName)).items[0]!
+    expect(stored).not.toHaveProperty('color')
+    expect(stored).not.toHaveProperty('symbol')
+  })
+
+  // Absent and cleared have to look identical on disk, or last-writer-wins can't express
+  // "the user took the colour off".
+  it('clears a tag when a later op arrives without one', async () => {
+    await applyOps(listName, [item('a', 'Kale', { color: 'green', updatedAt: 100 })])
+    await applyOps(listName, [item('a', 'Kale', { updatedAt: 200 })])
+    const stored = (await getList(listName)).items[0]!
+    expect(stored).not.toHaveProperty('color')
+    expect(JSON.stringify(stored)).not.toContain('color')
+  })
+
+  it('leaves the tag alone when a stale op loses the merge', async () => {
+    await applyOps(listName, [item('a', 'Kale', { color: 'green', updatedAt: 200 })])
+    await applyOps(listName, [item('a', 'Kale', { updatedAt: 100 })])
+    expect((await getList(listName)).items[0]).toMatchObject({ color: 'green' })
+  })
+
+  it('keeps untagged items free of empty tag keys', async () => {
+    await applyOps(listName, [item('a', 'Milk')])
+    expect(await read(listName)).toMatchObject({ items: [expect.not.objectContaining({ color: expect.anything() })] })
+  })
+})

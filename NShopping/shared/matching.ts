@@ -29,14 +29,51 @@ const STOPWORDS = new Set([
 /** Bare counts and multipliers: "eggs x2", "2x milk", "3 lemons". */
 const QUANTITY_RE = /^(?:x\d+|\d+x|\d+(?:[.,]\d+)?)$/
 
-/** Bullets, dashes and "1." that survive a copy-paste. */
-const LIST_MARKER_RE = /^\s*(?:[-*•·–—]+|\d+[.)])\s+/
+/**
+ * Bullets, dashes and "1." that survive a copy-paste. "+" is in here as well as in the
+ * separator below: handwritten lists use it as a bullet constantly, and without it a
+ * photographed "+ milk" is added as an item literally called "+ milk".
+ */
+const LIST_MARKER_RE = /^\s*(?:[-+*•·–—]+|\d+[.)])\s+/
+
+/**
+ * A "+" or "-" left standing on its own *between* words runs several items onto one
+ * line — "tuna - nutritional yeast + garlic" is three things to buy, not one. This shows
+ * up constantly in photographed handwriting, where a bullet for the next item gets
+ * transcribed onto the end of the previous line.
+ *
+ * Whitespace on both sides is the whole guard: it is what keeps "half-and-half",
+ * "gluten-free bread" and "7-up" intact, since a hyphen inside a compound word never has
+ * it. The cost is that a genuine aside — "milk - the 2% one" — splits in two, which is
+ * the deliberate trade: a stray extra line is one tap to delete, whereas a silently
+ * swallowed item is not noticed until you are home.
+ */
+const INLINE_SEPARATOR_RE = /\s+[-+–—]+\s+/
+
+/**
+ * The same separator with nothing after it — "tuna -" at the end of a photographed line.
+ * Detached by whitespace for the same reason as above, which is what leaves "vitamin B+"
+ * alone.
+ */
+const DANGLING_SEPARATOR_RE = /\s+[-+–—]+\s*$/
+
+/**
+ * Something has to be left to shop for. A letter, specifically, not just any character:
+ * splitting on a detached dash turns a trailing quantity into its own segment
+ * ("apples - 2"), and a bare "2" is a row that can never match anything and can only be
+ * deleted. Groceries have names.
+ */
+const HAS_CONTENT_RE = /\p{L}/u
 
 export function splitBulkInput(text: string): string[] {
   return text
     .split(/[\n,;]+/)
-    .map(line => line.replace(LIST_MARKER_RE, '').trim())
-    .filter(Boolean)
+    .flatMap(line => line.split(INLINE_SEPARATOR_RE))
+    // Both are re-run per segment rather than per line: splitting can expose a marker
+    // that was sitting mid-line, and a leading "- " never matches the separator above
+    // for want of a space in front of it.
+    .map(part => part.replace(LIST_MARKER_RE, '').replace(DANGLING_SEPARATOR_RE, '').trim())
+    .filter(part => HAS_CONTENT_RE.test(part))
 }
 
 function tokenize(text: string): string[] {

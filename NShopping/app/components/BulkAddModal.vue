@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { Item } from '#shared/types'
+import type { TagColor, TagPatch, TagSymbol } from '#shared/tags'
 import { bestMatch, splitBulkInput } from '#shared/matching'
 
 type ListApi = ReturnType<typeof useShoppingList>
@@ -18,8 +19,25 @@ interface Entry {
   exact: boolean
   /** How the item looked before we touched it — absent when we changed nothing. */
   restore?: Item
+  /** The matched item was already to buy, so claiming it changed nothing by itself. */
+  wasToBuy: boolean
   /** Items the user has already turned down for this line, so we stop suggesting them. */
   rejected: string[]
+  /**
+   * Held on the row as well as on the item, so a line that hasn't resolved to anything
+   * yet can still be given a colour — it gets written through the moment it does.
+   */
+  color?: TagColor
+  symbol?: TagSymbol
+  /**
+   * Whether the tag above is the user's instruction or merely inherited from the item this
+   * row matched. The two must not be confused: an inherited tag is discarded when the match
+   * is rejected, whereas a chosen one follows the row onto whatever it matches next. Tracked
+   * per facet so that choosing a colour doesn't freeze the symbol, and so that an explicit
+   * "no colour" stays distinguishable from never having said anything.
+   */
+  choseColor: boolean
+  choseSymbol: boolean
 }
 
 const dialog = useTemplateRef<HTMLDialogElement>('dialog')
@@ -49,6 +67,7 @@ function open() {
   draft.value = ''
   entries.value = []
   submitted.value = false
+  tagTarget.value = null
   dialog.value?.showModal()
   nextTick(() => textarea.value?.focus())
 }
@@ -108,24 +127,112 @@ async function onPhoto(event: Event) {
   }
 }
 
+// ------------------------------------------------------------------- tagging
+
+/**
+ * Which row the picker under the list is aimed at; null means all of them. It sits in the
+ * footer rather than in a dropdown on the row because the results list scrolls, and a
+ * popover opened from inside it would be clipped by its own scroll container.
+ */
+const tagTarget = ref<number | null>(null)
+
+const targetEntry = computed(() => entries.value.find(entry => entry.key === tagTarget.value) ?? null)
+
+/**
+ * What the picker shows as set. Aimed at one row it is simply that row's; aimed at all of
+ * them it only reports a tag they agree on, so a single tap never claims to be leaving
+ * alone something it is about to overwrite.
+ */
+function sharedTag<K extends 'color' | 'symbol'>(key: K): Entry[K] {
+  if (targetEntry.value) return targetEntry.value[key]
+  const [first, ...rest] = entries.value
+  if (!first) return undefined
+  return rest.every(entry => entry[key] === first[key]) ? first[key] : undefined
+}
+
+const pickerColor = computed(() => sharedTag('color'))
+const pickerSymbol = computed(() => sharedTag('symbol'))
+
+function itemFor(entry: Entry): Item | undefined {
+  return entry.itemId ? props.list.items.value[entry.itemId] : undefined
+}
+
+function pick(patch: TagPatch) {
+  const targets = targetEntry.value ? [targetEntry.value] : entries.value
+  const items: Item[] = []
+
+  for (const entry of targets) {
+    if (patch.color !== undefined) {
+      entry.color = patch.color ?? undefined
+      entry.choseColor = true
+    }
+    if (patch.symbol !== undefined) {
+      entry.symbol = patch.symbol ?? undefined
+      entry.choseSymbol = true
+    }
+
+    const item = itemFor(entry)
+    if (!item) continue
+    // Tagging is the first thing that actually changes an item which was already to buy,
+    // so this is where its "before" has to be captured — otherwise Undo has nothing to
+    // put back and the tag sticks to an item the user went on to reject.
+    if (entry.status === 'matched') entry.restore ??= { ...item }
+    items.push(item)
+  }
+
+  // One call for the lot, so tagging thirty rows green is still a single re-sort.
+  if (items.length) props.list.setTags(items, patch)
+}
+
+/**
+ * Pushes the row's *chosen* tags onto the item it has just resolved to. Only the chosen
+ * ones: matching an untagged line against an item that is already green must not strip
+ * its colour, and a tag merely inherited from some earlier, rejected match is not an
+ * instruction to repaint whatever this row landed on instead.
+ */
+function applyHeldTag(entry: Entry, item: Item) {
+  const patch: TagPatch = {}
+  if (entry.choseColor) patch.color = entry.color ?? null
+  if (entry.choseSymbol) patch.symbol = entry.symbol ?? null
+  if (patch.color !== undefined || patch.symbol !== undefined) props.list.setTags([item], patch)
+}
+
 /** Marks an existing item as to-buy, remembering its prior state so the match can be undone. */
 function claim(entry: Entry, item: Item, score: number) {
   entry.itemId = item.id
   entry.status = 'matched'
   entry.exact = score >= 0.999
+  entry.wasToBuy = !item.bought
   if (item.bought) {
     entry.restore = { ...item }
     props.list.setBought(item, false)
   }
   else {
-    // Already on the list — nothing to undo if the user changes their mind.
+    // Already on the list — nothing to undo unless the user goes on to tag it.
     entry.restore = undefined
   }
+
+  // What the user chose is an instruction and is written through. Facets they haven't
+  // spoken about show what the matched item already wears, so a paste doesn't look like
+  // it has lost the tags the list has spent weeks acquiring.
+  applyHeldTag(entry, item)
+  if (!entry.choseColor) entry.color = item.color
+  if (!entry.choseSymbol) entry.symbol = item.symbol
 }
 
 function submit() {
   entries.value = splitBulkInput(draft.value).map((line) => {
-    const entry: Entry = { key: nextKey++, raw: line, text: line, status: 'unmatched', exact: false, rejected: [] }
+    const entry: Entry = {
+      key: nextKey++,
+      raw: line,
+      text: line,
+      status: 'unmatched',
+      exact: false,
+      wasToBuy: false,
+      rejected: [],
+      choseColor: false,
+      choseSymbol: false,
+    }
     const match = bestMatch(line, candidates.value)
     const item = match ? props.list.items.value[match.id] : undefined
     if (item && match) claim(entry, item, match.score)
@@ -146,6 +253,7 @@ function addAsNew(entry: Entry) {
   entry.status = 'added'
   entry.exact = true
   entry.restore = undefined
+  applyHeldTag(entry, item)
 }
 
 /** Unresolves a row: undoes whatever we did, and reopens it for editing. */
@@ -157,9 +265,15 @@ function unresolve(entry: Entry) {
   // Don't offer the same wrong match straight back.
   if (entry.status === 'matched' && entry.itemId) entry.rejected.push(entry.itemId)
 
+  // Anything merely inherited goes back with the match it came from. Leaving it would let
+  // a tag the user never chose be written onto whatever this row matches next.
+  if (!entry.choseColor) entry.color = undefined
+  if (!entry.choseSymbol) entry.symbol = undefined
+
   entry.status = 'unmatched'
   entry.itemId = undefined
   entry.restore = undefined
+  entry.wasToBuy = false
   entry.exact = false
 }
 </script>
@@ -238,7 +352,7 @@ function unresolve(entry: Entry) {
             <!-- Middle: what it resolved to, or the box to say otherwise. -->
             <span v-if="entry.status !== 'unmatched'" class="min-w-0 flex-1 leading-tight">
               <span class="block truncate text-sm">{{ item?.name ?? entry.text }}</span>
-              <span v-if="entry.status === 'added' || !entry.restore" class="block text-[0.6875rem] text-base-content/50">
+              <span v-if="entry.status === 'added' || entry.wasToBuy" class="block text-[0.6875rem] text-base-content/50">
                 {{ entry.status === 'added' ? 'added as new' : 'already to buy' }}
               </span>
             </span>
@@ -261,6 +375,22 @@ function unresolve(entry: Entry) {
 
             <!-- Right: the actions. -->
             <span class="flex shrink-0 items-center gap-1">
+              <!-- Aims the footer picker at this row rather than opening one here. -->
+              <button
+                type="button"
+                class="btn btn-ghost btn-xs gap-1 px-1.5"
+                :class="tagTarget === entry.key ? 'btn-active' : ''"
+                :aria-pressed="tagTarget === entry.key"
+                :aria-label="`Tag ${entry.raw}`"
+                @click="tagTarget = tagTarget === entry.key ? null : entry.key"
+              >
+                <span
+                  class="size-3.5 shrink-0 rounded-full border-2"
+                  :class="entry.color ? `tag-${entry.color} tag-swatch` : 'border-dashed border-base-content/40'"
+                />
+                <TagSymbolIcon v-if="entry.symbol" :symbol="entry.symbol" class="size-3 shrink-0 opacity-70" />
+              </button>
+
               <!-- An inexact match is a guess, so always offer a way to say otherwise. -->
               <button
                 v-if="entry.status === 'matched' && !entry.exact"
@@ -296,6 +426,26 @@ function unresolve(entry: Entry) {
             </span>
           </li>
         </ul>
+
+        <div v-if="entries.length" class="mt-3 flex flex-col gap-2 rounded-box border border-base-300 bg-base-200/40 p-2.5">
+          <div class="flex items-center gap-2 text-xs">
+            <span class="shrink-0 font-medium">Tag</span>
+            <span class="min-w-0 flex-1 truncate text-base-content/60">
+              {{ targetEntry ? `“${targetEntry.text}”` : `all ${entries.length} item${entries.length === 1 ? '' : 's'}` }}
+            </span>
+            <button v-if="targetEntry" type="button" class="btn btn-ghost btn-xs shrink-0" @click="tagTarget = null">
+              Tag all instead
+            </button>
+          </div>
+          <TagPicker
+            :color="pickerColor"
+            :symbol="pickerSymbol"
+            size="sm"
+            role="group"
+            :aria-label="targetEntry ? `Tag ${targetEntry.text}` : 'Tag all items'"
+            @pick="pick"
+          />
+        </div>
 
         <div class="modal-action">
           <button type="button" class="btn btn-primary" @click="close">

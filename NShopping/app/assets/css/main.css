@@ -14,3 +14,81 @@ html {
   /* Carry the theme onto the document itself, so overscroll doesn't flash white. */
   background-color: var(--color-base-200);
 }
+
+/* ---------------------------------------------------------------- tag colours
+ * One ink colour per tag, from which every surface is mixed against the current
+ * theme's own base — so a tinted row is soft on emerald and soft on dim without a
+ * second palette to keep in step. Mixing rather than hardcoding is also what stops a
+ * tagged row shouting: at 12% it reads as a grouping, not as a warning.
+ *
+ * The light/dark split follows exactly the rule DaisyUI is configured with in this
+ * file: `dim` when the user picked dark outright, prefers-color-scheme when they left
+ * it on system. `:not([data-theme="emerald"])` is what keeps an explicit *light*
+ * choice light on a dark-mode OS.
+ */
+:root {
+  --tag-green: oklch(60% 0.14 150);
+  --tag-yellow: oklch(72% 0.14 90);
+  --tag-blue: oklch(62% 0.13 235);
+  --tag-orange: oklch(66% 0.15 55);
+  --tag-pink: oklch(66% 0.15 355);
+  --tag-purple: oklch(56% 0.15 300);
+  --tag-grey: oklch(60% 0.02 250);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="emerald"]) {
+    --tag-green: oklch(74% 0.14 152);
+    --tag-yellow: oklch(82% 0.14 92);
+    --tag-blue: oklch(74% 0.12 235);
+    --tag-orange: oklch(76% 0.13 58);
+    --tag-pink: oklch(76% 0.13 355);
+    --tag-purple: oklch(72% 0.13 300);
+    --tag-grey: oklch(72% 0.02 250);
+  }
+}
+
+[data-theme="dim"] {
+  --tag-green: oklch(74% 0.14 152);
+  --tag-yellow: oklch(82% 0.14 92);
+  --tag-blue: oklch(74% 0.12 235);
+  --tag-orange: oklch(76% 0.13 58);
+  --tag-pink: oklch(76% 0.13 355);
+  --tag-purple: oklch(72% 0.13 300);
+  --tag-grey: oklch(72% 0.02 250);
+}
+
+/* Selecting one of these is all it takes to colour a subtree — the surfaces below
+ * only ever refer to --tag-color, never to a specific tag. */
+.tag-green { --tag-color: var(--tag-green); }
+.tag-yellow { --tag-color: var(--tag-yellow); }
+.tag-blue { --tag-color: var(--tag-blue); }
+.tag-orange { --tag-color: var(--tag-orange); }
+.tag-pink { --tag-color: var(--tag-pink); }
+.tag-purple { --tag-color: var(--tag-purple); }
+.tag-grey { --tag-color: var(--tag-grey); }
+
+/* A tagged row: tinted just enough to band with its neighbours at a glance, plus a solid
+ * stripe down the leading edge, which is what makes a run of one colour read as a block.
+ *
+ * The stripe is painted as a background gradient rather than a border or a child element
+ * so that it costs no layout at all: a tagged row and an untagged row are the same size,
+ * and their checkboxes still line up down the page. The row's own border-radius clips it
+ * to a rounded tab for free.
+ */
+.tag-row {
+  background-color: color-mix(in oklab, var(--tag-color) 12%, var(--color-base-100));
+  background-image: linear-gradient(to right, var(--tag-color) 0 0.25rem, transparent 0.25rem);
+  border-color: color-mix(in oklab, var(--tag-color) 34%, var(--color-base-300));
+}
+
+/* Picker swatches sit on their own, with no neighbours to band with, so they carry
+ * far more of the colour than a row does. */
+.tag-swatch {
+  background-color: color-mix(in oklab, var(--tag-color) 60%, var(--color-base-100));
+  border-color: color-mix(in oklab, var(--tag-color) 75%, var(--color-base-100));
+}
+
+.tag-ink {
+  color: color-mix(in oklab, var(--tag-color) 78%, var(--color-base-content));
+}
