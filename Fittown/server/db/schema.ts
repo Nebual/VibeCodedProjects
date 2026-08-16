@@ -30,11 +30,33 @@ CREATE TABLE IF NOT EXISTS user_goals (
   weight_unit     TEXT NOT NULL DEFAULT 'kg',
   -- 'ml' | 'floz' — display only; water is always stored in ml.
   volume_unit     TEXT NOT NULL DEFAULT 'ml',
+  -- 'metric' | 'imperial'. Which portion unit a food picker starts on, kept
+  -- separate from the body-measurement units because plenty of households
+  -- weigh food in grams while weighing themselves in pounds.
+  food_system     TEXT NOT NULL DEFAULT 'metric',
   -- Add exercise calories back onto the day's remaining budget?
   exercise_adds_calories INTEGER NOT NULL DEFAULT 1,
-  sex             TEXT,                   -- 'male' | 'female' | null; for MET/BMR math
+
+  -- Body metrics, used to estimate BMR / maintenance calories. All optional:
+  -- the app works without them, it just can't calculate a calorie target.
+  -- 'male' | 'female' | 'unspecified' | null. Drives which Mifflin-St Jeor
+  -- constant is used; 'unspecified' takes the midpoint of the two.
+  sex             TEXT,
+  -- Age is entered in years and stored as a birth year so it stays correct
+  -- as time passes instead of quietly ageing out of date.
   birth_year      INTEGER,
   height_cm       REAL,
+  -- 'cm' | 'ftin' — display only; height is always stored in cm.
+  height_unit     TEXT NOT NULL DEFAULT 'cm',
+  -- One of shared/body.ts ACTIVITY_KEYS; null until the user picks one.
+  activity_level  TEXT,
+
+  -- The weight plan set by the calorie target calculator. Kept so Trends can
+  -- draw the goal and so the target can be re-derived when weight changes.
+  goal_weight_kg        REAL,
+  -- Negative = losing, positive = gaining, 0 / null = maintaining.
+  goal_rate_kg_per_week REAL,
+
   updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 

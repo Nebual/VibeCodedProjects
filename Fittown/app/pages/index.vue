@@ -18,10 +18,20 @@ const date = computed({
 })
 
 const {
-  day, pending, error, removeEntry, addWater, removeWorkout,
+  day, pending, error, refresh, removeEntry, addWater, removeWorkout,
+  setWeight, clearWeight,
 } = useDiary(date)
 
 const showMicros = ref(false)
+
+/**
+ * Changing the unit from the weight card saves it as the app-wide preference,
+ * so the diary, settings and trends all agree afterwards.
+ */
+async function setWeightUnit(unit: 'kg' | 'lb') {
+  await $fetch('/api/goals', { method: 'PUT', body: { weight_unit: unit } })
+  await refresh()
+}
 </script>
 
 <template>
@@ -64,6 +74,15 @@ const showMicros = ref(false)
         :total-minutes="day.workouts.total_minutes"
         :date="date!"
         @remove="removeWorkout"
+      />
+
+      <WeightCard
+        :weight-kg="day.weight_kg"
+        :unit="day.goals.weight_unit"
+        :is-today="date === today"
+        @save="setWeight"
+        @clear="clearWeight"
+        @unit="setWeightUnit"
       />
 
       <section class="card bg-base-100 shadow-sm">

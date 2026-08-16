@@ -13,10 +13,16 @@ desktop; it installs to a home screen as a PWA.
 - **Local food database** — ~204,000 US and Canadian products imported from
   Open Food Facts, searchable offline with barcode lookup
 - **Custom foods** — for anything the database doesn't have
+- **Any unit you like** — log a portion in grams, ounces, pounds, kilos or the
+  packet's own serving, and see what it works out to before you save it
 - **Water** — quick-add in millilitres or fluid ounces
 - **Fitness** — cardio and strength logging, with calorie estimates from MET
   values and your body weight
-- **Trends** — intake, training and weight over 7/14/30 days
+- **Weight** — log it from the diary (any day) or from settings, and watch it
+  on a year-long chart
+- **Calorie target calculator** — age, gender, height, weight and activity
+  level give you a maintenance figure, then pick a rate of loss or gain
+- **Trends** — intake, training and weight over 7/14/30 days or a year
 
 ## Requirements
 
@@ -132,6 +138,24 @@ tomorrow's diary at 8pm local time.
 **All nutrition is stored per 100 g/ml.** Portion maths is then a single
 multiply, and any serving size can be expressed against the same base.
 
+**Units are a display choice, never a storage one.** Weights are stored in kg,
+heights in cm, volumes in ml, portions in grams — whatever you typed. Food and
+body measurements have separate preferences, because plenty of households weigh
+their food in grams and themselves in pounds, and the preference only decides
+which unit a picker opens on. Every entry point still offers the others.
+
+**The calorie target is an estimate, and says so.** Mifflin-St Jeor for resting
+burn, the standard activity multipliers for the rest, 7,700 kcal per kilogram
+of body weight. Predictive equations land within about 10% for most people, so
+the app frames the result as a starting point to adjust once real weight data
+comes in — and warns rather than blocks when a target goes below 1,200/1,500
+kcal or a rate exceeds 1 kg a week.
+
+**Activity level and logged exercise can double-count.** The multipliers
+already include a typical week's training, so choosing anything above sedentary
+shows a note explaining that only *beyond-normal* activity should be logged as
+exercise — pointedly so when "add exercise calories" is also switched on.
+
 **Exercise calories are opt-in.** Whether training widens the day's calorie
 budget is a per-user setting — burn estimates are rough, and eating them back
 automatically is how trackers mislead people.
@@ -153,6 +177,6 @@ server/
   db/              schema + exercise seed data
   routes/auth/     Google OAuth, dev login, logout
   utils/           db connection, auth guards, validation, search ranking
-shared/            nutrient catalogue used by both sides
+shared/            nutrient catalogue, portion units, body/energy maths
 scripts/           OFF importer and maintenance tools
 ```

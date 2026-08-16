@@ -1,4 +1,6 @@
 import type { NutrientTotals } from '#shared/nutrients'
+import type { ActivityKey, HeightUnit, Sex, WeightUnit } from '#shared/body'
+import type { MeasurementSystem } from '#shared/portions'
 
 export interface FoodRow {
   id: number
@@ -33,9 +35,19 @@ export interface Goals {
   fat_g: number
   fiber_g: number
   water_goal_ml: number
-  weight_unit: 'kg' | 'lb'
+  weight_unit: WeightUnit
   volume_unit: 'ml' | 'floz'
+  /** Which portion unit the food picker starts on. */
+  food_system: MeasurementSystem
   exercise_adds_calories: number
+  // Body metrics — all null until the user fills them in on Settings.
+  sex: Sex | null
+  birth_year: number | null
+  height_cm: number | null
+  height_unit: HeightUnit
+  activity_level: ActivityKey | null
+  goal_weight_kg: number | null
+  goal_rate_kg_per_week: number | null
 }
 
 export interface WorkoutRow {
@@ -143,6 +155,26 @@ export function useDiary(date: Ref<string | null>) {
     await refresh()
   }
 
+  /**
+   * Record the weight for the day being viewed.
+   *
+   * Weight belongs to a day like any other entry, so logging it from the diary
+   * — where you can navigate back to Tuesday and fix what you forgot — is the
+   * same call Settings makes, just with a different date.
+   */
+  async function setWeight(weightKg: number) {
+    await $fetch('/api/weight', {
+      method: 'POST',
+      body: { date: requireDate(), weight_kg: weightKg },
+    })
+    await refresh()
+  }
+
+  async function clearWeight() {
+    await $fetch(`/api/weight/${requireDate()}`, { method: 'DELETE' })
+    await refresh()
+  }
+
   return {
     day: data,
     pending,
@@ -154,5 +186,7 @@ export function useDiary(date: Ref<string | null>) {
     addWater,
     addWorkout,
     removeWorkout,
+    setWeight,
+    clearWeight,
   }
 }

@@ -72,6 +72,10 @@ produced a file showing 2 diary entries when the database really had 26. Either
 - `pkill -f "nuxt dev"` **matches the Bash tool's own command line and kills
   your shell** (exit 144). Use a self-avoiding pattern: `pkill -f "nux[t].mjs dev"`,
   or `ps aux | grep '[n]uxt' | awk '{print $2}' | xargs -r kill -9`.
+  The bracket trick still fails if the *same command line* later contains the
+  plain string (e.g. killing `outpu[t]/server/index.mjs` and then starting
+  `.output/server/index.mjs`) — the pattern matches that second occurrence and
+  kills your shell anyway. Kill in one call, start in the next.
 - Paths contain a space. Quote them, always.
 - Start long-lived servers detached: `(setsid nohup pnpm dev > /tmp/run.log 2>&1 < /dev/null &)`.
 
@@ -83,7 +87,7 @@ There is no unit-test suite. The safety net is an end-to-end script that drives
 the real app:
 
 ```bash
-cd $RUN && node scripts/e2e.mjs          # 11 steps, fails on any console error
+cd $RUN && node scripts/e2e.mjs          # 15 steps, fails on any console error
 node scripts/screenshots.mjs /tmp/shots  # mobile, dark, desktop — then Read them
 pnpm build                               # catches things dev mode hides
 ```
@@ -140,6 +144,27 @@ searchable. The e2e script asserts this.
 and 404s in a production build even with the env var set. Verified — don't
 loosen it.
 
+**Adding a column takes two edits, not one.** `SCHEMA_SQL` is all
+`CREATE TABLE IF NOT EXISTS`, which does nothing to a table that already
+exists — so a new column there reaches fresh databases only, and every existing
+one throws "no such column" on the next query. Add it to `SCHEMA_SQL` *and* to
+`ADDED_COLUMNS` in `server/utils/db.ts`, which ALTERs it in on boot after
+checking `PRAGMA table_info`. Entries in `ADDED_COLUMNS` are permanent; that
+list is how an old database catches up. Verified against the shipped
+`data/fittown.db` (old schema, 203,695 foods): it gains the columns on first
+DB-touching request and loses nothing.
+
+Note the migration is **lazy** — `useDb()` runs it on first use, so a request
+that 401s before touching the database won't trigger it. That is fine in
+practice and confusing when testing; hit an authenticated route.
+
+**Units are display-only, everywhere.** kg for weight, cm for height, ml for
+volume, grams for portions — always, whatever the user typed. `shared/body.ts`
+and `shared/portions.ts` own every conversion; if you find a `* 2.20462` in a
+component, move it. Food and body measurements have *separate* preferences
+(`food_system` vs `weight_unit`/`height_unit`) because Canadian households
+routinely weigh food in grams and themselves in pounds.
+
 **Every API route calls `requireUser(event)` and scopes queries by `user_id`.**
 Deletes/updates use `WHERE id = ? AND user_id = ?` so a guessed ID is a no-op.
 Keep that pattern.
@@ -179,6 +204,7 @@ in place (~10 s) instead of a two-minute re-import.
 ```
 app/
   components/    CalorieSummary, MealSection, WaterTracker, FitnessSection,
+                 WeightCard, CalorieTargetDialog,
                  NutrientBreakdown, FoodResultList, BarcodeScanner, DateNav,
                  AppIcon (inline SVG set — no icon dependency)
   composables/   useDiary (day data + all mutations), useToday (timezone)
@@ -191,7 +217,9 @@ server/
   db/            schema.ts (single source of truth), seed-exercises.ts
   routes/auth/   google.get.ts, dev.post.ts, logout.post.ts
   utils/         db, auth, validate, foods (search ranking lives here)
-shared/          nutrients.ts — catalogue used by both sides
+shared/          nutrients.ts — nutrient catalogue used by both sides
+                 body.ts      — units, activity levels, BMR/TDEE, target maths
+                 portions.ts  — portion units and their gram equivalents
 scripts/         import-off, fix-liquid-flags, reset-user-data, e2e, screenshots
 ```
 
@@ -230,8 +258,9 @@ security posture (dev login 404, API 401, `/` redirects).
 - No service worker — the manifest makes it installable, not offline-capable.
 - 34% of foods have no `serving_grams`; the portion picker falls back to 100 g.
 - Water "undo" subtracts a preset amount rather than removing the last entry.
-- Weight can only be logged from Settings.
-- Trends is intentionally simple (bars + a weight list); no macro trends.
+- No macro trends — Trends charts calories and weight only.
+- The calorie target is set once and never revisited; nothing nudges you when
+  your actual rate of loss diverges from the plan you stored.
 - No recipes, meal copying, or "log yesterday again".
 - `data/` is gitignored — the 79 MB database does not travel via git. A fresh
   clone must run `node scripts/import-off.mjs` (~2 min).

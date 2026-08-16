@@ -42,6 +42,23 @@ for (const [name, path] of shots) {
   await page.screenshot({ path: `${OUT}/${name}.png`, fullPage: true })
 }
 
+// Trends, year view — a different layout, not just a wider range.
+await page.goto(`${BASE}/trends`, { waitUntil: 'networkidle' })
+await page.getByRole('tab', { name: '1y' }).click()
+await page.waitForTimeout(900)
+await page.screenshot({ path: `${OUT}/04b-trends-year.png`, fullPage: true })
+
+// The calorie target calculator, if the profile is complete enough to open it.
+await page.goto(`${BASE}/settings`, { waitUntil: 'networkidle' })
+await page.waitForTimeout(500)
+const calculate = page.getByRole('button', { name: /Calculate calorie target/i })
+if (!(await calculate.isDisabled())) {
+  await calculate.click()
+  await page.waitForTimeout(500)
+  await page.screenshot({ path: `${OUT}/05b-calorie-target.png` })
+  await page.keyboard.press('Escape')
+}
+
 // Search interaction
 await page.goto(`${BASE}/add?meal=lunch`, { waitUntil: 'networkidle' })
 await page.getByPlaceholder('Search foods').fill('peanut butter')

@@ -121,7 +121,7 @@ await step('delete an entry', async () => {
 await step('goal change reaches the diary', async () => {
   await page.goto(`${BASE}/settings`, { waitUntil: 'networkidle' })
   await page.locator('label:has-text("Daily calories") input').fill('2400')
-  await page.getByRole('button', { name: /Save goals/i }).click()
+  await page.getByRole('button', { name: /Save settings/i }).click()
   await page.waitForTimeout(1200)
   await page.goto(`${BASE}/`, { waitUntil: 'networkidle' })
   await page.waitForTimeout(900)
@@ -130,7 +130,125 @@ await step('goal change reaches the diary', async () => {
   }
 })
 
+await step('portion units convert to grams', async () => {
+  await page.goto(`${BASE}/add?meal=lunch`, { waitUntil: 'networkidle' })
+  await page.getByPlaceholder('Search foods').fill('chicken breast')
+  await page.waitForTimeout(1200)
+  await page.locator('a[href^="/food/"]').first().click()
+  await page.waitForLoadState('networkidle')
+  await page.waitForTimeout(600)
+
+  // Pick ounces and check the app says what that works out to. 4 oz is
+  // 113.4 g; anything else means the conversion table or the maths moved.
+  await page.locator('label:has-text("Portion") select').selectOption('u:oz')
+  await page.waitForTimeout(400)
+  await page.locator('label:has-text("Amount") input').fill('4')
+  await page.waitForTimeout(400)
+
+  const text = await page.locator('main').innerText()
+  if (!/4 × oz = 113 g/.test(text)) {
+    throw new Error(`no oz→g conversion shown. Page said: ${text.slice(0, 200)}`)
+  }
+  if (!/Logging 113 g/.test(text)) throw new Error('resolved grams not shown')
+})
+
+await step('body metrics and calculated calorie target', async () => {
+  await page.goto(`${BASE}/settings`, { waitUntil: 'networkidle' })
+  await page.waitForTimeout(600)
+
+  await page.locator('label:has-text("Age") input').fill('41')
+  await page.locator('label:has-text("Gender") select').selectOption('female')
+  await page.locator('input[aria-label="Height in centimetres"]').fill('168')
+  await page.locator('label:has-text("Activity level") select').selectOption('moderate')
+  await page.waitForTimeout(300)
+
+  // Choosing anything above sedentary must warn about double-logging exercise.
+  const settingsText = await page.locator('main').innerText()
+  if (!/already includes your usual training/i.test(settingsText)) {
+    throw new Error('no double-counting note shown for a non-sedentary activity level')
+  }
+
+  await page.locator('input[aria-label="Weight"]').fill('72.5')
+  await page.getByRole('button', { name: 'Log', exact: true }).click()
+  await page.waitForTimeout(1000)
+  await page.getByRole('button', { name: /Save settings/i }).click()
+  await page.waitForTimeout(1200)
+
+  await page.getByRole('button', { name: /Calculate calorie target/i }).click()
+  await page.waitForTimeout(600)
+
+  const dialog = page.locator('dialog.modal')
+  if (!(await dialog.isVisible())) throw new Error('calculator did not open')
+  const maintenance = await dialog.innerText()
+  if (!/Maintain weight/.test(maintenance)) throw new Error('no maintenance figure shown')
+
+  await dialog.getByRole('tab', { name: 'lose' }).click()
+  await page.waitForTimeout(300)
+  await dialog.getByRole('button', { name: /^0\.5 kg$/ }).click()
+  await page.waitForTimeout(300)
+  await dialog.getByRole('button', { name: /Use this target/i }).click()
+  await page.waitForTimeout(1500)
+
+  const after = await page.locator('main').innerText()
+  if (!/Your plan/.test(after)) throw new Error('plan not stored after applying a target')
+  if (!/Losing 0\.5 kg a week/.test(after)) {
+    throw new Error(`plan summary wrong: ${after.slice(0, 200)}`)
+  }
+
+  // A 0.5 kg/week deficit is 550 kcal off maintenance, so the goal must have
+  // moved off the 2400 the previous step set.
+  const goal = await page.locator('label:has-text("Daily calories") input').inputValue()
+  if (Number(goal) === 2400 || Number(goal) < 800) {
+    throw new Error(`calorie goal not recalculated (got ${goal})`)
+  }
+})
+
+await step('weight logs to the diary and can be back-dated', async () => {
+  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' })
+  await page.waitForTimeout(1000)
+
+  const todayText = await page.locator('section:has(h2:text("Weight"))').innerText()
+  if (!/72\.5/.test(todayText)) {
+    throw new Error(`weight logged in settings not shown on the diary: ${todayText}`)
+  }
+
+  // Setting yesterday's weight is the back-dating path. The button reads "Log"
+  // or "Edit" depending on whether a previous run already left a reading here,
+  // so match either — this script runs repeatedly against the same database.
+  await page.locator('button[aria-label="Previous day"]').click()
+  await page.waitForTimeout(1200)
+  await page
+    .locator('button[aria-label="Log weight"], button[aria-label="Edit weight"]')
+    .click()
+  await page.waitForTimeout(300)
+  await page.locator('input[aria-label="Weight"]').fill('73.1')
+  await page.getByRole('button', { name: /^Save$/ }).click()
+  await page.waitForTimeout(1300)
+
+  const yesterday = await page.locator('section:has(h2:text("Weight"))').innerText()
+  if (!/73\.1/.test(yesterday)) {
+    throw new Error(`back-dated weight did not save: ${yesterday}`)
+  }
+})
+
+await step('trends year view charts weight', async () => {
+  await page.goto(`${BASE}/trends`, { waitUntil: 'networkidle' })
+  await page.waitForTimeout(900)
+  await page.getByRole('tab', { name: '1y' }).click()
+  await page.waitForTimeout(1500)
+
+  if ((await page.locator('svg polyline').count()) === 0) {
+    throw new Error('year view drew no weight line')
+  }
+  const text = await page.locator('main').innerText()
+  if (!/weekly average/.test(text)) {
+    throw new Error('year view did not switch calories to weekly averages')
+  }
+})
+
 await step('date navigation', async () => {
+  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' })
+  await page.waitForTimeout(900)
   await page.locator('button[aria-label="Previous day"]').click()
   await page.waitForTimeout(1200)
   const text = await page.locator('main').innerText()

@@ -1,6 +1,13 @@
 <script setup lang="ts">
 import { scaleNutrients } from '#shared/nutrients'
-import type { FoodRow, MealName } from '~/composables/useDiary'
+import {
+  baseUnit,
+  defaultAmount,
+  defaultUnitKey,
+  portionUnits,
+  roundGrams,
+} from '#shared/portions'
+import type { FoodRow, Goals, MealName } from '~/composables/useDiary'
 import { MEAL_LABELS, MEAL_ORDER } from '~/composables/useDiary'
 
 const route = useRoute()
@@ -22,14 +29,30 @@ const { data, error } = await useFetch<{ food: FoodRow; servings: Serving[] }>(
 const food = computed(() => data.value?.food)
 useHead({ title: () => `${food.value?.name ?? 'Food'} · Fittown` })
 
-const unit = computed(() => (food.value?.is_liquid ? 'ml' : 'g'))
+const isLiquid = computed(() => !!food.value?.is_liquid)
+const unit = computed(() => baseUnit(isLiquid.value))
+
+// The unit preference only decides which option is selected first — every
+// option stays available, because a recipe mixes units freely.
+const { data: settings } = await useFetch<{ goals: Goals }>('/api/goals')
+const system = computed(() => settings.value?.goals?.food_system ?? 'metric')
+
+interface PortionOption {
+  key: string
+  label: string
+  /** Base units (g or ml) per one of these. */
+  size: number
+  /** 'base' portions are logged as a plain weight, with no "2 × oz" label. */
+  kind: 'serving' | 'unit' | 'base'
+}
 
 /**
- * Portion options: the product's own serving, any named servings, and a
- * plain weight. Value is grams-per-unit; `null` means "type grams directly".
+ * Portion options: the product's own serving, any named servings, then the
+ * generic units. Each carries its size so the picker can show what a portion
+ * works out to before you commit to it.
  */
-const options = computed(() => {
-  const list: { key: string; label: string; grams: number | null }[] = []
+const options = computed<PortionOption[]>(() => {
+  const list: PortionOption[] = []
   const f = food.value
   if (!f) return list
 
@@ -37,34 +60,70 @@ const options = computed(() => {
     list.push({
       key: 'serving',
       label: f.serving_size_text?.trim() || 'serving',
-      grams: f.serving_grams,
+      size: f.serving_grams,
+      kind: 'serving',
     })
   }
   for (const s of data.value?.servings ?? []) {
-    list.push({ key: `s${s.id}`, label: s.label, grams: s.grams })
+    list.push({ key: `s${s.id}`, label: s.label, size: s.grams, kind: 'serving' })
   }
-  list.push({ key: 'grams', label: unit.value, grams: null })
+  for (const u of portionUnits(isLiquid.value)) {
+    list.push({
+      key: `u:${u.key}`,
+      label: u.label,
+      size: u.size,
+      kind: u.size === 1 ? 'base' : 'unit',
+    })
+  }
   return list
 })
+
+/**
+ * Does this label already state a size? Open Food Facts serving text usually
+ * does — "5.3 ONZ (150 g)" — and appending our own would give "(150 g) (150 g)".
+ */
+const STATES_SIZE = /\d\s*(g|ml|kg|l)\b/i
+
+/** "oz (28 g)" — the equivalence belongs in the option, not just after it. */
+function optionLabel(o: PortionOption) {
+  if (o.size === 1 || STATES_SIZE.test(o.label)) return o.label
+  return `${o.label} (${roundGrams(o.size)} ${unit.value})`
+}
 
 const selectedKey = ref<string>('')
 const amount = ref(1)
 
-// Default to the product's stated serving; fall back to 100 g.
+// Default to the product's stated serving, else the user's preferred unit.
 watchEffect(() => {
   if (!food.value || selectedKey.value) return
-  const first = options.value[0]
-  if (!first) return
-  selectedKey.value = first.key
-  amount.value = first.grams ? 1 : 100
+  const stated = options.value.find((o) => o.kind === 'serving')
+  if (stated) {
+    selectedKey.value = stated.key
+    amount.value = 1
+    return
+  }
+  const preferred = `u:${defaultUnitKey(system.value, isLiquid.value)}`
+  const fallback = options.value[0]
+  const option = options.value.find((o) => o.key === preferred) ?? fallback
+  if (!option) return
+  selectedKey.value = option.key
+  amount.value = defaultAmount(option)
 })
 
 const selected = computed(() => options.value.find((o) => o.key === selectedKey.value))
 
-const grams = computed(() => {
+const grams = computed(() => (selected.value ? amount.value * selected.value.size : 0))
+
+/**
+ * Shown whenever the chosen unit isn't already grams/millilitres. Suppressed
+ * for a single serving whose label states its own size, where the line would
+ * just be "1 × 5.3 ONZ (150 g) = 150 g".
+ */
+const conversion = computed(() => {
   const opt = selected.value
-  if (!opt) return 0
-  return opt.grams === null ? amount.value : amount.value * opt.grams
+  if (!opt || opt.kind === 'base' || !amount.value) return null
+  if (amount.value === 1 && STATES_SIZE.test(opt.label)) return null
+  return `${amount.value} × ${opt.label} = ${roundGrams(grams.value)} ${unit.value}`
 })
 
 const preview = computed(() =>
@@ -72,8 +131,9 @@ const preview = computed(() =>
 )
 
 function onPortionChange() {
-  // Switching between "1 serving" and "100 g" needs a sane starting amount.
-  amount.value = selected.value?.grams === null ? 100 : 1
+  // Switching between "1 serving", "100 g" and "4 oz" needs a sane starting
+  // amount — leaving `1` behind after a switch to grams is a 1 g portion.
+  if (selected.value) amount.value = defaultAmount(selected.value)
 }
 
 const saving = ref(false)
@@ -84,11 +144,14 @@ async function save() {
   saving.value = true
   saveError.value = null
 
+  // Grams are what gets stored; the label and count ride along only so the
+  // diary can redisplay "4 × oz" instead of "113 g".
   const opt = selected.value
+  const named = opt && opt.kind !== 'base'
   const body = {
     grams: grams.value,
-    serving_label: opt && opt.grams !== null ? opt.label : null,
-    serving_count: opt && opt.grams !== null ? amount.value : null,
+    serving_label: named ? opt!.label : null,
+    serving_count: named ? amount.value : null,
   }
 
   try {
@@ -158,11 +221,15 @@ async function remove() {
               @change="onPortionChange"
             >
               <option v-for="o in options" :key="o.key" :value="o.key">
-                {{ o.label }}
+                {{ optionLabel(o) }}
               </option>
             </select>
           </label>
         </div>
+
+        <p v-if="conversion" class="text-xs text-base-content/60 tabular -mt-1">
+          {{ conversion }}
+        </p>
 
         <label class="form-control">
           <span class="label-text text-xs mb-1">Meal</span>
@@ -181,7 +248,7 @@ async function remove() {
         </label>
 
         <p class="text-xs text-base-content/50 tabular">
-          Logging {{ Math.round(grams) }} {{ unit }}
+          Logging {{ roundGrams(grams) }} {{ unit }}
         </p>
       </div>
     </section>
