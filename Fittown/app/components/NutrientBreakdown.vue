@@ -1,0 +1,111 @@
+<script setup lang="ts">
+import { NUTRIENTS, type NutrientTotals } from '#shared/nutrients'
+import type { Goals } from '~/composables/useDiary'
+
+const props = defineProps<{
+  totals: NutrientTotals
+  goals?: Goals
+}>()
+
+const GROUP_LABELS: Record<string, string> = {
+  macro: 'Macronutrients',
+  vitamin: 'Vitamins',
+  mineral: 'Minerals',
+  other: 'Other',
+}
+
+/**
+ * The user's own goals override the generic reference values for the handful
+ * of nutrients they can actually configure.
+ */
+function targetFor(key: string, fallback?: number) {
+  const goals = props.goals
+  if (!goals) return fallback
+  const overrides: Record<string, number> = {
+    protein_g: goals.protein_g,
+    carbs_g: goals.carbs_g,
+    fat_g: goals.fat_g,
+    fiber_g: goals.fiber_g,
+  }
+  return overrides[key] ?? fallback
+}
+
+const groups = computed(() =>
+  Object.entries(GROUP_LABELS).map(([group, label]) => ({
+    label,
+    rows: NUTRIENTS.filter((n) => n.group === group && n.key !== 'kcal').map((n) => {
+      // Absent means "Open Food Facts doesn't record this", which is not the
+      // same as zero. Rendering it as 0 would tell someone they got none of a
+      // vitamin when in truth we simply don't know — so it stays unknown.
+      const raw = props.totals[n.key]
+      const known = typeof raw === 'number' && Number.isFinite(raw)
+      const value = known ? raw : null
+      const target = targetFor(n.key, n.rda)
+      const pct = known && target ? Math.round((value! / target) * 100) : null
+      return { ...n, value, target, pct }
+    }),
+  })),
+)
+
+/** Hide groups where nothing at all is known, rather than a wall of dashes. */
+const visibleGroups = computed(() =>
+  groups.value.filter((g) => g.rows.some((r) => r.value !== null)),
+)
+
+/** Under-target is neutral; over a *limit* is a warning, over a target is good. */
+function barClass(limit: boolean | undefined, pct: number | null) {
+  if (pct === null) return 'bg-base-content/20'
+  if (limit) return pct > 100 ? 'bg-error' : 'bg-base-content/30'
+  if (pct >= 100) return 'bg-success'
+  if (pct >= 50) return 'bg-primary'
+  return 'bg-primary/50'
+}
+</script>
+
+<template>
+  <div class="flex flex-col gap-4">
+    <div v-for="group in visibleGroups" :key="group.label">
+      <h3 class="text-xs font-semibold uppercase tracking-wide text-base-content/50 mb-2">
+        {{ group.label }}
+      </h3>
+
+      <ul class="flex flex-col gap-1.5">
+        <li
+          v-for="row in group.rows"
+          :key="row.key"
+          class="grid grid-cols-[1fr_auto] gap-x-3 gap-y-1 items-center text-sm"
+          :class="{ 'opacity-45': row.value === null }"
+        >
+          <span class="truncate">
+            {{ row.label }}
+            <span v-if="row.limit" class="text-[0.65rem] text-base-content/40">limit</span>
+          </span>
+
+          <span class="tabular text-right text-base-content/70">
+            <template v-if="row.value !== null">
+              {{ row.value.toFixed(row.decimals) }}<span class="text-base-content/40"> {{ row.unit }}</span>
+            </template>
+            <span v-else class="text-base-content/40" title="Not recorded for this food">
+              not recorded
+            </span>
+            <span v-if="row.pct !== null" class="ml-2 inline-block w-11 text-right">
+              {{ row.pct }}%
+            </span>
+          </span>
+
+          <div v-if="row.value !== null" class="col-span-2 h-1 rounded-full bg-base-300 overflow-hidden">
+            <div
+              class="h-full rounded-full transition-all"
+              :class="barClass(row.limit, row.pct)"
+              :style="`width:${Math.min(100, row.pct ?? 0)}%`"
+            />
+          </div>
+        </li>
+      </ul>
+    </div>
+
+    <p v-if="!visibleGroups.length" class="text-sm text-base-content/50">
+      No detailed nutrition recorded for this food.
+    </p>
+  </div>
+</template>

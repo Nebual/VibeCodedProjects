@@ -1,0 +1,44 @@
+@import "tailwindcss";
+
+@plugin "daisyui" {
+  themes: light --default, dark --prefersdark;
+}
+
+/*
+ * Colour roles used across the diary. Defined once here rather than repeated
+ * as literals so the macro colours stay consistent between the ring, the
+ * legend and the per-entry bars.
+ */
+@theme {
+  --color-macro-protein: oklch(0.68 0.16 25);
+  --color-macro-carbs: oklch(0.75 0.15 85);
+  --color-macro-fat: oklch(0.72 0.13 230);
+}
+
+/*
+ * Respect the iOS safe area so the bottom dock clears the home indicator, and
+ * keep the fixed dock from covering the last diary row.
+ */
+:root {
+  --dock-height: 4rem;
+}
+
+.pb-dock {
+  padding-bottom: calc(var(--dock-height) + env(safe-area-inset-bottom, 0px) + 1rem);
+}
+
+/* Stop iOS Safari zooming the page when a text input is focused. */
+@media (max-width: 640px) {
+  input[type="text"],
+  input[type="number"],
+  input[type="search"],
+  input[type="email"],
+  select {
+    font-size: 16px;
+  }
+}
+
+/* Numeric columns line up when digits share a width. */
+.tabular {
+  font-variant-numeric: tabular-nums;
+}

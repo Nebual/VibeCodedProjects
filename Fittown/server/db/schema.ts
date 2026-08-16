@@ -1,0 +1,229 @@
+// Auto-derived from the annotated schema. Single source of truth for the DB shape.
+// Applied idempotently on boot by server/utils/db.ts.
+
+export const SCHEMA_SQL = `
+-- Fittown schema. Applied idempotently on boot by server/utils/db.ts.
+
+-- ---------------------------------------------------------------------------
+-- People
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS users (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  google_sub    TEXT UNIQUE,              -- Google's stable subject id
+  email         TEXT UNIQUE NOT NULL,
+  name          TEXT NOT NULL DEFAULT '',
+  avatar_url    TEXT,
+  created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- One row per user. Nutrition targets the diary compares against.
+CREATE TABLE IF NOT EXISTS user_goals (
+  user_id         INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  calorie_goal    REAL NOT NULL DEFAULT 2000,
+  protein_g       REAL NOT NULL DEFAULT 150,
+  carbs_g         REAL NOT NULL DEFAULT 200,
+  fat_g           REAL NOT NULL DEFAULT 65,
+  fiber_g         REAL NOT NULL DEFAULT 30,
+  water_goal_ml   REAL NOT NULL DEFAULT 2500,
+  -- 'kg' | 'lb' — display only; weights are always stored in kg.
+  weight_unit     TEXT NOT NULL DEFAULT 'kg',
+  -- 'ml' | 'floz' — display only; water is always stored in ml.
+  volume_unit     TEXT NOT NULL DEFAULT 'ml',
+  -- Add exercise calories back onto the day's remaining budget?
+  exercise_adds_calories INTEGER NOT NULL DEFAULT 1,
+  sex             TEXT,                   -- 'male' | 'female' | null; for MET/BMR math
+  birth_year      INTEGER,
+  height_cm       REAL,
+  updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- ---------------------------------------------------------------------------
+-- Food database
+--
+-- Holds both imported Open Food Facts products and user-created custom foods.
+-- All nutrient values are per 100 g (or per 100 ml for liquids) so that
+-- portion math is a single multiply. Nulls mean "unknown", which is
+-- meaningfully different from zero and must not be coerced.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS foods (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  source          TEXT NOT NULL,          -- 'off' | 'custom'
+  barcode         TEXT,                   -- OFF \`code\`; null for most custom foods
+  name            TEXT NOT NULL,
+  brand           TEXT,
+  quantity        TEXT,                   -- package size as written, e.g. "500 g"
+  categories      TEXT,
+  image_url       TEXT,
+
+  -- Default serving parsed from OFF (\`serving_size\` text + grams).
+  serving_size_text TEXT,
+  serving_grams     REAL,
+
+  -- Custom foods belong to the user who made them; OFF foods are shared (null).
+  owner_user_id   INTEGER REFERENCES users(id) ON DELETE CASCADE,
+
+  -- Is this measured per 100ml rather than per 100g?
+  is_liquid       INTEGER NOT NULL DEFAULT 0,
+
+  -- Macros (per 100g/ml)
+  kcal            REAL,
+  protein_g       REAL,
+  carbs_g         REAL,
+  fat_g           REAL,
+  fiber_g         REAL,
+  sugars_g        REAL,
+  added_sugars_g  REAL,
+  sat_fat_g       REAL,
+  trans_fat_g     REAL,
+  mono_fat_g      REAL,
+  poly_fat_g      REAL,
+  omega3_g        REAL,
+  cholesterol_mg  REAL,
+  sodium_mg       REAL,
+  salt_g          REAL,
+  alcohol_g       REAL,
+  caffeine_mg     REAL,
+  water_g         REAL,
+
+  -- Minerals (mg unless noted)
+  potassium_mg    REAL,
+  calcium_mg      REAL,
+  iron_mg         REAL,
+  magnesium_mg    REAL,
+  zinc_mg         REAL,
+  phosphorus_mg   REAL,
+  selenium_ug     REAL,
+  copper_mg       REAL,
+  manganese_mg    REAL,
+  iodine_ug       REAL,
+
+  -- Vitamins
+  vit_a_ug        REAL,
+  vit_c_mg        REAL,
+  vit_d_ug        REAL,
+  vit_e_mg        REAL,
+  vit_k_ug        REAL,
+  vit_b1_mg       REAL,
+  vit_b2_mg       REAL,
+  vit_b3_mg       REAL,
+  vit_b6_mg       REAL,
+  folate_ug       REAL,
+  vit_b12_ug      REAL,
+
+  nutriscore      TEXT,
+  nova_group      INTEGER,
+
+  -- OFF popularity (scan count). Used to rank search results so that the
+  -- products people actually buy float to the top.
+  popularity      INTEGER NOT NULL DEFAULT 0,
+
+  created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_foods_barcode ON foods(barcode) WHERE barcode IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_foods_owner   ON foods(owner_user_id) WHERE owner_user_id IS NOT NULL;
+-- Upsert target for the OFF importer. Keying on (source, barcode) keeps food
+-- ids stable across re-imports, so existing diary entries never re-point at a
+-- different product when the dataset is refreshed. SQLite treats NULLs as
+-- distinct, so custom foods without a barcode never collide.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_foods_source_barcode ON foods(source, barcode);
+
+-- Full-text search over name + brand. Kept in sync manually (bulk-rebuilt by
+-- the importer, trigger-maintained for custom foods) rather than via an
+-- external-content table, so the importer can load rows fast and index once.
+CREATE VIRTUAL TABLE IF NOT EXISTS foods_fts USING fts5(
+  name,
+  brand,
+  content='foods',
+  content_rowid='id',
+  tokenize='unicode61 remove_diacritics 2'
+);
+
+-- Named portions for a food, e.g. "1 slice" = 28 g.
+CREATE TABLE IF NOT EXISTS food_servings (
+  id        INTEGER PRIMARY KEY AUTOINCREMENT,
+  food_id   INTEGER NOT NULL REFERENCES foods(id) ON DELETE CASCADE,
+  label     TEXT NOT NULL,
+  grams     REAL NOT NULL,
+  is_default INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_food_servings_food ON food_servings(food_id);
+
+-- ---------------------------------------------------------------------------
+-- Diary
+-- ---------------------------------------------------------------------------
+
+-- One logged food. \`grams\` is the resolved amount actually eaten; the
+-- serving label/count are kept only so the UI can redisplay "2 x slice".
+CREATE TABLE IF NOT EXISTS diary_entries (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  date          TEXT NOT NULL,            -- local calendar day, 'YYYY-MM-DD'
+  meal          TEXT NOT NULL,            -- 'breakfast'|'lunch'|'dinner'|'snack'
+  food_id       INTEGER NOT NULL REFERENCES foods(id) ON DELETE RESTRICT,
+  grams         REAL NOT NULL,
+  serving_label TEXT,
+  serving_count REAL,
+  sort_order    INTEGER NOT NULL DEFAULT 0,
+  created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_diary_user_date ON diary_entries(user_id, date);
+
+CREATE TABLE IF NOT EXISTS water_entries (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  date       TEXT NOT NULL,
+  amount_ml  REAL NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_water_user_date ON water_entries(user_id, date);
+
+-- ---------------------------------------------------------------------------
+-- Fitness
+-- ---------------------------------------------------------------------------
+
+-- Exercise library. Seeded with common activities; users can add their own.
+-- \`met\` is the Compendium of Physical Activities metabolic equivalent, used
+-- to estimate burn when the user doesn't supply a figure.
+CREATE TABLE IF NOT EXISTS exercises (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  name          TEXT NOT NULL,
+  category      TEXT NOT NULL DEFAULT 'cardio',   -- 'cardio' | 'strength' | 'other'
+  met           REAL,
+  owner_user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_exercises_owner ON exercises(owner_user_id);
+
+CREATE TABLE IF NOT EXISTS workout_entries (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  date         TEXT NOT NULL,
+  exercise_id  INTEGER NOT NULL REFERENCES exercises(id) ON DELETE RESTRICT,
+  duration_min REAL,
+  calories     REAL,                       -- resolved burn (estimated or entered)
+  -- Strength logging
+  sets         INTEGER,
+  reps         INTEGER,
+  weight_kg    REAL,
+  distance_km  REAL,
+  notes        TEXT,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_workout_user_date ON workout_entries(user_id, date);
+
+-- ---------------------------------------------------------------------------
+-- Body metrics
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS weight_entries (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  date       TEXT NOT NULL,
+  weight_kg  REAL NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(user_id, date)
+);
+`
