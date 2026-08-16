@@ -91,6 +91,7 @@ const NUTRIENTS = {
   fiber_g: ['fiber_100g', 1, 100],
   sugars_g: ['sugars_100g', 1, 100],
   added_sugars_g: ['added-sugars_100g', 1, 100],
+  sugar_alcohols_g: ['polyols_100g', 1, 100],
   sat_fat_g: ['saturated-fat_100g', 1, 100],
   trans_fat_g: ['trans-fat_100g', 1, 100],
   mono_fat_g: ['monounsaturated-fat_100g', 1, 100],

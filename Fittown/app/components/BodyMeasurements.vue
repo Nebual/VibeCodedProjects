@@ -25,6 +25,13 @@ const emit = defineEmits<{
 
 const editing = ref(false)
 const draft = ref<number | null>(null)
+const weightInput = useTemplateRef<HTMLInputElement>('weightInput')
+
+watch(editing, async (open) => {
+  if (!open) return
+  await nextTick()
+  weightInput.value?.focus()
+})
 
 /** One decimal is the precision of a bathroom scale; more is false confidence. */
 function inUnit(kg: number, unit: WeightUnit) {
@@ -77,11 +84,24 @@ function saveWeight() {
  */
 const editingType = ref<number | null>(null)
 const valueDraft = ref<number | null>(null)
+// A plain (non-`useTemplateRef`) callback ref: inside `v-for`, Vue always
+// collects a named template ref into an array, even though at most one row is
+// ever in edit mode at a time — this stores just that one element instead.
+let measureInputEl: HTMLInputElement | null = null
+function setMeasureInputEl(el: Element | null) {
+  measureInputEl = el as HTMLInputElement | null
+}
 
 function startMeasure(row: BiometricRow) {
   editingType.value = row.id
   valueDraft.value = row.value
 }
+
+watch(editingType, async (id) => {
+  if (id === null) return
+  await nextTick()
+  measureInputEl?.focus()
+})
 
 function commitMeasure(row: BiometricRow) {
   if (editingType.value !== row.id) return
@@ -142,6 +162,7 @@ const confirmingRemove = ref<number | null>(null)
       <div v-if="editing" class="flex flex-col gap-2">
         <div class="join w-full">
           <input
+            ref="weightInput"
             v-model.number="draft"
             type="number" min="10" step="any" inputmode="decimal"
             class="input input-bordered input-sm join-item flex-1"
@@ -187,11 +208,11 @@ const confirmingRemove = ref<number | null>(null)
 
         <template v-if="editingType === row.id">
           <input
+            :ref="setMeasureInputEl"
             v-model.number="valueDraft"
             type="number" step="any" inputmode="decimal"
             class="input input-bordered input-xs w-20 tabular"
             :aria-label="row.name"
-            autofocus
             @keyup.enter="commitMeasure(row)"
             @blur="commitMeasure(row)"
           >

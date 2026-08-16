@@ -209,7 +209,7 @@ const logLink = computed(
             <input
               v-model.number="servingsInput"
               type="number"
-              min="0.1"
+              min="0"
               step="any"
               inputmode="decimal"
               class="input input-bordered w-full"
@@ -321,6 +321,36 @@ const logLink = computed(
       </div>
     </section>
 
+    <div class="flex gap-2">
+      <button
+        v-if="!confirmDelete"
+        class="btn btn-outline btn-error"
+        :disabled="saving"
+        aria-label="Delete recipe"
+        @click="confirmDelete = true"
+      >
+        <AppIcon name="trash" class="w-4 h-4" />
+      </button>
+      <button
+        v-else
+        class="btn btn-error gap-2"
+        :disabled="saving"
+        @click="remove"
+      >
+        <AppIcon name="trash" class="w-4 h-4" />
+        Delete for good
+      </button>
+
+      <NuxtLink
+        v-if="servingGrams"
+        :to="logLink"
+        class="btn btn-primary flex-1 gap-2"
+      >
+        <AppIcon name="plus" class="w-4 h-4" />
+        Log this
+      </NuxtLink>
+    </div>
+
     <!-- What it comes to -->
     <section class="card bg-base-100 shadow-sm">
       <div class="card-body p-4 gap-3">
@@ -358,35 +388,5 @@ const logLink = computed(
         </p>
       </div>
     </section>
-
-    <div class="flex gap-2">
-      <button
-        v-if="!confirmDelete"
-        class="btn btn-outline btn-error"
-        :disabled="saving"
-        aria-label="Delete recipe"
-        @click="confirmDelete = true"
-      >
-        <AppIcon name="trash" class="w-4 h-4" />
-      </button>
-      <button
-        v-else
-        class="btn btn-error gap-2"
-        :disabled="saving"
-        @click="remove"
-      >
-        <AppIcon name="trash" class="w-4 h-4" />
-        Delete for good
-      </button>
-
-      <NuxtLink
-        v-if="servingGrams"
-        :to="logLink"
-        class="btn btn-primary flex-1 gap-2"
-      >
-        <AppIcon name="plus" class="w-4 h-4" />
-        Log this
-      </NuxtLink>
-    </div>
   </div>
 </template>

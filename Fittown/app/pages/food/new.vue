@@ -150,7 +150,7 @@ const macroFields = [
           <span class="label-text text-xs mb-1">Serving size ({{ unit }})</span>
           <input
             v-model.number="form.basis_grams"
-            type="number" min="0.1" step="any" inputmode="decimal"
+            type="number" min="0" step="any" inputmode="decimal"
             class="input input-bordered"
           >
         </label>

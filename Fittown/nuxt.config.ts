@@ -24,7 +24,11 @@ export default defineNuxtConfig({
         { name: 'apple-mobile-web-app-capable', content: 'yes' },
         { name: 'apple-mobile-web-app-status-bar-style', content: 'black-translucent' },
       ],
-      link: [{ rel: 'manifest', href: '/manifest.webmanifest' }],
+      link: [
+        { rel: 'manifest', href: '/manifest.webmanifest' },
+        // iOS Safari's "Add to Home Screen" reads this directly and ignores the manifest.
+        { rel: 'apple-touch-icon', href: '/apple-touch-icon.png' },
+      ],
     },
   },
 

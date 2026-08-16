@@ -107,6 +107,7 @@ CREATE TABLE IF NOT EXISTS foods (
   fiber_g         REAL,
   sugars_g        REAL,
   added_sugars_g  REAL,
+  sugar_alcohols_g REAL,
   sat_fat_g       REAL,
   trans_fat_g     REAL,
   mono_fat_g      REAL,

@@ -59,6 +59,7 @@ async function setWeightUnit(unit: 'kg' | 'lb') {
         :entries="day.meals[meal] ?? []"
         :date="date!"
         @remove="removeEntry"
+        @quick-add="refresh"
       />
 
       <WaterTracker

@@ -33,6 +33,7 @@ export const NUTRIENTS: NutrientDef[] = [
   { key: 'fiber_g', label: 'Fibre', unit: 'g', group: 'macro', rda: 28, decimals: 1 },
   { key: 'sugars_g', label: 'Sugars', unit: 'g', group: 'macro', decimals: 1 },
   { key: 'added_sugars_g', label: 'Added sugars', unit: 'g', group: 'macro', rda: 50, limit: true, decimals: 1 },
+  { key: 'sugar_alcohols_g', label: 'Sugar alcohols', unit: 'g', group: 'macro', decimals: 1 },
   { key: 'sat_fat_g', label: 'Saturated fat', unit: 'g', group: 'macro', rda: 20, limit: true, decimals: 1 },
   { key: 'trans_fat_g', label: 'Trans fat', unit: 'g', group: 'macro', decimals: 2 },
   { key: 'mono_fat_g', label: 'Monounsaturated', unit: 'g', group: 'macro', decimals: 1 },

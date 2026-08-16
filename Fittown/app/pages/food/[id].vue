@@ -182,20 +182,6 @@ const canRemove = computed(() => !!entryId.value || !!ingredientId.value)
       </div>
     </section>
 
-    <!-- What that portion contains -->
-    <section class="card bg-base-100 shadow-sm">
-      <div class="card-body p-4 gap-3">
-        <div class="flex items-baseline justify-between">
-          <h2 class="font-semibold">In this portion</h2>
-          <span class="text-2xl font-semibold tabular">
-            {{ Math.round(preview.kcal ?? 0) }}
-            <span class="text-sm font-normal text-base-content/60">kcal</span>
-          </span>
-        </div>
-        <NutrientBreakdown :totals="preview" />
-      </div>
-    </section>
-
     <NuxtLink
       v-if="editingRecipe && !recipeId"
       :to="`/recipes/${food.id}`"
@@ -226,5 +212,19 @@ const canRemove = computed(() => !!entryId.value || !!ingredientId.value)
         {{ saveLabel }}
       </button>
     </div>
+
+    <!-- What that portion contains -->
+    <section class="card bg-base-100 shadow-sm">
+      <div class="card-body p-4 gap-3">
+        <div class="flex items-baseline justify-between">
+          <h2 class="font-semibold">In this portion</h2>
+          <span class="text-2xl font-semibold tabular">
+            {{ Math.round(preview.kcal ?? 0) }}
+            <span class="text-sm font-normal text-base-content/60">kcal</span>
+          </span>
+        </div>
+        <NutrientBreakdown :totals="preview" />
+      </div>
+    </section>
   </div>
 </template>

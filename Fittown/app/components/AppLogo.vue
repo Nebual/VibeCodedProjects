@@ -1,12 +1,34 @@
 <template>
-  <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-    <circle cx="12" cy="12" r="10" class="fill-primary/15" />
+  <svg viewBox="0 0 256 256" aria-hidden="true">
+    <defs>
+      <linearGradient id="appLogoBg" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="#2E7BF0" />
+        <stop offset="100%" stop-color="#144FA8" />
+      </linearGradient>
+      <linearGradient id="appLogoPulse" x1="0%" y1="0%" x2="100%" y2="0%">
+        <stop offset="0%" stop-color="#FFB066" />
+        <stop offset="100%" stop-color="#F5821F" />
+      </linearGradient>
+    </defs>
+
+    <rect x="6" y="6" width="244" height="244" rx="58" fill="url(#appLogoBg)" />
+    <rect x="6" y="6" width="244" height="244" rx="58" fill="none" stroke="#0E3E8C" stroke-width="4" opacity="0.6" />
+    <ellipse cx="90" cy="70" rx="120" ry="70" fill="#ffffff" opacity="0.07" />
+
     <path
-      d="M7 15.5c2.2 0 2.2-3 4.4-3s2.2 3 4.4 3M8.5 9.5h7"
-      stroke="currentColor"
-      class="text-primary"
-      stroke-width="2"
+      d="M128,196 C 60,146 44,104 64,80 C 82,58 112,64 128,90 C 144,64 174,58 192,80 C 212,104 196,146 128,196 Z"
+      fill="none"
+      stroke="#FFFFFF"
+      stroke-width="10"
+      opacity="0.85"
+    />
+    <path
+      d="M42,132 L88,132 L102,102 L120,164 L136,116 L150,132 L214,132"
+      fill="none"
+      stroke="url(#appLogoPulse)"
+      stroke-width="14"
       stroke-linecap="round"
+      stroke-linejoin="round"
     />
   </svg>
 </template>

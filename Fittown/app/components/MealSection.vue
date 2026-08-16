@@ -9,7 +9,9 @@ const props = defineProps<{
   date: string
 }>()
 
-defineEmits<{ remove: [id: number] }>()
+defineEmits<{ remove: [id: number]; 'quick-add': [] }>()
+
+const showQuickAdd = ref(false)
 
 const kcal = computed(() =>
   Math.round(props.entries.reduce((sum, e) => sum + (e.nutrients.kcal ?? 0), 0)),
@@ -101,13 +103,29 @@ function editLink(entry: DiaryEntry) {
         off the screen. The "Add food" button already says the section is empty.
       -->
 
-      <NuxtLink
-        :to="`/add?meal=${meal}&d=${date}`"
-        class="btn btn-ghost btn-sm justify-start gap-2 m-2 mt-1 text-primary"
-      >
-        <AppIcon name="plus" class="w-4 h-4" />
-        Add food
-      </NuxtLink>
+      <div class="flex items-center gap-1 m-2 mt-1">
+        <NuxtLink
+          :to="`/add?meal=${meal}&d=${date}`"
+          class="btn btn-ghost btn-sm gap-2 text-primary"
+        >
+          <AppIcon name="plus" class="w-4 h-4" />
+          Add food
+        </NuxtLink>
+        <button
+          class="btn btn-ghost btn-xs text-base-content/60"
+          @click="showQuickAdd = true"
+        >
+          Quick add
+        </button>
+      </div>
     </div>
+
+    <QuickAddDialog
+      :open="showQuickAdd"
+      :meal="meal"
+      :date="date"
+      @close="showQuickAdd = false"
+      @saved="showQuickAdd = false; $emit('quick-add')"
+    />
   </section>
 </template>

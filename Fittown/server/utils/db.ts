@@ -86,6 +86,7 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
   foods: {
     recipe_servings: 'REAL',
     recipe_final_weight_g: 'REAL',
+    sugar_alcohols_g: 'REAL',
   },
 }
 
