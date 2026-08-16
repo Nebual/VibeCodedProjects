@@ -42,6 +42,20 @@ for (const [name, path] of shots) {
   await page.screenshot({ path: `${OUT}/${name}.png`, fullPage: true })
 }
 
+// The activity category grid, and one activity's effort picker.
+await page.goto(`${BASE}/fitness`, { waitUntil: 'networkidle' })
+await page.waitForTimeout(700)
+await page.screenshot({ path: `${OUT}/03b-activity-categories.png`, fullPage: true })
+
+await page.getByPlaceholder('Search activities').fill('Running')
+await page.waitForTimeout(1100)
+const runResult = page.locator('ul li button:has-text("Running")').first()
+if (await runResult.count()) {
+  await runResult.click()
+  await page.waitForTimeout(600)
+  await page.screenshot({ path: `${OUT}/03c-effort-levels.png`, fullPage: true })
+}
+
 // Trends, year view — a different layout, not just a wider range.
 await page.goto(`${BASE}/trends`, { waitUntil: 'networkidle' })
 await page.getByRole('tab', { name: '1y' }).click()

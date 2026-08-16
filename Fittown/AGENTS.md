@@ -46,8 +46,11 @@ user's Linux box.
 `$SRC/data/fittown.db` is the **deliverable** and is supposed to contain the
 food library and nothing personal. The working copy's database fills up with
 test users and junk entries, and it is very easy to clobber one with the other
-— it happened during the first build, after the deliverable had already been
-verified clean. Two rules:
+— it happened during the first build, and again in a later session, both times
+*after* the deliverable had already been verified clean. Assume it will happen
+to you: re-verify at the end rather than trusting a check from an hour ago, and
+treat stray `data/fittown.db-wal` / `-shm` files next to the deliverable as
+proof that something opened it for writing. Two rules:
 
 - Keep `--exclude data` on **every** rsync, in both directions.
 - Before handing over, regenerate and re-verify rather than trusting an earlier
@@ -87,7 +90,7 @@ There is no unit-test suite. The safety net is an end-to-end script that drives
 the real app:
 
 ```bash
-cd $RUN && node scripts/e2e.mjs          # 15 steps, fails on any console error
+cd $RUN && node scripts/e2e.mjs          # 19 steps, fails on any console error
 node scripts/screenshots.mjs /tmp/shots  # mobile, dark, desktop — then Read them
 pnpm build                               # catches things dev mode hides
 ```
@@ -165,6 +168,28 @@ component, move it. Food and body measurements have *separate* preferences
 (`food_system` vs `weight_unit`/`height_unit`) because Canadian households
 routinely weigh food in grams and themselves in pounds.
 
+**The exercise library syncs on every boot, keyed by name.**
+`shared/activities.ts` is the source of truth; `syncExerciseLibrary()` upserts
+it into `exercises` on `name` (a partial unique index over
+`owner_user_id IS NULL`). Name is the natural key **because ids must stay
+stable** — `workout_entries` reference them, and re-seeding by delete-and-
+insert would silently re-point last month's runs at different activities.
+Renaming an activity in that file therefore creates a new row; the old one
+survives if anything was logged against it, and is dropped otherwise.
+
+MET values come from the 2024 Adult Compendium (pacompendium.com). Where an
+activity has measured light/moderate/vigorous rows we store all three
+(`met_light`, `met`, `met_hard`); `met` alone means effort doesn't change the
+cost and the UI hides the picker. Interpolated middles are flagged `estimated`
+in the library — fix those first if better data turns up.
+
+**Weight is not just another biometric.** It lives in `weight_entries` and
+feeds BMR, the calorie target and every workout estimate. Custom measurements
+live in `biometric_types` / `biometric_entries` and feed nothing. Don't merge
+them for tidiness. Biometric units belong to the *type* and values are stored
+as entered — converting someone's tape-measure readings would make them stop
+matching their notebook.
+
 **Every API route calls `requireUser(event)` and scopes queries by `user_id`.**
 Deletes/updates use `WHERE id = ? AND user_id = ?` so a guessed ID is a no-op.
 Keep that pattern.
@@ -204,7 +229,7 @@ in place (~10 s) instead of a two-minute re-import.
 ```
 app/
   components/    CalorieSummary, MealSection, WaterTracker, FitnessSection,
-                 WeightCard, CalorieTargetDialog,
+                 BodyMeasurements, CalorieTargetDialog, ActivityPicker,
                  NutrientBreakdown, FoodResultList, BarcodeScanner, DateNav,
                  AppIcon (inline SVG set — no icon dependency)
   composables/   useDiary (day data + all mutations), useToday (timezone)
@@ -214,10 +239,11 @@ app/
   middleware/    auth.global.ts — every route is private except /login
 server/
   api/           REST endpoints; diary/index.get.ts assembles a whole day
-  db/            schema.ts (single source of truth), seed-exercises.ts
+  db/            schema.ts (single source of truth)
   routes/auth/   google.get.ts, dev.post.ts, logout.post.ts
   utils/         db, auth, validate, foods (search ranking lives here)
-shared/          nutrients.ts — nutrient catalogue used by both sides
+shared/          nutrients.ts  — nutrient catalogue used by both sides
+                 activities.ts — exercise library, categories, effort METs
                  body.ts      — units, activity levels, BMR/TDEE, target maths
                  portions.ts  — portion units and their gram equivalents
 scripts/         import-off, fix-liquid-flags, reset-user-data, e2e, screenshots

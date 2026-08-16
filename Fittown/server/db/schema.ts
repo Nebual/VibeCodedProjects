@@ -21,9 +21,11 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS user_goals (
   user_id         INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   calorie_goal    REAL NOT NULL DEFAULT 2000,
-  protein_g       REAL NOT NULL DEFAULT 150,
-  carbs_g         REAL NOT NULL DEFAULT 200,
-  fat_g           REAL NOT NULL DEFAULT 65,
+  -- 25% protein / 45% carbs / 30% fat of 2000 kcal, a common balanced split.
+  -- Grams are the stored form; the ratio is derived from them in Settings.
+  protein_g       REAL NOT NULL DEFAULT 125,
+  carbs_g         REAL NOT NULL DEFAULT 225,
+  fat_g           REAL NOT NULL DEFAULT 67,
   fiber_g         REAL NOT NULL DEFAULT 30,
   water_goal_ml   REAL NOT NULL DEFAULT 2500,
   -- 'kg' | 'lb' — display only; weights are always stored in kg.
@@ -212,12 +214,36 @@ CREATE INDEX IF NOT EXISTS idx_water_user_date ON water_entries(user_id, date);
 CREATE TABLE IF NOT EXISTS exercises (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   name          TEXT NOT NULL,
-  category      TEXT NOT NULL DEFAULT 'cardio',   -- 'cardio' | 'strength' | 'other'
+  category      TEXT NOT NULL DEFAULT 'cardio',   -- primary category, for badges
+  -- \`met\` is the moderate-effort value and the one used when no effort is
+  -- given. The other two are null for activities where effort doesn't
+  -- meaningfully change the cost (washing dishes, table tennis).
   met           REAL,
+  met_light     REAL,
+  met_hard      REAL,
+  -- Does the activity want sets/reps/weight or distance alongside duration?
+  tracks_sets     INTEGER NOT NULL DEFAULT 0,
+  tracks_distance INTEGER NOT NULL DEFAULT 0,
+  hint          TEXT,                             -- anchors effort to a pace
   owner_user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
   created_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_exercises_owner ON exercises(owner_user_id);
+-- Name is the natural key for the shared library, so the seed can upsert on it
+-- and keep ids stable — workout_entries reference them.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_exercises_shared_name
+  ON exercises(name) WHERE owner_user_id IS NULL;
+
+-- An activity belongs to several categories: cycling is cardio and outdoor,
+-- gardening is household and outdoor. A join table rather than a delimited
+-- column so the category grid can count and filter in SQL.
+CREATE TABLE IF NOT EXISTS exercise_categories (
+  exercise_id INTEGER NOT NULL REFERENCES exercises(id) ON DELETE CASCADE,
+  category    TEXT NOT NULL,
+  PRIMARY KEY (exercise_id, category)
+);
+CREATE INDEX IF NOT EXISTS idx_exercise_categories_cat
+  ON exercise_categories(category);
 
 CREATE TABLE IF NOT EXISTS workout_entries (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -226,6 +252,8 @@ CREATE TABLE IF NOT EXISTS workout_entries (
   exercise_id  INTEGER NOT NULL REFERENCES exercises(id) ON DELETE RESTRICT,
   duration_min REAL,
   calories     REAL,                       -- resolved burn (estimated or entered)
+  -- 'light' | 'moderate' | 'hard' | null. Picks which MET column was used.
+  effort       TEXT,
   -- Strength logging
   sets         INTEGER,
   reps         INTEGER,
@@ -248,4 +276,33 @@ CREATE TABLE IF NOT EXISTS weight_entries (
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   UNIQUE(user_id, date)
 );
+
+-- Anything else the user wants to track over time: bicep, waist, resting heart
+-- rate, body fat. Weight deliberately stays in its own table — it feeds the
+-- calorie maths and the BMR estimate, so it is not just another measurement.
+--
+-- The unit belongs to the *type*, not the value: a bicep measured in inches
+-- stays in inches, because converting someone's tape-measure readings behind
+-- their back would make the numbers stop matching their notebook.
+CREATE TABLE IF NOT EXISTS biometric_types (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name       TEXT NOT NULL,
+  unit       TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(user_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS biometric_entries (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  type_id    INTEGER NOT NULL REFERENCES biometric_types(id) ON DELETE CASCADE,
+  date       TEXT NOT NULL,
+  value      REAL NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(user_id, type_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_biometric_entries_user_date
+  ON biometric_entries(user_id, date);
 `

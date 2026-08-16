@@ -26,6 +26,20 @@ const paths: Record<string, string> = {
   check: 'm20 6-11 11-5-5',
   pencil: 'M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z',
   scale: 'M12 3v18M8 21h8M6 8h12l3 8a5 5 0 0 1-6 0l3-8M3 16l3-8',
+  ruler: 'M3 15 15 3l6 6L9 21l-6-6ZM7 11l2 2M10 8l2 2M13 5l2 2',
+
+  // Activity categories. Deliberately simple single-stroke shapes — they sit
+  // at 28px in the category grid, where detail turns to mud.
+  heart: 'M12 20s-7-4.5-7-9a4 4 0 0 1 7-2.6A4 4 0 0 1 19 11c0 4.5-7 9-7 9Z',
+  dumbbell: 'M6.5 6.5v11M17.5 6.5v11M3 9.5v5M21 9.5v5M6.5 12h11',
+  barbell: 'M2 12h20M5 7v10M19 7v10M8.5 9v6M15.5 9v6',
+  stretch: 'M12 4.5a1.6 1.6 0 1 0 0-3.2 1.6 1.6 0 0 0 0 3.2ZM12 7v6M12 13l-3.5 8M12 13l3.5 8M6 9.5l6 1.5 6-1.5',
+  // Seams only, no equator line — a circle crossed by a straight vertical and
+  // horizontal reads as a crosshair, not a ball.
+  ball: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18M7.6 4.3c2.4 4.6 2.4 10.8 0 15.4M16.4 4.3c-2.4 4.6-2.4 10.8 0 15.4',
+  mountain: 'm2 20 7-12 4.5 7.5L16 11l6 9H2Z',
+  home: 'M3 10.5 12 3l9 7.5M5.5 9.2V21h13V9.2M10 21v-6h4v6',
+  briefcase: 'M3 8.5h18V20H3zM8.5 8.5V5.5a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v3M3 13h18',
 }
 
 const d = computed(() => paths[props.name] ?? paths.plus!)

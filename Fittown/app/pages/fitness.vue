@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { EFFORT_LEVELS, estimateCalories, type EffortKey } from '#shared/activities'
+import type { Exercise } from '~/components/ActivityPicker.vue'
 import { useDiary } from '~/composables/useDiary'
 
 useHead({ title: 'Fitness · Fittown' })
@@ -16,15 +18,9 @@ const date = computed({
 
 const { day, addWorkout, removeWorkout } = useDiary(date)
 
-interface Exercise { id: number; name: string; category: string; met: number | null }
-const search = ref('')
-const { data: exerciseData } = await useFetch<{ results: Exercise[] }>('/api/exercises', {
-  query: { q: search },
-  watch: [search],
-  default: () => ({ results: [] }),
-})
-
 const selected = ref<Exercise | null>(null)
+const effort = ref<EffortKey>('moderate')
+
 const form = reactive({
   duration_min: 30 as number | null,
   calories: null as number | null,
@@ -35,18 +31,43 @@ const form = reactive({
   notes: '',
 })
 
-const isStrength = computed(() => selected.value?.category === 'strength')
+/** Only activities with measured light/hard rows get an effort picker. */
+const hasEffort = computed(() => selected.value?.met_light !== null)
+const tracksSets = computed(() => !!selected.value?.tracks_sets)
+const tracksDistance = computed(() => !!selected.value?.tracks_distance)
+
+/** The MET the server will use, mirrored so the estimate isn't a surprise. */
+function metFor(level: EffortKey) {
+  const ex = selected.value
+  if (!ex) return null
+  if (level === 'light') return ex.met_light ?? ex.met
+  if (level === 'hard') return ex.met_hard ?? ex.met
+  return ex.met
+}
 
 /**
- * Mirror the server's MET estimate so the number isn't a surprise after
- * saving. Falls back to 70 kg exactly as the API does when no weight is known.
+ * Falls back the same way the API does: most recent weigh-in, then 70 kg.
+ * Showing a number computed from a different weight than the one stored would
+ * make the estimate look broken.
  */
-const estimated = computed(() => {
-  const met = selected.value?.met
+const bodyKg = computed(() => day.value?.latest_weight_kg ?? 70)
+
+function estimateFor(level: EffortKey) {
+  const met = metFor(level)
   if (!met || !form.duration_min) return null
-  const kg = day.value?.weight_kg ?? 70
-  return Math.round(met * kg * (form.duration_min / 60))
-})
+  return Math.round(estimateCalories(met, bodyKg.value, form.duration_min))
+}
+
+const estimated = computed(() => estimateFor(hasEffort.value ? effort.value : 'moderate'))
+
+const effortDescription = computed(
+  () => EFFORT_LEVELS.find((e) => e.key === effort.value)?.description ?? '',
+)
+
+function choose(exercise: Exercise) {
+  selected.value = exercise
+  effort.value = 'moderate'
+}
 
 const saving = ref(false)
 
@@ -54,13 +75,16 @@ async function save() {
   if (!selected.value) return
   saving.value = true
   try {
-    await addWorkout({ exercise_id: selected.value.id, ...form })
+    await addWorkout({
+      exercise_id: selected.value.id,
+      effort: hasEffort.value ? effort.value : null,
+      ...form,
+    })
     selected.value = null
     Object.assign(form, {
       duration_min: 30, calories: null, sets: null, reps: null,
       weight_kg: null, distance_km: null, notes: '',
     })
-    search.value = ''
   } finally {
     saving.value = false
   }
@@ -85,29 +109,37 @@ async function save() {
       <div class="card-body p-4 gap-3">
         <h2 class="font-semibold">Log a workout</h2>
 
-        <template v-if="!selected">
-          <label class="input input-bordered flex items-center gap-2">
-            <AppIcon name="search" class="w-4 h-4 opacity-50 shrink-0" />
-            <input v-model="search" type="search" class="grow min-w-0" placeholder="Search activities…">
-          </label>
-
-          <ul class="max-h-80 overflow-y-auto divide-y divide-base-200 -mx-4">
-            <li v-for="ex in exerciseData?.results ?? []" :key="ex.id">
-              <button
-                class="w-full text-left px-4 py-2.5 hover:bg-base-200 flex items-center gap-2"
-                @click="selected = ex"
-              >
-                <span class="flex-1 text-sm">{{ ex.name }}</span>
-                <span class="badge badge-ghost badge-sm">{{ ex.category }}</span>
-              </button>
-            </li>
-          </ul>
-        </template>
+        <ActivityPicker v-if="!selected" @select="choose" />
 
         <template v-else>
           <div class="flex items-center gap-2">
             <span class="font-medium flex-1">{{ selected.name }}</span>
             <button class="btn btn-ghost btn-xs" @click="selected = null">Change</button>
+          </div>
+
+          <!-- Effort ------------------------------------------------------->
+          <div v-if="hasEffort" class="flex flex-col gap-2">
+            <span class="label-text text-xs">Effort</span>
+            <div role="tablist" class="tabs tabs-box tabs-sm">
+              <button
+                v-for="level in EFFORT_LEVELS"
+                :key="level.key"
+                role="tab" class="tab flex-1 flex-col h-auto py-1.5"
+                :class="{ 'tab-active': effort === level.key }"
+                @click="effort = level.key"
+              >
+                <span class="text-xs font-medium">{{ level.label }}</span>
+                <span v-if="estimateFor(level.key)" class="text-[0.6rem] opacity-60 tabular">
+                  {{ estimateFor(level.key) }} kcal
+                </span>
+              </button>
+            </div>
+            <p class="text-xs text-base-content/60 leading-snug">
+              {{ effortDescription }}
+            </p>
+            <p v-if="selected.hint" class="text-xs text-base-content/40 leading-snug">
+              {{ selected.hint }}.
+            </p>
           </div>
 
           <div class="grid grid-cols-2 gap-2">
@@ -128,7 +160,7 @@ async function save() {
               >
             </label>
 
-            <template v-if="isStrength">
+            <template v-if="tracksSets">
               <label class="form-control">
                 <span class="label-text text-xs mb-1">Sets</span>
                 <input v-model.number="form.sets" type="number" min="0" inputmode="numeric" class="input input-bordered input-sm w-full">
@@ -143,7 +175,7 @@ async function save() {
               </label>
             </template>
 
-            <label v-else class="form-control">
+            <label v-if="tracksDistance" class="form-control">
               <span class="label-text text-xs mb-1">Distance (km)</span>
               <input v-model.number="form.distance_km" type="number" min="0" step="any" inputmode="decimal" class="input input-bordered input-sm w-full">
             </label>

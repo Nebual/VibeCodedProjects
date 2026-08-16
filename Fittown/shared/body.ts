@@ -203,6 +203,16 @@ export function calorieFloor(sex: Sex): number {
 /** Fastest weekly change generally considered sustainable, in kg. */
 export const MAX_SAFE_RATE_KG = 1
 
+/**
+ * Where the rate picker starts: half a pound a week.
+ *
+ * Slow enough to be sustainable and to spare lean mass, fast enough to show up
+ * on the scale within a fortnight. Defined in pounds and converted, so the
+ * default is the same plan for a metric and an imperial household (0.23 kg)
+ * rather than two different ones.
+ */
+export const DEFAULT_RATE_KG_PER_WEEK = lbToKg(0.5)
+
 export interface TargetPlan {
   /** Calories per day at the chosen rate. */
   targetCalories: number

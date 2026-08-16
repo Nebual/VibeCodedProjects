@@ -67,14 +67,47 @@ await step('quick-add water', async () => {
   await page.waitForTimeout(900)
 })
 
-await step('log a workout', async () => {
+await step('log a workout by drilling into a category', async () => {
   await page.goto(`${BASE}/fitness`, { waitUntil: 'networkidle' })
-  await page.getByPlaceholder('Search activities').fill('Running (10')
-  await page.waitForTimeout(900)
-  await page.locator('section button:has-text("Running")').first().click()
-  await page.waitForTimeout(400)
+  await page.waitForTimeout(800)
+
+  // The category grid replaced the flat list; household chores are logged the
+  // same way as gym sessions.
+  await page.getByRole('button', { name: /Household/ }).click()
+  await page.waitForTimeout(1000)
+  await page.locator('ul li button:has-text("Vacuuming")').first().click()
+  await page.waitForTimeout(500)
   await page.getByRole('button', { name: /^Add workout$/ }).click()
   await page.waitForTimeout(1300)
+
+  if (!/Vacuuming/.test(await page.locator('main').innerText())) {
+    throw new Error('workout logged from the category grid did not appear')
+  }
+})
+
+await step('effort level changes the calorie estimate', async () => {
+  await page.goto(`${BASE}/fitness`, { waitUntil: 'networkidle' })
+  await page.waitForTimeout(700)
+  await page.getByPlaceholder('Search activities').fill('Running')
+  await page.waitForTimeout(1100)
+  await page.locator('ul li button:has-text("Running")').first().click()
+  await page.waitForTimeout(600)
+
+  const kcal = (text) => Number((text.match(/(\d+)\s*kcal/) || [])[1])
+  const light = kcal(await page.getByRole('tab', { name: /Light/ }).innerText())
+  const hard = kcal(await page.getByRole('tab', { name: /Hard/ }).innerText())
+  if (!(hard > light)) {
+    throw new Error(`hard effort should burn more than light (${light} vs ${hard})`)
+  }
+
+  await page.getByRole('tab', { name: /Hard/ }).click()
+  await page.waitForTimeout(300)
+  await page.getByRole('button', { name: /^Add workout$/ }).click()
+  await page.waitForTimeout(1300)
+
+  if (!/hard/.test(await page.locator('main').innerText())) {
+    throw new Error('effort not recorded against the logged workout')
+  }
 })
 
 await step('create a custom food', async () => {
@@ -156,7 +189,8 @@ await step('body metrics and calculated calorie target', async () => {
   await page.goto(`${BASE}/settings`, { waitUntil: 'networkidle' })
   await page.waitForTimeout(600)
 
-  await page.locator('label:has-text("Age") input').fill('41')
+  // Not `label:has-text("Age")` — that also matches "Protein percentage".
+  await page.locator('input[aria-label="Age"]').fill('41')
   await page.locator('label:has-text("Gender") select').selectOption('female')
   await page.locator('input[aria-label="Height in centimetres"]').fill('168')
   await page.locator('label:has-text("Activity level") select').selectOption('moderate')
@@ -207,7 +241,7 @@ await step('weight logs to the diary and can be back-dated', async () => {
   await page.goto(`${BASE}/`, { waitUntil: 'networkidle' })
   await page.waitForTimeout(1000)
 
-  const todayText = await page.locator('section:has(h2:text("Weight"))').innerText()
+  const todayText = await page.locator('section:has(h2:text("Body"))').innerText()
   if (!/72\.5/.test(todayText)) {
     throw new Error(`weight logged in settings not shown on the diary: ${todayText}`)
   }
@@ -225,10 +259,94 @@ await step('weight logs to the diary and can be back-dated', async () => {
   await page.getByRole('button', { name: /^Save$/ }).click()
   await page.waitForTimeout(1300)
 
-  const yesterday = await page.locator('section:has(h2:text("Weight"))').innerText()
+  const yesterday = await page.locator('section:has(h2:text("Body"))').innerText()
   if (!/73\.1/.test(yesterday)) {
     throw new Error(`back-dated weight did not save: ${yesterday}`)
   }
+})
+
+await step('custom biometrics log alongside weight', async () => {
+  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' })
+  await page.waitForTimeout(1100)
+  const card = page.locator('section:has(h2:text("Body"))')
+
+  // The type may already exist from an earlier run of this script.
+  if ((await card.getByRole('button', { name: 'Set Bicep' }).count()) === 0) {
+    await card.getByRole('button', { name: /Add a measurement/ }).click()
+    await page.locator('input[aria-label="Measurement name"]').fill('Bicep')
+    await page.locator('select[aria-label="Unit"]').selectOption('cm')
+    await page.getByRole('button', { name: /Track it/ }).click()
+    await page.waitForTimeout(1300)
+  }
+
+  await card.getByRole('button', { name: 'Set Bicep' }).click()
+  await page.locator('input[aria-label="Bicep"]').fill('38.5')
+  await page.keyboard.press('Enter')
+  await page.waitForTimeout(1400)
+
+  if (!/38\.5\s*cm/.test(await card.innerText())) {
+    throw new Error(`bicep measurement not saved: ${await card.innerText()}`)
+  }
+})
+
+await step('macro split edits grams', async () => {
+  await page.goto(`${BASE}/settings`, { waitUntil: 'networkidle' })
+  await page.waitForTimeout(800)
+
+  await page.getByRole('button', { name: /Reset to 25 \/ 45 \/ 30/ }).click()
+  await page.waitForTimeout(400)
+
+  const percent = await page.getByLabel('Protein percentage').inputValue()
+  if (Number(percent) !== 25) throw new Error(`protein should be 25%, got ${percent}`)
+
+  const goal = Number(await page.locator('label:has-text("Daily calories") input').inputValue())
+  const grams = Number(await page.getByLabel('Protein grams').inputValue())
+  const expected = Math.round((goal * 0.25) / 4)
+  if (grams !== expected) {
+    throw new Error(`protein grams should be ${expected} for a ${goal} kcal goal, got ${grams}`)
+  }
+
+  if (!/100% of your calorie goal/.test(await page.locator('main').innerText())) {
+    throw new Error('split should total 100% after reset')
+  }
+})
+
+await step('goal weight picks the direction', async () => {
+  await page.goto(`${BASE}/settings`, { waitUntil: 'networkidle' })
+  await page.waitForTimeout(800)
+
+  // Clear any stored plan first: the dialog deliberately resumes one when it
+  // exists, so the default rate is only observable from a clean slate.
+  const clear = page.getByRole('button', { name: /^Clear$/ })
+  if (await clear.count()) {
+    await clear.click()
+    await page.waitForTimeout(1300)
+  }
+
+  await page.getByRole('button', { name: /Calculate calorie target/i }).click()
+  await page.waitForTimeout(600)
+
+  const dialog = page.locator('dialog.modal')
+  await dialog.getByRole('tab', { name: 'Maintain' }).click()
+  await page.waitForTimeout(300)
+
+  // Current weight is 72.5 kg, so a 68 kg goal means losing — without touching
+  // the direction tabs.
+  await dialog.locator('label:has-text("Goal weight") input').fill('68')
+  await page.waitForTimeout(500)
+
+  const text = await dialog.innerText()
+  if (!/Lose per week/.test(text)) {
+    throw new Error(`goal below current weight should switch to Lose: ${text.slice(0, 200)}`)
+  }
+  // Default rate is half a pound a week, which is 0.23 kg. Read the field:
+  // an input's value never appears in innerText.
+  const rate = await dialog.getByLabel('Custom weekly rate').inputValue()
+  if (Number(rate) !== 0.23) {
+    throw new Error(`expected a 0.23 kg/week default rate, got ${rate}`)
+  }
+
+  await dialog.getByRole('button', { name: /Cancel/ }).click()
 })
 
 await step('trends year view charts weight', async () => {

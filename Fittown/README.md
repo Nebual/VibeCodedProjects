@@ -16,12 +16,15 @@ desktop; it installs to a home screen as a PWA.
 - **Any unit you like** — log a portion in grams, ounces, pounds, kilos or the
   packet's own serving, and see what it works out to before you save it
 - **Water** — quick-add in millilitres or fluid ounces
-- **Fitness** — cardio and strength logging, with calorie estimates from MET
-  values and your body weight
-- **Weight** — log it from the diary (any day) or from settings, and watch it
-  on a year-long chart
+- **Fitness** — browse ~95 activities by category (cardio, gym, strength,
+  mobility, sports, outdoors, household, work), pick an effort level, and get a
+  calorie estimate from published MET values and your body weight
+- **Body measurements** — weight plus anything else you track (bicep, waist,
+  resting heart rate), logged from the diary on any day
 - **Calorie target calculator** — age, gender, height, weight and activity
   level give you a maintenance figure, then pick a rate of loss or gain
+- **Macro split** — set protein/carbs/fat as percentages or grams; they stay
+  in sync
 - **Trends** — intake, training and weight over 7/14/30 days or a year
 
 ## Requirements
@@ -150,6 +153,15 @@ of body weight. Predictive equations land within about 10% for most people, so
 the app frames the result as a starting point to adjust once real weight data
 comes in — and warns rather than blocks when a target goes below 1,200/1,500
 kcal or a rate exceeds 1 kg a week.
+
+**Effort levels come from measured data, not a multiplier.** Where the
+[2024 Adult Compendium of Physical Activities](https://pacompendium.com/)
+publishes separate light / moderate / vigorous rows for an activity, Fittown
+carries all three and lets you choose. Scrubbing a bathroom floor is 2.0 METs
+if you're dawdling and 6.5 if you're not — a factor of three that a single
+average would throw away. Activities with only one measured value don't ask.
+Effort is described by *breathing*, since that's the one cue people can apply
+honestly across walking, mopping and squash alike.
 
 **Activity level and logged exercise can double-count.** The multipliers
 already include a typical week's training, so choosing anything above sedentary

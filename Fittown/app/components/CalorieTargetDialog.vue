@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import {
+  DEFAULT_RATE_KG_PER_WEEK,
   MAX_SAFE_RATE_KG,
   activityLevel,
   calorieFloor,
@@ -52,7 +53,7 @@ const dialog = useTemplateRef<HTMLDialogElement>('dialog')
 
 const direction = ref<Direction>('maintain')
 /** Always positive; `direction` carries the sign. */
-const magnitude = ref(0.5)
+const magnitude = ref(DEFAULT_RATE_KG_PER_WEEK)
 const goalWeight = ref<number | null>(null)
 const rescaleMacros = ref(true)
 
@@ -129,6 +130,24 @@ const goalWeightKgValue = computed(() =>
       : goalWeight.value,
 )
 
+/**
+ * A goal weight is a statement of intent, so the direction follows it. Typing
+ * a number below your current weight and being left on "Maintain" — with a
+ * warning telling you the two disagree — is the app arguing with you about
+ * something it can just work out.
+ */
+watch(goalWeightKgValue, (goal) => {
+  if (goal === null || !props.weightKg) return
+  const delta = goal - props.weightKg
+  // A goal within 100 g of today really is maintenance.
+  if (Math.abs(delta) < 0.1) {
+    direction.value = 'maintain'
+    return
+  }
+  direction.value = delta < 0 ? 'lose' : 'gain'
+  if (magnitude.value <= 0) magnitude.value = DEFAULT_RATE_KG_PER_WEEK
+})
+
 const goalMismatch = computed(() => {
   const goal = goalWeightKgValue.value
   if (goal === null || direction.value === 'maintain') return false
@@ -166,7 +185,7 @@ watch(
     // Resume the stored plan, or start from maintenance.
     const rate = props.goalRateKgPerWeek ?? 0
     direction.value = rate === 0 ? 'maintain' : rate < 0 ? 'lose' : 'gain'
-    magnitude.value = rate === 0 ? 0.5 : Math.abs(rate)
+    magnitude.value = rate === 0 ? DEFAULT_RATE_KG_PER_WEEK : Math.abs(rate)
     goalWeight.value =
       props.goalWeightKg === null
         ? null

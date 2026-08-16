@@ -44,6 +44,10 @@ db.exec('DELETE FROM diary_entries')
 db.exec('DELETE FROM water_entries')
 db.exec('DELETE FROM workout_entries')
 db.exec('DELETE FROM weight_entries')
+// These would cascade from `users`, but only while foreign keys are enforced.
+// Personal data is not something to leave depending on a PRAGMA.
+db.exec('DELETE FROM biometric_entries')
+db.exec('DELETE FROM biometric_types')
 db.exec('DELETE FROM exercises WHERE owner_user_id IS NOT NULL')
 db.exec('DELETE FROM user_goals')
 db.exec('DELETE FROM users')

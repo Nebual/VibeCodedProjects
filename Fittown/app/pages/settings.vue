@@ -50,6 +50,41 @@ const macroCalories = computed(() =>
 )
 const macroGap = computed(() => macroCalories.value - (form.calorie_goal ?? 0))
 
+/**
+ * Macros are stored as grams, but people think in percentages — "40% carbs"
+ * is a plan, "225 g of carbs" is a consequence of one. Both are editable and
+ * kept in sync: the percentage is of the *calorie goal*, so three figures that
+ * add to 100% are exactly a split that uses the whole budget.
+ */
+const MACROS = [
+  { key: 'protein_g', label: 'Protein', kcalPerGram: 4, defaultPercent: 25 },
+  { key: 'carbs_g', label: 'Carbs', kcalPerGram: 4, defaultPercent: 45 },
+  { key: 'fat_g', label: 'Fat', kcalPerGram: 9, defaultPercent: 30 },
+] as const
+
+type MacroKey = (typeof MACROS)[number]['key']
+
+function macroPercent(macro: (typeof MACROS)[number]): number {
+  const goal = form.calorie_goal ?? 0
+  if (!goal) return 0
+  return Math.round((((form[macro.key] ?? 0) * macro.kcalPerGram) / goal) * 100)
+}
+
+function setMacroPercent(macro: (typeof MACROS)[number], percent: number | null) {
+  const goal = form.calorie_goal ?? 0
+  if (!goal || percent === null || !Number.isFinite(percent)) return
+  form[macro.key] = Math.round((goal * (percent / 100)) / macro.kcalPerGram)
+}
+
+const splitTotal = computed(() =>
+  MACROS.reduce((sum, macro) => sum + macroPercent(macro), 0),
+)
+
+/** 25 / 45 / 30 — a balanced split that suits most people most of the time. */
+function applyDefaultSplit() {
+  for (const macro of MACROS) setMacroPercent(macro, macro.defaultPercent)
+}
+
 async function save() {
   saving.value = true
   saved.value = false
@@ -283,11 +318,9 @@ async function signOut() {
   await navigateTo('/login')
 }
 
+/** The macros get their own editor below; these are the plain numbers. */
 const goalFields = [
   { key: 'calorie_goal', label: 'Daily calories', unit: 'kcal', step: 10 },
-  { key: 'protein_g', label: 'Protein', unit: 'g', step: 1 },
-  { key: 'carbs_g', label: 'Carbs', unit: 'g', step: 1 },
-  { key: 'fat_g', label: 'Fat', unit: 'g', step: 1 },
   { key: 'fiber_g', label: 'Fibre', unit: 'g', step: 1 },
   { key: 'water_goal_ml', label: 'Water', unit: 'ml', step: 50 },
 ] as const
@@ -313,6 +346,7 @@ const goalFields = [
               v-model.number="age"
               type="number" min="10" max="120" step="1" inputmode="numeric"
               class="input input-bordered input-sm w-full" placeholder="years"
+              aria-label="Age"
             >
           </label>
 
@@ -475,13 +509,51 @@ const goalFields = [
           <button class="btn btn-ghost btn-xs" @click="clearPlan">Clear</button>
         </div>
 
+        <!-- Macro split ------------------------------------------------->
+        <div class="flex items-center justify-between gap-2 mt-1">
+          <span class="label-text text-xs font-medium">Macro split</span>
+          <button class="btn btn-ghost btn-xs" @click="applyDefaultSplit">
+            Reset to 25 / 45 / 30
+          </button>
+        </div>
+
+        <div class="flex flex-col gap-2">
+          <div
+            v-for="macro in MACROS"
+            :key="macro.key"
+            class="grid grid-cols-[4.5rem_1fr_1fr] gap-2 items-center"
+          >
+            <span class="text-xs">{{ macro.label }}</span>
+            <label class="join w-full">
+              <span class="sr-only">{{ macro.label }} percentage</span>
+              <input
+                :value="macroPercent(macro)"
+                type="number" min="0" max="100" step="1" inputmode="numeric"
+                class="input input-bordered input-sm join-item w-full tabular"
+                @change="setMacroPercent(macro, Number(($event.target as HTMLInputElement).value))"
+              >
+              <span class="btn btn-sm join-item no-animation pointer-events-none">%</span>
+            </label>
+            <label class="join w-full">
+              <span class="sr-only">{{ macro.label }} grams</span>
+              <input
+                v-model.number="form[macro.key]"
+                type="number" min="0" step="1" inputmode="numeric"
+                class="input input-bordered input-sm join-item w-full tabular"
+              >
+              <span class="btn btn-sm join-item no-animation pointer-events-none">g</span>
+            </label>
+          </div>
+        </div>
+
         <p
           class="text-xs"
           :class="Math.abs(macroGap) > 50 ? 'text-warning' : 'text-base-content/50'"
         >
-          Your macros add up to {{ macroCalories }} kcal
+          {{ splitTotal }}% of your calorie goal — {{ macroCalories }} kcal
           <template v-if="Math.abs(macroGap) > 50">
-            — {{ Math.abs(macroGap) }} kcal {{ macroGap > 0 ? 'above' : 'below' }} your calorie goal.
+            , {{ Math.abs(macroGap) }} kcal {{ macroGap > 0 ? 'above' : 'below' }} the
+            {{ form.calorie_goal }} kcal you set.
           </template>
         </p>
 

@@ -61,7 +61,7 @@ export default defineEventHandler(async (event) => {
 
   const workouts = db
     .prepare(
-      `SELECT w.id, w.duration_min, w.calories, w.sets, w.reps, w.weight_kg,
+      `SELECT w.id, w.duration_min, w.calories, w.effort, w.sets, w.reps, w.weight_kg,
               w.distance_km, w.notes, e.name AS exercise_name, e.category, e.id AS exercise_id
        FROM workout_entries w
        JOIN exercises e ON e.id = w.exercise_id
@@ -75,6 +75,29 @@ export default defineEventHandler(async (event) => {
   const weight = db
     .prepare('SELECT weight_kg FROM weight_entries WHERE user_id = ? AND date = ?')
     .get(user.id, day) as { weight_kg: number } | undefined
+
+  // The workout calorie estimate uses the most recent weight, not this day's,
+  // so the client needs it too — otherwise the "≈320 kcal" shown before saving
+  // is computed against a different body weight than the figure stored after.
+  const latest = db
+    .prepare(
+      'SELECT weight_kg FROM weight_entries WHERE user_id = ? ORDER BY date DESC LIMIT 1',
+    )
+    .get(user.id) as { weight_kg: number } | undefined
+
+  // Every tracked measurement, with the day's reading attached where there is
+  // one. Sending the full type list (not just the days's entries) is what lets
+  // the diary offer an empty row to fill in.
+  const biometrics = db
+    .prepare(
+      `SELECT t.id, t.name, t.unit, t.sort_order, b.value
+       FROM biometric_types t
+       LEFT JOIN biometric_entries b
+         ON b.type_id = t.id AND b.user_id = t.user_id AND b.date = ?
+       WHERE t.user_id = ?
+       ORDER BY t.sort_order, t.id`,
+    )
+    .all(day, user.id)
 
   return {
     date: day,
@@ -94,6 +117,8 @@ export default defineEventHandler(async (event) => {
     },
     goals,
     weight_kg: weight?.weight_kg ?? null,
+    latest_weight_kg: latest?.weight_kg ?? null,
+    biometrics,
   }
 })
 

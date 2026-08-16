@@ -19,7 +19,7 @@ const date = computed({
 
 const {
   day, pending, error, refresh, removeEntry, addWater, removeWorkout,
-  setWeight, clearWeight,
+  setWeight, clearWeight, setBiometric, addBiometricType, removeBiometricType,
 } = useDiary(date)
 
 const showMicros = ref(false)
@@ -76,13 +76,17 @@ async function setWeightUnit(unit: 'kg' | 'lb') {
         @remove="removeWorkout"
       />
 
-      <WeightCard
+      <BodyMeasurements
         :weight-kg="day.weight_kg"
         :unit="day.goals.weight_unit"
+        :biometrics="day.biometrics"
         :is-today="date === today"
         @save="setWeight"
         @clear="clearWeight"
         @unit="setWeightUnit"
+        @measure="setBiometric"
+        @add-type="addBiometricType"
+        @remove-type="removeBiometricType"
       />
 
       <section class="card bg-base-100 shadow-sm">

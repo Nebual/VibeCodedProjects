@@ -1,6 +1,7 @@
 import type { NutrientTotals } from '#shared/nutrients'
 import type { ActivityKey, HeightUnit, Sex, WeightUnit } from '#shared/body'
 import type { MeasurementSystem } from '#shared/portions'
+import type { EffortKey } from '#shared/activities'
 
 export interface FoodRow {
   id: number
@@ -50,6 +51,15 @@ export interface Goals {
   goal_rate_kg_per_week: number | null
 }
 
+export interface BiometricRow {
+  id: number
+  name: string
+  unit: string
+  sort_order: number
+  /** The reading for the day being viewed; null when nothing was recorded. */
+  value: number | null
+}
+
 export interface WorkoutRow {
   id: number
   exercise_id: number
@@ -57,6 +67,7 @@ export interface WorkoutRow {
   category: string
   duration_min: number | null
   calories: number | null
+  effort: EffortKey | null
   sets: number | null
   reps: number | null
   weight_kg: number | null
@@ -72,6 +83,9 @@ export interface DiaryDay {
   workouts: { entries: WorkoutRow[]; total_calories: number; total_minutes: number }
   goals: Goals
   weight_kg: number | null
+  /** Most recent weigh-in on any date — what the calorie estimate uses. */
+  latest_weight_kg: number | null
+  biometrics: BiometricRow[]
 }
 
 export const MEAL_ORDER = ['breakfast', 'lunch', 'dinner', 'snack'] as const
@@ -175,6 +189,25 @@ export function useDiary(date: Ref<string | null>) {
     await refresh()
   }
 
+  /** Record a custom measurement for this day. A null value clears it. */
+  async function setBiometric(typeId: number, value: number | null) {
+    await $fetch('/api/biometrics', {
+      method: 'POST',
+      body: { date: requireDate(), type_id: typeId, value },
+    })
+    await refresh()
+  }
+
+  async function addBiometricType(name: string, unit: string) {
+    await $fetch('/api/biometrics/types', { method: 'POST', body: { name, unit } })
+    await refresh()
+  }
+
+  async function removeBiometricType(typeId: number) {
+    await $fetch(`/api/biometrics/types/${typeId}`, { method: 'DELETE' })
+    await refresh()
+  }
+
   return {
     day: data,
     pending,
@@ -188,5 +221,8 @@ export function useDiary(date: Ref<string | null>) {
     removeWorkout,
     setWeight,
     clearWeight,
+    setBiometric,
+    addBiometricType,
+    removeBiometricType,
   }
 }

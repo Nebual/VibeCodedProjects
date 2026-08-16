@@ -10,10 +10,11 @@ defineProps<{
 
 defineEmits<{ remove: [id: number] }>()
 
-/** Compact summary line: "45 min · 3×10 @ 60 kg · 5 km". */
+/** Compact summary line: "45 min · hard · 3×10 @ 60 kg · 5 km". */
 function detail(w: WorkoutRow) {
   const bits: string[] = []
   if (w.duration_min) bits.push(`${Math.round(w.duration_min)} min`)
+  if (w.effort) bits.push(w.effort)
   if (w.sets && w.reps) {
     bits.push(`${w.sets}×${w.reps}${w.weight_kg ? ` @ ${w.weight_kg} kg` : ''}`)
   }
