@@ -86,14 +86,27 @@ produced a file showing 2 diary entries when the database really had 26. Either
 
 ## 2. Verify your work
 
-There is no unit-test suite. The safety net is an end-to-end script that drives
-the real app:
+Two layers, and they cover different things:
 
 ```bash
+cd $RUN && pnpm test                     # 117 unit tests, ~0.3s, no server needed
 cd $RUN && node scripts/e2e.mjs          # 19 steps, fails on any console error
 node scripts/screenshots.mjs /tmp/shots  # mobile, dark, desktop — then Read them
 pnpm build                               # catches things dev mode hides
 ```
+
+**Unit tests** (`test/*.test.ts`, plain Vitest — see `vitest.config.ts`) cover
+the pure logic: the nutrient catalogue and its null-vs-zero invariant, portion
+units, body/energy maths, the activity library's internal consistency, the
+request validators, and — against a real temp SQLite file — the boot-time
+schema migration and exercise-library sync. They run in a third of a second, so
+run them constantly. They deliberately do **not** boot Nuxt; anything needing a
+running app belongs in the e2e script instead.
+
+The unit suite was mutation-checked when written: a wrong Mifflin-St Jeor
+constant, a `?? 0` slipped into `scaleNutrients`, and a forgotten
+`ADDED_COLUMNS` entry each failed the tests you'd expect and nothing else. If
+you add tests, break the thing on purpose once and confirm they notice.
 
 `scripts/e2e.mjs` needs `FITTOWN_DEV_LOGIN=1` in `.env` and a running dev
 server. **Actually look at the screenshots** — several real bugs here (oats
@@ -247,6 +260,7 @@ shared/          nutrients.ts  — nutrient catalogue used by both sides
                  body.ts      — units, activity levels, BMR/TDEE, target maths
                  portions.ts  — portion units and their gram equivalents
 scripts/         import-off, fix-liquid-flags, reset-user-data, e2e, screenshots
+test/            Vitest unit tests (pure logic + schema migration)
 ```
 
 `server/db/schema.ts` is a TS template literal rather than a `.sql` file so

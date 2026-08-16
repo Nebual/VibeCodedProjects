@@ -89,6 +89,20 @@ Rows are upserted on `(source, barcode)`, so food IDs stay stable across
 re-imports and existing diary entries never re-point at a different product.
 Re-run it every few months to pick up new products.
 
+## Tests
+
+```bash
+pnpm test          # unit tests (Vitest) — pure logic and the schema migration
+pnpm test:watch    # same, on file change
+```
+
+The end-to-end script drives the real app in a browser and needs a dev server
+plus `FITTOWN_DEV_LOGIN=1`:
+
+```bash
+node scripts/e2e.mjs
+```
+
 Other maintenance scripts:
 
 ```bash
