@@ -11,8 +11,16 @@ When entering a Goal Weight, switch from Maintain to Gain/Lose accordingly. Defa
 
 Allow editing the macro ratio in the Daily goals settings, and have the default be 25% protein, 45% carb, 30% fat.
 
-When logging weight in the Diary, also allow logging other custom biometrics, such as bicep size.
+When logging weight in the Diary, also allow logging other custom biometrics, such as bicep size. In the Trends charts, also chart custom biometrics.
+
+When logging workouts, show the top 10 most recently used workouts for quick access.
 
 When logging workouts, rather than having a large list at the start (though keep the search), lets have a series of card grids with icons that drill down into categores. Top level cards include Cardio, Gym, Household Activities, Outdoor Activities, Sports, Occupational Activities, Strength and Mobility. Activities may appear in multiple categories (eg. cycling is an outdoor and a cardio). Upon selecting an activity (if it makes sense) allow choosing an Effort Level (with explanations of what they mean - Light = Require some effort but not enough to speed up breathing, Moderate = Requires moderate effort. Speeds up heart rate and breathing but does not leave you out of breath. Hard = Requires vigorous effort. Gets the heart pounding and makes breathing very fast.), which changes the calories estimate. Research more types of activities and ideally find calorie estimate ranges to base these calorie counts on.
 
 Lets create unit tests, using vitest, for the assertions you've been checking so far
+
+Create a plan for adding Recipes, which are a mixture of foods with a name. You can customize the amount of each ingredient food in the recipe, edit the foods in a recipe, name the recipe, specify a final recipe weight, and specify how many servings it makes - which sets the serving size for that recipe when added to the diary.  When adding to diary, 'whole recipe' is another portion type, though the default type should be 1 serving. Don't show portion options involving grams if the recipe doesn't have a final weight.
+
+To save vertical space, hide 'Nothing logged yet.' in the Diary.
+
+As a joke, add a 'Poll: should I add in-app full screen ads for diamond rings?' to the bottom of the settings page. It has 'Yes' and 'No' buttons, and hitting either makes it look like the user hit 'Yes' and disables 'No'. This is merely a UI joke so it shouldn't save.

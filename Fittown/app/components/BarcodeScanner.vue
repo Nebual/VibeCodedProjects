@@ -1,7 +1,20 @@
 <script setup lang="ts">
 import type { FoodRow } from '~/composables/useDiary'
 
-const props = defineProps<{ meal: string; date: string }>()
+const props = withDefaults(
+  defineProps<{
+    meal: string
+    date: string | null
+    /** Set when scanning an ingredient into a recipe rather than a meal. */
+    recipe?: number | null
+  }>(),
+  { recipe: null },
+)
+
+/** Where a scanned food goes — a meal, or the recipe we came from. */
+const target = computed(() =>
+  foodLinkQuery({ meal: props.meal, date: props.date, recipe: props.recipe }),
+)
 const emit = defineEmits<{ close: [] }>()
 
 const video = ref<HTMLVideoElement | null>(null)
@@ -69,7 +82,7 @@ async function lookup(code: string) {
   try {
     const { food } = await $fetch<{ food: FoodRow }>(`/api/foods/barcode/${code}`)
     stop()
-    await navigateTo(`/food/${food.id}?meal=${props.meal}&d=${props.date}`)
+    await navigateTo(`/food/${food.id}?${target.value}`)
   } catch {
     notFound.value = code
     // Resume scanning so they can try another angle or a different product.
@@ -147,7 +160,7 @@ onBeforeUnmount(stop)
       </form>
 
       <div class="modal-action">
-        <NuxtLink :to="`/food/new?meal=${meal}&d=${date}&barcode=${manualCode || notFound || ''}`" class="btn btn-ghost btn-sm">
+        <NuxtLink :to="`/food/new?${target}&barcode=${manualCode || notFound || ''}`" class="btn btn-ghost btn-sm">
           Create custom food
         </NuxtLink>
         <button class="btn btn-sm" @click="close">Close</button>

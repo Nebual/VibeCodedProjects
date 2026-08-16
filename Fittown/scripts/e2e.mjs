@@ -24,6 +24,16 @@ const context = await browser.newContext({
 const page = await context.newPage()
 
 const consoleErrors = []
+
+/**
+ * Errors a step provoked on purpose.
+ *
+ * The browser logs every non-2xx fetch as a console error, so a step that
+ * asserts a refusal would otherwise fail the run for succeeding. A step adds
+ * its pattern here before triggering it; everything else still fails the run.
+ */
+const expectedConsoleErrors = []
+
 page.on('console', (m) => {
   if (m.type() === 'error') consoleErrors.push(m.text().slice(0, 160))
 })
@@ -82,6 +92,29 @@ await step('log a workout by drilling into a category', async () => {
 
   if (!/Vacuuming/.test(await page.locator('main').innerText())) {
     throw new Error('workout logged from the category grid did not appear')
+  }
+})
+
+await step('recently used activities are offered for quick access', async () => {
+  await page.goto(`${BASE}/fitness`, { waitUntil: 'networkidle' })
+  await page.waitForTimeout(900)
+
+  // The previous step logged Vacuuming, so it must now be one tap away
+  // without opening a category.
+  const recent = page.locator('div:has(> span:text-is("Recent")) button')
+  if ((await recent.count()) === 0) throw new Error('no Recent row rendered')
+  if (!/Vacuuming/.test(await recent.first().innerText())) {
+    throw new Error(
+      `most recent activity should be first, got "${await recent.first().innerText()}"`,
+    )
+  }
+  if ((await recent.count()) > 10) throw new Error('Recent should cap at 10')
+
+  // Tapping one selects it, skipping the grid entirely.
+  await recent.first().click()
+  await page.waitForTimeout(500)
+  if ((await page.getByRole('button', { name: /^Add workout$/ }).count()) === 0) {
+    throw new Error('tapping a recent activity did not open the workout form')
   }
 })
 
@@ -349,6 +382,34 @@ await step('goal weight picks the direction', async () => {
   await dialog.getByRole('button', { name: /Cancel/ }).click()
 })
 
+await step('trends charts custom biometrics', async () => {
+  // The biometrics step logged a bicep measurement for today; add one for
+  // yesterday so there are two points and a line can actually be drawn.
+  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' })
+  await page.waitForTimeout(1000)
+  await page.locator('button[aria-label="Previous day"]').click()
+  await page.waitForTimeout(1200)
+  await page.locator('section:has(h2:text("Body"))').getByRole('button', { name: 'Set Bicep' }).click()
+  await page.locator('input[aria-label="Bicep"]').fill('38.1')
+  await page.keyboard.press('Enter')
+  await page.waitForTimeout(1400)
+
+  await page.goto(`${BASE}/trends`, { waitUntil: 'networkidle' })
+  await page.waitForTimeout(1200)
+
+  const bicep = page.locator('section:has(h2:text-is("Bicep"))')
+  if ((await bicep.count()) === 0) {
+    throw new Error('no Bicep chart on Trends')
+  }
+  if ((await bicep.locator('svg polyline').count()) === 0) {
+    throw new Error('Bicep chart drew no line')
+  }
+  // Charted in the unit the measurement was defined with, not converted.
+  if (!/cm/.test(await bicep.innerText())) {
+    throw new Error(`Bicep chart should be labelled in cm: ${await bicep.innerText()}`)
+  }
+})
+
 await step('trends year view charts weight', async () => {
   await page.goto(`${BASE}/trends`, { waitUntil: 'networkidle' })
   await page.waitForTimeout(900)
@@ -381,9 +442,178 @@ await step('trends renders', async () => {
   }
 })
 
+// ---------------------------------------------------------------------------
+// Recipes
+//
+// A recipe is a foods row whose nutrition is derived from its ingredients, so
+// the thing worth asserting is arithmetic: one serving of a four-serving recipe
+// has to be a quarter of what went in. The rest guards the promise that the app
+// never quotes a weight for a dish nobody weighed.
+// ---------------------------------------------------------------------------
+
+const recipeName = `E2E Recipe ${Date.now()}`
+let recipeUrl = null
+
+await step('create a recipe', async () => {
+  await page.goto(`${BASE}/recipes`, { waitUntil: 'networkidle' })
+  await page.getByPlaceholder('Grandma').fill(recipeName)
+  await page.getByRole('button', { name: /^Create$/ }).click()
+  await page.waitForURL(/\/recipes\/\d+/, { timeout: 15000 })
+  await page.waitForTimeout(600)
+  recipeUrl = page.url()
+})
+
+await step('add two ingredients through the food search', async () => {
+  for (const [term, grams] of [['chicken breast', '200'], ['white rice', '300']]) {
+    await page.getByRole('link', { name: /Add ingredient/i }).click()
+    await page.waitForLoadState('networkidle')
+    await page.getByPlaceholder('Search foods').fill(term)
+    await page.waitForTimeout(1200)
+    await page.locator('a[href^="/food/"]').first().click()
+    await page.waitForLoadState('networkidle')
+    await page.waitForTimeout(600)
+
+    // Grams, so the expected totals below are arithmetic rather than guesswork.
+    await page.locator('label:has-text("Portion") select').selectOption({ label: 'g' })
+    await page.locator('label:has-text("Amount") input').fill(grams)
+    await page.getByRole('button', { name: /Add to recipe/i }).click()
+    await page.waitForURL(/\/recipes\/\d+/, { timeout: 15000 })
+    await page.waitForTimeout(700)
+  }
+
+  const text = await page.locator('main').innerText()
+  if (!/500 g in/.test(text)) throw new Error(`ingredient weight not totalled: ${text.slice(0, 300)}`)
+})
+
+await step('servings set the serving size', async () => {
+  await page.locator('label:has-text("Servings") input').fill('4')
+  await page.locator('label:has-text("Servings") input').blur()
+  await page.waitForTimeout(1200)
+
+  const headlineKcal = async () =>
+    Number(
+      (await page.locator('section:has(h2:text("Nutrition"))').innerText()).match(
+        /(\d+)\s*kcal/,
+      )[1],
+    )
+
+  await page.getByRole('tab', { name: /Whole recipe/ }).click()
+  await page.waitForTimeout(300)
+  const whole = await headlineKcal()
+
+  await page.getByRole('tab', { name: /Per serving/ }).click()
+  await page.waitForTimeout(300)
+  const perServing = await headlineKcal()
+  // The number the whole feature exists to produce.
+  if (Math.abs(perServing - whole / 4) > 2) {
+    throw new Error(`a serving should be a quarter of the recipe (${perServing} vs ${whole}/4)`)
+  }
+})
+
+await step('an unweighed recipe offers servings, not grams', async () => {
+  await page.goto(`${recipeUrl.replace('/recipes/', '/food/')}?meal=dinner`, {
+    waitUntil: 'networkidle',
+  })
+  await page.waitForTimeout(700)
+
+  const options = await page.locator('label:has-text("Portion") select option').allInnerTexts()
+  if (options.some((o) => /\bg\b|\boz\b|\bkg\b/.test(o))) {
+    throw new Error(`gram portions offered for a recipe with no stated yield: ${options}`)
+  }
+  if (!options.some((o) => /whole recipe/i.test(o)) || !options.some((o) => /serving/i.test(o))) {
+    throw new Error(`expected serving and whole recipe, got: ${options}`)
+  }
+  // And the default is one serving, not the whole pot.
+  const selected = await page.locator('label:has-text("Portion") select').inputValue()
+  const first = await page.locator('label:has-text("Portion") select option').first().getAttribute('value')
+  if (selected !== first) throw new Error('the picker did not default to the first option')
+  if (!/serving/i.test(await page.locator('label:has-text("Portion") select option:checked').innerText())) {
+    throw new Error('the picker should default to 1 serving')
+  }
+})
+
+await step('logging a serving carries its share of the nutrition', async () => {
+  await page.getByRole('button', { name: /Add to Dinner/i }).click()
+  await page.waitForURL(/\/\?d=/, { timeout: 15000 })
+  await page.waitForTimeout(1000)
+
+  // Scoped to the recipe's own row: the meal holds other entries from earlier
+  // steps, and those are weighed foods that quite rightly show grams.
+  const row = page.locator('section:has(h2:text("Dinner")) li', { hasText: recipeName })
+  if ((await row.count()) === 0) {
+    throw new Error(
+      `recipe missing from the diary: ${await page.locator('section:has(h2:text("Dinner"))').innerText()}`,
+    )
+  }
+  const rowText = await row.first().innerText()
+  if (!/1 × serving/.test(rowText)) {
+    throw new Error(`expected the entry to read as one serving: ${rowText}`)
+  }
+  // No weight is quoted, because none was ever measured.
+  if (/\d+\s*g\b/.test(rowText)) {
+    throw new Error(`the diary quoted a weight for an unweighed recipe: ${rowText}`)
+  }
+})
+
+await step('stating a final weight unlocks gram portions', async () => {
+  await page.goto(recipeUrl, { waitUntil: 'networkidle' })
+  await page.waitForTimeout(700)
+  await page.locator('label:has-text("Final weight") input[type="number"]').fill('400')
+  await page.locator('label:has-text("Final weight") input[type="number"]').blur()
+  await page.waitForTimeout(1200)
+
+  const text = await page.locator('main').innerText()
+  if (!/One serving is 100 g/.test(text)) {
+    throw new Error(`serving size should follow the yield: ${text.slice(0, 400)}`)
+  }
+
+  await page.goto(`${recipeUrl.replace('/recipes/', '/food/')}?meal=dinner`, {
+    waitUntil: 'networkidle',
+  })
+  await page.waitForTimeout(700)
+  const options = await page.locator('label:has-text("Portion") select option').allInnerTexts()
+  if (!options.some((o) => /^g$/.test(o.trim()))) {
+    throw new Error(`grams should be offered once the dish is weighed: ${options}`)
+  }
+})
+
+await step('renaming a recipe re-indexes it for search', async () => {
+  await page.goto(recipeUrl, { waitUntil: 'networkidle' })
+  await page.waitForTimeout(600)
+  const renamed = `${recipeName} Renamed`
+  await page.locator('label:has-text("Name") input').fill(renamed)
+  await page.locator('label:has-text("Name") input').blur()
+  await page.waitForTimeout(1200)
+
+  await page.goto(`${BASE}/add?meal=dinner`, { waitUntil: 'networkidle' })
+  await page.getByPlaceholder('Search foods').fill(renamed)
+  await page.waitForTimeout(1400)
+  if ((await page.locator('a[href^="/food/"]').count()) === 0) {
+    throw new Error('renamed recipe missing from search — foods_fts not updated on rename')
+  }
+})
+
+await step('a logged recipe refuses to be deleted', async () => {
+  // The refusal is the point, and the browser logs the 409 as a console error.
+  expectedConsoleErrors.push(/409/)
+
+  await page.goto(recipeUrl, { waitUntil: 'networkidle' })
+  await page.waitForTimeout(600)
+  await page.locator('button[aria-label="Delete recipe"]').click()
+  await page.getByRole('button', { name: /Delete for good/i }).click()
+  await page.waitForTimeout(1200)
+
+  const text = await page.locator('main').innerText()
+  if (!/Logged 1 time/.test(text)) {
+    throw new Error(`expected a refusal naming the diary entries: ${text.slice(0, 400)}`)
+  }
+})
+
 await browser.close()
 
-const unique = [...new Set(consoleErrors)]
+const unique = [...new Set(consoleErrors)].filter(
+  (text) => !expectedConsoleErrors.some((pattern) => pattern.test(text)),
+)
 if (unique.length) {
   console.error(`\nBrowser console errors:\n${unique.map((e) => `  ${e}`).join('\n')}`)
 }

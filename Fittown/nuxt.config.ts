@@ -34,6 +34,19 @@ export default defineNuxtConfig({
       google: {
         clientId: '',
         clientSecret: '',
+        /**
+         * Optional override for the OAuth callback URL
+         * (NUXT_OAUTH_GOOGLE_REDIRECT_URL).
+         *
+         * Left empty, the callback URL is derived from the incoming request.
+         * Behind a TLS-terminating reverse proxy the app is spoken to over
+         * plain HTTP, so unless the proxy sends `X-Forwarded-Proto: https`
+         * that derivation yields `http://…` and Google rejects the whole flow
+         * with `redirect_uri_mismatch`. Fixing the proxy is the better answer;
+         * this is here for when you can't, or don't want the flow depending on
+         * a header you don't control.
+         */
+        redirectURL: '',
       },
     },
     // NUXT_SESSION_PASSWORD — must be >= 32 chars. See .env.example.

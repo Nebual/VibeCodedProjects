@@ -88,6 +88,14 @@ CREATE TABLE IF NOT EXISTS foods (
   -- Custom foods belong to the user who made them; OFF foods are shared (null).
   owner_user_id   INTEGER REFERENCES users(id) ON DELETE CASCADE,
 
+  -- Recipes (source = 'recipe') only. Null on every other row.
+  -- How many servings the recipe makes; sets serving_grams when logged.
+  recipe_servings       REAL,
+  -- The finished/cooked yield, if the user weighed it. Null means unknown,
+  -- which is what stops the UI offering gram portions of it — see
+  -- shared/recipes.ts.
+  recipe_final_weight_g REAL,
+
   -- Is this measured per 100ml rather than per 100g?
   is_liquid       INTEGER NOT NULL DEFAULT 0,
 
@@ -174,6 +182,37 @@ CREATE TABLE IF NOT EXISTS food_servings (
   is_default INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_food_servings_food ON food_servings(food_id);
+
+-- ---------------------------------------------------------------------------
+-- Recipes
+--
+-- A recipe *is* a row in \`foods\` (source = 'recipe'), so logging one, searching
+-- for it and totalling a day all work through the paths that already exist.
+-- This table holds the mixture; the rolled-up per-100g figures are written back
+-- onto the food row by recomputeRecipe() in server/utils/recipes.ts, which is
+-- the only thing allowed to write them.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS recipe_ingredients (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  recipe_food_id INTEGER NOT NULL REFERENCES foods(id) ON DELETE CASCADE,
+  food_id        INTEGER NOT NULL REFERENCES foods(id) ON DELETE RESTRICT,
+  -- The resolved amount, exactly as diary_entries stores it: grams are what the
+  -- maths uses, the label and count ride along so the row can redisplay
+  -- "2 x cup" instead of "480 g".
+  grams          REAL NOT NULL,
+  serving_label  TEXT,
+  serving_count  REAL,
+  sort_order     INTEGER NOT NULL DEFAULT 0,
+  created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+);
+-- The FK asymmetry is deliberate and mirrors diary_entries: deleting a recipe
+-- takes its ingredient rows with it, but an ingredient food can never vanish
+-- out from under a recipe that uses it.
+CREATE INDEX IF NOT EXISTS idx_recipe_ingredients_recipe
+  ON recipe_ingredients(recipe_food_id);
+CREATE INDEX IF NOT EXISTS idx_recipe_ingredients_food
+  ON recipe_ingredients(food_id);
 
 -- ---------------------------------------------------------------------------
 -- Diary

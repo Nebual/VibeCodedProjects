@@ -1,0 +1,210 @@
+import {
+  baseUnit,
+  defaultAmount,
+  defaultUnitKey,
+  portionUnits,
+  roundGrams,
+  type MeasurementSystem,
+} from '#shared/portions'
+import { showsGramPortions } from '#shared/recipes'
+import type { FoodRow } from '~/composables/useDiary'
+
+/**
+ * The portion picker's logic, shared by the diary and the recipe editor.
+ *
+ * Both screens ask the same question — "how much of this?" — and both have to
+ * answer it in grams, because grams are the only thing nutrient maths can use.
+ * Keeping one implementation is what stops "2 × cup" meaning one amount in a
+ * recipe and a slightly different one in the diary.
+ */
+
+export interface PortionOption {
+  key: string
+  label: string
+  /** Base units (g or ml) in one of these. */
+  size: number
+  /** 'base' portions are logged as a plain weight, with no "2 × oz" label. */
+  kind: 'serving' | 'unit' | 'base'
+}
+
+/** A named portion attached to a food, e.g. "1 slice" = 28 g. */
+export interface FoodServing {
+  id: number
+  label: string
+  grams: number
+}
+
+/** What both the diary and a recipe ingredient store. */
+export interface PortionSelection {
+  grams: number
+  serving_label: string | null
+  serving_count: number | null
+}
+
+/**
+ * Does this label already state a size? Open Food Facts serving text usually
+ * does — "5.3 ONZ (150 g)" — and appending our own would give "(150 g) (150 g)".
+ */
+const STATES_SIZE = /\d\s*(g|ml|kg|l)\b/i
+
+export function usePortionOptions(
+  food: Ref<FoodRow | undefined | null>,
+  servings: Ref<FoodServing[]>,
+  system: Ref<MeasurementSystem>,
+  initial?: Ref<PortionSelection | null | undefined>,
+) {
+  const isLiquid = computed(() => !!food.value?.is_liquid)
+  const unit = computed(() => baseUnit(isLiquid.value))
+
+  /**
+   * May we offer grams, ounces and the rest?
+   *
+   * No, for a recipe nobody weighed: its internal basis is the raw ingredient
+   * sum, which is what went *into* the pot, so "100 g of chili" would overstate
+   * a dish that spent an hour boiling down. Servings stay exact either way.
+   */
+  const showsGrams = computed(() => (food.value ? showsGramPortions(food.value) : true))
+
+  /**
+   * The product's own serving first, then any named portions, then the generic
+   * units. Order matters: the first entry is what a fresh picker lands on, and
+   * for a recipe that is deliberately "1 serving".
+   */
+  const options = computed<PortionOption[]>(() => {
+    const list: PortionOption[] = []
+    const f = food.value
+    if (!f) return list
+
+    if (f.serving_grams) {
+      list.push({
+        key: 'serving',
+        label: f.serving_size_text?.trim() || 'serving',
+        size: f.serving_grams,
+        kind: 'serving',
+      })
+    }
+    for (const serving of servings.value) {
+      list.push({ key: `s${serving.id}`, label: serving.label, size: serving.grams, kind: 'serving' })
+    }
+    if (showsGrams.value) {
+      for (const u of portionUnits(isLiquid.value)) {
+        list.push({
+          key: `u:${u.key}`,
+          label: u.label,
+          size: u.size,
+          kind: u.size === 1 ? 'base' : 'unit',
+        })
+      }
+    }
+    return list
+  })
+
+  const selectedKey = ref<string>('')
+  const amount = ref(1)
+
+  watchEffect(() => {
+    if (!food.value || selectedKey.value || options.value.length === 0) return
+
+    // Re-opening something already logged: land on the portion it was logged
+    // with, so "2 × cup" reads back as 2 × cup rather than 480 g.
+    const previous = initial?.value
+    if (previous) {
+      const match = previous.serving_label
+        ? options.value.find((o) => o.label === previous.serving_label)
+        : undefined
+      if (match && previous.serving_count) {
+        selectedKey.value = match.key
+        amount.value = previous.serving_count
+        return
+      }
+      const base = options.value.find((o) => o.kind === 'base')
+      if (base) {
+        selectedKey.value = base.key
+        amount.value = roundGrams(previous.grams)
+        return
+      }
+    }
+
+    // Otherwise the food's stated serving, else the user's preferred unit.
+    const stated = options.value.find((o) => o.kind === 'serving')
+    if (stated) {
+      selectedKey.value = stated.key
+      amount.value = 1
+      return
+    }
+    const preferred = `u:${defaultUnitKey(system.value, isLiquid.value)}`
+    const option = options.value.find((o) => o.key === preferred) ?? options.value[0]
+    if (!option) return
+    selectedKey.value = option.key
+    amount.value = defaultAmount(option)
+  })
+
+  const selected = computed(() => options.value.find((o) => o.key === selectedKey.value))
+  const grams = computed(() => (selected.value ? amount.value * selected.value.size : 0))
+
+  /** "oz (28 g)" — the equivalence belongs in the option, not just after it. */
+  function optionLabel(option: PortionOption): string {
+    if (!showsGrams.value) return option.label
+    if (option.size === 1 || STATES_SIZE.test(option.label)) return option.label
+    return `${option.label} (${roundGrams(option.size)} ${unit.value})`
+  }
+
+  /**
+   * Shown whenever the chosen unit isn't already grams/millilitres. Suppressed
+   * for a single serving whose label states its own size, where the line would
+   * just be "1 × 5.3 ONZ (150 g) = 150 g" — and for anything whose weight we
+   * are not entitled to quote.
+   */
+  const conversion = computed(() => {
+    const option = selected.value
+    if (!option || !showsGrams.value) return null
+    if (option.kind === 'base' || !amount.value) return null
+    if (amount.value === 1 && STATES_SIZE.test(option.label)) return null
+    return `${amount.value} × ${option.label} = ${roundGrams(grams.value)} ${unit.value}`
+  })
+
+  /**
+   * Switching between "1 serving", "100 g" and "4 oz" needs a sane starting
+   * amount — leaving `1` behind after a switch to grams is a 1 g portion.
+   */
+  function onPortionChange() {
+    if (selected.value) amount.value = defaultAmount(selected.value)
+  }
+
+  /** Exactly what the diary and a recipe ingredient both store. */
+  const selection = computed<PortionSelection>(() => {
+    const option = selected.value
+    const named = option && option.kind !== 'base'
+    return {
+      grams: grams.value,
+      serving_label: named ? option!.label : null,
+      serving_count: named ? amount.value : null,
+    }
+  })
+
+  /**
+   * Returned `reactive`, not as loose refs, for one specific reason: the page
+   * that owns this needs `grams` to render its nutrition preview, and the
+   * picker component needs the same state to render its controls. Whoever owns
+   * it must set it up *before* the first render — if the child owned it, the
+   * server would render a real preview (child setup runs mid-render) while the
+   * client's first pass still saw zero, and hydration would mismatch. So the
+   * page owns it and hands the whole object down.
+   */
+  return reactive({
+    isLiquid,
+    unit,
+    showsGrams,
+    options,
+    selectedKey,
+    amount,
+    selected,
+    grams,
+    conversion,
+    selection,
+    optionLabel,
+    onPortionChange,
+  })
+}
+
+export type PortionPickerState = ReturnType<typeof usePortionOptions>

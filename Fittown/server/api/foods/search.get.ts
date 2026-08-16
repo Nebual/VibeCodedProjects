@@ -1,3 +1,4 @@
+import { RECIPE_SOURCE } from '#shared/recipes'
 import {
   buildFtsQuery,
   foodCols,
@@ -15,7 +16,7 @@ import {
  */
 export default defineEventHandler(async (event) => {
   const user = await requireUser(event)
-  const { q, limit } = getQuery(event)
+  const { q, limit, exclude_recipes: excludeRecipes } = getQuery(event)
 
   const text = typeof q === 'string' ? q.trim() : ''
   if (text.length < 2) return { results: [] }
@@ -33,6 +34,7 @@ export default defineEventHandler(async (event) => {
          JOIN foods f ON f.id = foods_fts.rowid
          WHERE foods_fts MATCH $match
            AND (f.owner_user_id IS NULL OR f.owner_user_id = $userId)
+           AND ($includeRecipes = 1 OR f.source != $recipeSource)
          ORDER BY score DESC
          LIMIT $scan
        ),
@@ -56,6 +58,10 @@ export default defineEventHandler(async (event) => {
       exact: text,
       scan: SEARCH_SCAN_LIMIT,
       limit: want,
+      // Recipes are ordinary foods everywhere except when picking an
+      // *ingredient*, where one recipe can't yet be nested inside another.
+      includeRecipes: excludeRecipes ? 0 : 1,
+      recipeSource: RECIPE_SOURCE,
     })
 
   return { results }

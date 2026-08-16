@@ -89,8 +89,8 @@ produced a file showing 2 diary entries when the database really had 26. Either
 Two layers, and they cover different things:
 
 ```bash
-cd $RUN && pnpm test                     # 117 unit tests, ~0.3s, no server needed
-cd $RUN && node scripts/e2e.mjs          # 19 steps, fails on any console error
+cd $RUN && pnpm test                     # 169 unit tests, ~0.3s, no server needed
+cd $RUN && node scripts/e2e.mjs          # 30 steps, fails on any console error
 node scripts/screenshots.mjs /tmp/shots  # mobile, dark, desktop — then Read them
 pnpm build                               # catches things dev mode hides
 ```
@@ -98,8 +98,9 @@ pnpm build                               # catches things dev mode hides
 **Unit tests** (`test/*.test.ts`, plain Vitest — see `vitest.config.ts`) cover
 the pure logic: the nutrient catalogue and its null-vs-zero invariant, portion
 units, body/energy maths, the activity library's internal consistency, the
-request validators, and — against a real temp SQLite file — the boot-time
-schema migration and exercise-library sync. They run in a third of a second, so
+request validators, the recipe roll-up (yields, the coverage rule, when gram
+portions may be offered), and — against a real temp SQLite file — the boot-time
+schema migration, the exercise-library sync and `recomputeRecipe()`. They run in a third of a second, so
 run them constantly. They deliberately do **not** boot Nuxt; anything needing a
 running app belongs in the e2e script instead.
 
@@ -203,6 +204,37 @@ them for tidiness. Biometric units belong to the *type* and values are stored
 as entered — converting someone's tape-measure readings would make them stop
 matching their notebook.
 
+**A recipe is a `foods` row, and `recomputeRecipe()` is the only thing allowed
+to write its nutrition.** `source = 'recipe'`, ingredients in
+`recipe_ingredients`, nutrient columns derived from them. That is what makes
+logging, search, "Frequent", day totals and the portion picker work with no
+recipe-shaped code in them. Every mutation route ends with a
+`recomputeRecipe(db, id)` inside the same transaction; hand-editing a recipe's
+nutrient columns gives you a food row that disagrees with its own ingredients
+and nothing to notice it with. Three rules live inside it:
+
+- **The basis is the yield if stated, else the raw ingredient sum**, and an
+  empty recipe has a basis of 0 — otherwise deleting the last ingredient from a
+  recipe someone had already weighed leaves a serving size with no nutrition
+  under it, and the diary logs a portion worth nothing.
+- **A nutrient is `null` unless ingredients covering ≥ `NUTRIENT_COVERAGE_MIN`
+  of the raw weight declare it** (`shared/recipes.ts`). Summing only the
+  ingredients that happen to record iron and presenting it as the recipe's iron
+  is the same lie as `?? 0`.
+- **`food_servings` is rebuilt, not patched.** The picker reads it verbatim, so
+  a stale "whole recipe = 900 g" logs the wrong amount without looking wrong.
+
+**No yield, no grams.** `showsGramPortions()` in `shared/recipes.ts` is the one
+rule, used by the portion picker, the diary and the search results. A recipe
+nobody weighed is measured in servings only: its internal basis is what went
+*into* the pot, and quoting that as the weight of a dish that spent an hour
+boiling down would be inventing a number. Servings stay exact either way, which
+is why they're what we offer.
+
+**Renaming a food means re-indexing it.** `foods_fts` is external-content, so a
+delete has to replay the *old* values — read them before the UPDATE and use
+`reindexFood()`. Skip it and the old name keeps turning up in search.
+
 **Every API route calls `requireUser(event)` and scopes queries by `user_id`.**
 Deletes/updates use `WHERE id = ? AND user_id = ?` so a guessed ID is a no-op.
 Keep that pattern.
@@ -243,28 +275,39 @@ in place (~10 s) instead of a two-minute re-import.
 app/
   components/    CalorieSummary, MealSection, WaterTracker, FitnessSection,
                  BodyMeasurements, CalorieTargetDialog, ActivityPicker,
+                 MetricChart (weight + any custom biometric),
                  NutrientBreakdown, FoodResultList, BarcodeScanner, DateNav,
                  AppIcon (inline SVG set — no icon dependency)
   composables/   useDiary (day data + all mutations), useToday (timezone)
-  pages/         index (diary), add, food/[id], food/new, fitness, trends,
-                 settings, login
+  pages/         index (diary), add, food/[id], food/new, recipes/index,
+                 recipes/[id], fitness, trends, settings, login
   plugins/       timezone.client.ts
   middleware/    auth.global.ts — every route is private except /login
 server/
   api/           REST endpoints; diary/index.get.ts assembles a whole day
   db/            schema.ts (single source of truth)
   routes/auth/   google.get.ts, dev.post.ts, logout.post.ts
-  utils/         db, auth, validate, foods (search ranking lives here)
+  utils/         db, auth, validate, foods (search ranking lives here),
+                 recipes (recomputeRecipe + the FTS re-index)
 shared/          nutrients.ts  — nutrient catalogue used by both sides
                  activities.ts — exercise library, categories, effort METs
                  body.ts      — units, activity levels, BMR/TDEE, target maths
                  portions.ts  — portion units and their gram equivalents
-scripts/         import-off, fix-liquid-flags, reset-user-data, e2e, screenshots
+                 recipes.ts   — recipe roll-up, coverage rule, gram-portion rule
+scripts/         import-off, fix-liquid-flags, reset-user-data,
+                 recompute-recipes, e2e, screenshots
 test/            Vitest unit tests (pure logic + schema migration)
 ```
 
 `server/db/schema.ts` is a TS template literal rather than a `.sql` file so
 bundling is deterministic in production. Applied idempotently on every boot.
+
+`package.json` carries an `imports` map for `#shared/*`, mirroring the alias
+Nuxt sets up. It exists so the plain-`node` scripts in `scripts/` can import the
+app's own modules — `recompute-recipes.mjs` runs the same `recomputeRecipe()`
+the API does instead of keeping a second copy of the arithmetic. Node resolves
+ESM specifiers literally, so imports reached that way need their `.ts`
+extension (`./foods.ts`); Nuxt, Vite and Vitest are all happy with it.
 
 Stack: Nuxt 4, Tailwind v4 (`@tailwindcss/vite`, no config file), DaisyUI 5
 (configured in `app/assets/css/main.css` via `@plugin`), `nuxt-auth-utils`,
@@ -277,15 +320,33 @@ Stack: Nuxt 4, Tailwind v4 (`@tailwindcss/vite`, no config file), DaisyUI 5
 
 Verified working: the full logging journey (e2e script), search (22–104 ms over
 203,695 foods), barcode lookup incl. UPC-A/EAN-13 zero-padding and 404s,
-custom foods, goals, trends, dark mode, production build, and the production
-security posture (dev login 404, API 401, `/` redirects).
+custom foods, goals, trends, dark mode, production build, the production
+security posture (dev login 404, API 401, `/` redirects), and — as of the
+user's own deployment — **Google sign-in end to end**, behind nginx with TLS
+termination.
+
+That last one took one fix, and it will catch out the next person who deploys
+behind a proxy. The callback URL is derived from the incoming request
+(`getOAuthRedirectURL` → h3's `getRequestURL`). h3 honours
+`x-forwarded-proto: https` but otherwise falls back to whether the *socket* is
+encrypted — which behind nginx it isn't — so the app built
+`http://host/auth/google` and Google rejected the flow with
+`redirect_uri_mismatch`. The fix is `proxy_set_header X-Forwarded-Proto $scheme;`
+in the nginx location block (README has the full snippet); confirmed working in
+production. `NUXT_OAUTH_GOOGLE_REDIRECT_URL` pins the URL outright if you'd
+rather not depend on a header.
+
+Reproducing this without Google credentials is easy, and worth knowing for any
+future proxy question: start the production build with dummy client id/secret
+and read the `Location` header of `/auth/google` — the redirect leg never
+contacts Google, so the derived `redirect_uri` is right there in the 302.
+
+```bash
+curl -sD - -o /dev/null -H 'Host: example.com' http://localhost:3000/auth/google | grep -i location
+```
 
 **Not tested:**
 
-- **Google OAuth.** `accounts.google.com` was firewall-blocked and there are no
-  credentials, so only the error path ran (it redirects to `/login?error=oauth`
-  rather than 500ing). To try it, the user runs on their host:
-  `sbx policy allow network accounts.google.com,oauth2.googleapis.com,www.googleapis.com`
 - **Camera barcode scanning.** Uses the native `BarcodeDetector` API (no
   scanning library). Unavailable in Safari, hence manual entry alongside. The
   lookup API behind it is tested; the camera path is not.
@@ -301,7 +362,15 @@ security posture (dev login 404, API 401, `/` redirects).
 - No macro trends — Trends charts calories and weight only.
 - The calorie target is set once and never revisited; nothing nudges you when
   your actual rate of loss diverges from the plan you stored.
-- No recipes, meal copying, or "log yesterday again".
+- No meal copying or "log yesterday again".
+- Recipes can't contain other recipes (the ingredient's `source` must be `off`
+  or `custom`). The arithmetic would work; the missing part is recomputing
+  every recipe that depends on one you just edited, and detecting cycles.
+- Editing a recipe rewrites history — a diary entry holds no nutrient snapshot,
+  so adding butter today changes what last Tuesday's bowl reports. The editor
+  says so; snapshot columns are the fix if it ever bites.
+- A recipe that has been logged can't be deleted (409). Archiving would be
+  kinder, and would help custom foods too.
 - `data/` is gitignored — the 79 MB database does not travel via git. A fresh
   clone must run `node scripts/import-off.mjs` (~2 min).
 - `scripts/reset-user-data.mjs` strips personal data while keeping the food

@@ -1,25 +1,39 @@
 <script setup lang="ts">
+import { isRecipe, showsGramPortions } from '#shared/recipes'
 import type { FoodRow } from '~/composables/useDiary'
 
-const props = defineProps<{
-  foods: (FoodRow & { times_logged?: number })[]
-  meal: string
-  date: string | null
-}>()
+const props = withDefaults(
+  defineProps<{
+    foods: (FoodRow & { times_logged?: number })[]
+    meal?: string
+    date?: string | null
+    /** Set when picking an ingredient: results go into this recipe instead. */
+    recipe?: number | null
+  }>(),
+  { meal: 'snack', date: null, recipe: null },
+)
 
-/** Omit `d` entirely rather than emitting `d=null`, which the API rejects. */
 const linkFor = (id: number) =>
-  `/food/${id}?meal=${props.meal}${props.date ? `&d=${props.date}` : ''}`
+  `/food/${id}?${foodLinkQuery({ meal: props.meal, date: props.date, recipe: props.recipe })}`
 
-/** Energy shown per default serving when there is one, else per 100 g. */
+/**
+ * Energy shown per default serving when there is one, else per 100 g.
+ *
+ * A recipe with no stated yield gets the serving without the weight: its
+ * internal basis is the raw ingredient sum, which is not what the finished dish
+ * weighs, so quoting it here would be inventing a number.
+ */
 function energyLine(food: FoodRow) {
   const unit = food.is_liquid ? 'ml' : 'g'
   const per100 = food.kcal
   if (per100 === null || per100 === undefined) return 'No energy data'
 
-  if (food.serving_grams) {
-    const perServing = Math.round((per100 * food.serving_grams) / 100)
-    return `${perServing} kcal · ${Math.round(food.serving_grams)} ${unit} serving`
+  const servingGrams = food.serving_grams
+  if (servingGrams) {
+    const perServing = Math.round((per100 * servingGrams) / 100)
+    return showsGramPortions(food)
+      ? `${perServing} kcal · ${Math.round(servingGrams)} ${unit} serving`
+      : `${perServing} kcal per serving`
   }
   return `${Math.round(per100)} kcal / 100 ${unit}`
 }
@@ -36,7 +50,11 @@ function energyLine(food: FoodRow) {
           <div class="font-medium text-sm truncate">
             {{ food.name }}
             <span
-              v-if="food.source === 'custom'"
+              v-if="isRecipe(food)"
+              class="badge badge-xs badge-primary align-middle"
+            >recipe</span>
+            <span
+              v-else-if="food.source === 'custom'"
               class="badge badge-xs badge-secondary align-middle"
             >custom</span>
           </div>

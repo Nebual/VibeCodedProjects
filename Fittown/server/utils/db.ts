@@ -81,6 +81,12 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
   workout_entries: {
     effort: 'TEXT',
   },
+  // Recipes. Null on the 200k+ imported rows, which costs a byte each in the
+  // record header and saves a second table to join on every food query.
+  foods: {
+    recipe_servings: 'REAL',
+    recipe_final_weight_g: 'REAL',
+  },
 }
 
 function migrate(conn: DatabaseSync) {

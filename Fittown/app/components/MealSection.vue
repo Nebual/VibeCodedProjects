@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { showsGramPortions } from '#shared/recipes'
 import type { DiaryEntry, MealName } from '~/composables/useDiary'
 
 const props = defineProps<{
@@ -14,14 +15,38 @@ const kcal = computed(() =>
   Math.round(props.entries.reduce((sum, e) => sum + (e.nutrients.kcal ?? 0), 0)),
 )
 
-/** "1.5 × container" when a named serving was used, otherwise "150 g". */
+/**
+ * "1.5 × container" when a named serving was used, otherwise "150 g".
+ *
+ * A recipe with no stated yield never shows grams: the weight behind the entry
+ * is the raw ingredient sum, and printing it next to a cooked dish would quote
+ * a weight nobody measured. "1 × serving" is the whole truth there.
+ */
 function portion(entry: DiaryEntry) {
   const unit = entry.food.is_liquid ? 'ml' : 'g'
+  const weighed = showsGramPortions(entry.food)
   if (entry.serving_label && entry.serving_count) {
     const count = Number(entry.serving_count.toFixed(2))
-    return `${count} × ${entry.serving_label} · ${Math.round(entry.grams)} ${unit}`
+    const label = `${count} × ${entry.serving_label}`
+    return weighed ? `${label} · ${Math.round(entry.grams)} ${unit}` : label
   }
-  return `${Math.round(entry.grams)} ${unit}`
+  return weighed ? `${Math.round(entry.grams)} ${unit}` : 'serving'
+}
+
+/**
+ * Re-opening an entry lands on the portion it was logged with, rather than
+ * resetting to a default the user never chose.
+ */
+function editLink(entry: DiaryEntry) {
+  const params = new URLSearchParams({
+    entry: String(entry.id),
+    d: props.date,
+    meal: props.meal,
+    g: String(entry.grams),
+  })
+  if (entry.serving_label) params.set('sl', entry.serving_label)
+  if (entry.serving_count) params.set('sc', String(entry.serving_count))
+  return `/food/${entry.food.id}?${params}`
 }
 </script>
 
@@ -41,7 +66,7 @@ function portion(entry: DiaryEntry) {
         >
           <div class="flex-1 min-w-0">
             <NuxtLink
-              :to="`/food/${entry.food.id}?entry=${entry.id}&d=${date}&meal=${meal}`"
+              :to="editLink(entry)"
               class="block truncate font-medium text-sm hover:underline"
             >
               {{ entry.food.name }}
@@ -70,7 +95,11 @@ function portion(entry: DiaryEntry) {
         </li>
       </ul>
 
-      <p v-else class="px-4 pb-1 text-sm text-base-content/40">Nothing logged yet.</p>
+      <!--
+        No "nothing logged yet" placeholder: four empty meals is the normal
+        state of a morning, and saying so four times pushes the rest of the day
+        off the screen. The "Add food" button already says the section is empty.
+      -->
 
       <NuxtLink
         :to="`/add?meal=${meal}&d=${date}`"

@@ -312,6 +312,13 @@ const planSummary = computed(() => {
   return `${verb} ${pace}${towards}.`
 })
 
+/**
+ * The diamond-ring poll at the bottom of the page. Both buttons set this, so
+ * the answer is always "Yes" — that's the joke. Local state only: it isn't
+ * sent anywhere, isn't stored, and resets on reload.
+ */
+const pollVoted = ref(false)
+
 async function signOut() {
   await $fetch('/auth/logout', { method: 'POST' })
   await clear()
@@ -619,6 +626,41 @@ const goalFields = [
         <h2 class="font-semibold">Account</h2>
         <p class="text-sm text-base-content/60">{{ user?.email }}</p>
         <button class="btn btn-outline btn-sm mt-1" @click="signOut">Sign out</button>
+      </div>
+    </section>
+
+    <!--
+      A joke, and deliberately a purely local one: nothing is sent anywhere and
+      nothing is stored. Both buttons record a "Yes", which is the entire gag.
+    -->
+    <section class="card bg-base-100 shadow-sm">
+      <div class="card-body p-4 gap-3">
+        <h2 class="font-semibold">
+          Poll: should I add in-app full screen ads for diamond rings?
+        </h2>
+
+        <div class="flex gap-2">
+          <button
+            class="btn btn-sm flex-1"
+            :class="pollVoted ? 'btn-primary' : 'btn-outline'"
+            @click="pollVoted = true"
+          >
+            <AppIcon v-if="pollVoted" name="check" class="w-4 h-4" />
+            Yes
+          </button>
+          <button
+            class="btn btn-sm flex-1"
+            :class="pollVoted ? 'btn-disabled' : 'btn-outline'"
+            :disabled="pollVoted"
+            @click="pollVoted = true"
+          >
+            No
+          </button>
+        </div>
+
+        <p v-if="pollVoted" class="text-xs text-base-content/60">
+          Thanks! You voted <strong>Yes</strong>. Due to how fast AI development is, expect these to start showing the next time you login.
+        </p>
       </div>
     </section>
 

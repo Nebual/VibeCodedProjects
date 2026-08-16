@@ -8,6 +8,8 @@ const router = useRouter()
 const meal = computed(() => (route.query.meal as MealName) || 'snack')
 const today = useToday()
 const date = computed(() => (route.query.d as string) || today.value)
+/** Set when this food is being invented to go into a recipe. */
+const recipeId = computed(() => (route.query.recipe ? Number(route.query.recipe) : null))
 
 const form = reactive({
   name: '',
@@ -67,8 +69,15 @@ async function save() {
         serving_size_text: form.basis === 'serving' ? `${form.basis_grams} ${unit.value}` : null,
       },
     })
-    // Straight to the portion screen so they can log it immediately.
-    await router.replace(`/food/${food.id}?meal=${meal.value}${date.value ? `&d=${date.value}` : ''}`)
+    // Straight to the portion screen so they can log it — or drop it into the
+    // recipe they were building when they realised the food didn't exist yet.
+    await router.replace(
+      `/food/${food.id}?${foodLinkQuery({
+        meal: meal.value,
+        date: date.value,
+        recipe: recipeId.value,
+      })}`,
+    )
   } catch (err) {
     error.value = (err as { statusMessage?: string }).statusMessage ?? 'Could not save this food'
     saving.value = false

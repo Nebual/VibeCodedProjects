@@ -18,6 +18,17 @@ const date = computed({
 
 const { day, addWorkout, removeWorkout } = useDiary(date)
 
+/**
+ * Recently used activities, fetched here rather than inside the picker so it
+ * can be refreshed the moment a workout is saved — the picker unmounts while
+ * you fill in the form, and would otherwise come back showing a stale list.
+ */
+const { data: recentData, refresh: refreshRecent } = await useFetch<{ results: Exercise[] }>(
+  '/api/exercises/recent',
+  { default: () => ({ results: [] }) },
+)
+const recent = computed(() => recentData.value?.results ?? [])
+
 const selected = ref<Exercise | null>(null)
 const effort = ref<EffortKey>('moderate')
 
@@ -80,6 +91,7 @@ async function save() {
       effort: hasEffort.value ? effort.value : null,
       ...form,
     })
+    await refreshRecent()
     selected.value = null
     Object.assign(form, {
       duration_min: 30, calories: null, sets: null, reps: null,
@@ -109,7 +121,7 @@ async function save() {
       <div class="card-body p-4 gap-3">
         <h2 class="font-semibold">Log a workout</h2>
 
-        <ActivityPicker v-if="!selected" @select="choose" />
+        <ActivityPicker v-if="!selected" :recent="recent" @select="choose" />
 
         <template v-else>
           <div class="flex items-center gap-2">

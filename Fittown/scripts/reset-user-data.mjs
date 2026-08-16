@@ -30,17 +30,25 @@ const before = {
 }
 
 db.exec('BEGIN')
-// Custom foods belong to users; drop them with their FTS rows first so the
-// index doesn't keep pointing at deleted content.
-const customIds = db
-  .prepare("SELECT id FROM foods WHERE source = 'custom'")
+
+// Entries first. `diary_entries.food_id` is ON DELETE RESTRICT, so deleting a
+// user's foods while their meals still point at them fails outright — and a
+// recipe is a food that exists *in order to* be logged, so this is the normal
+// case rather than an edge one.
+db.exec('DELETE FROM diary_entries')
+
+// Custom foods and recipes both belong to users; drop them with their FTS rows
+// so the index doesn't keep pointing at deleted content. Recipe ingredient rows
+// go with their recipe: recipe_food_id is ON DELETE CASCADE and foreign keys
+// are on above.
+const userFoodIds = db
+  .prepare("SELECT id FROM foods WHERE source IN ('custom', 'recipe')")
   .all()
   .map((r) => r.id)
 const delFts = db.prepare('DELETE FROM foods_fts WHERE rowid = ?')
-for (const id of customIds) delFts.run(id)
+for (const id of userFoodIds) delFts.run(id)
 
-db.exec("DELETE FROM foods WHERE source = 'custom'")
-db.exec('DELETE FROM diary_entries')
+db.exec("DELETE FROM foods WHERE source IN ('custom', 'recipe')")
 db.exec('DELETE FROM water_entries')
 db.exec('DELETE FROM workout_entries')
 db.exec('DELETE FROM weight_entries')
@@ -66,6 +74,7 @@ if (out) {
 
 console.log(
   `Removed ${before.users} user(s), ${before.entries} diary entries, ` +
-    `${customIds.length} custom foods. ${before.foods - customIds.length} foods kept.`,
+    `${userFoodIds.length} custom foods and recipes. ` +
+    `${before.foods - userFoodIds.length} foods kept.`,
 )
 db.close()

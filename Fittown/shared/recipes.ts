@@ -1,0 +1,176 @@
+/**
+ * Recipe maths, shared by the server, the UI and `scripts/recompute-recipes.mjs`.
+ *
+ * A recipe is a row in `foods` with `source = 'recipe'`, whose per-100 g
+ * nutrient columns are rolled up from its ingredients. Everything in here is
+ * pure so all three callers agree on the numbers, and so it can be unit-tested
+ * without a database.
+ *
+ * The relative `./nutrients.ts` import is deliberate: with the extension, this
+ * module loads unchanged under Vite, Vitest *and* plain `node` (which strips
+ * types but still requires ESM-style explicit extensions), which is what lets
+ * the maintenance script import the same formula rather than copy it.
+ */
+
+import { NUTRIENT_KEYS } from './nutrients.ts'
+
+/** `source` value that marks a `foods` row as a recipe. */
+export const RECIPE_SOURCE = 'recipe'
+
+/**
+ * How much of a recipe's weight must declare a nutrient before we report it.
+ *
+ * Open Food Facts records maybe a third of micronutrients, so summing only the
+ * ingredients that happen to declare iron and calling the result "the recipe's
+ * iron" understates it — and `null ≠ zero` is the invariant that keeps the app
+ * saying "not recorded" instead of lying with a small number.
+ *
+ * Below 100% so a 2 g pinch of salt with no vitamin K entry doesn't blank the
+ * whole recipe's vitamin K. Coverage is measured against the *raw* ingredient
+ * weight — what is actually in the mixture — not the finished yield.
+ */
+export const NUTRIENT_COVERAGE_MIN = 0.75
+
+/** The named portion that logs the entire recipe at once. */
+export const WHOLE_RECIPE_LABEL = 'whole recipe'
+
+/** A single serving, when that isn't the whole recipe. */
+export const SERVING_LABEL = 'serving'
+
+export interface RecipeIngredient {
+  /** Resolved amount of this ingredient, in grams (or ml for liquids). */
+  grams: number
+  /** The ingredient's `foods` row — a per-100 g nutrient vector. */
+  food: Record<string, unknown>
+}
+
+export interface RecipeRollUp {
+  /** What went into the mixture. */
+  raw_g: number
+  /** What the portion maths divides by: the yield if known, else `raw_g`. */
+  basis_g: number
+  /** Nutrients for the whole recipe. `null` means "not recorded". */
+  totals: Record<string, number | null>
+  /** The same figures per 100 g/ml of `basis_g` — what `foods` stores. */
+  per100: Record<string, number | null>
+}
+
+/**
+ * What the portion maths divides by.
+ *
+ * A cooked dish weighs less than its ingredients — water leaves — so the yield
+ * wins when the user has weighed it. Without one we fall back to the raw sum,
+ * which keeps every *serving* correct (a quarter of the pot is a quarter of the
+ * pot however much it weighs) while leaving gram-labelled portions unsafe to
+ * show. See `showsGramPortions`.
+ */
+export function recipeBasisGrams(rawG: number, finalWeightG?: number | null): number {
+  // An empty recipe weighs nothing, whatever someone typed in the yield box.
+  // Without this, deleting the last ingredient from a recipe with a stated
+  // yield leaves it with a serving size and no nutrition — a portion the diary
+  // would happily log for zero calories.
+  if (!(rawG > 0)) return 0
+
+  return finalWeightG !== null && finalWeightG !== undefined && finalWeightG > 0
+    ? finalWeightG
+    : rawG
+}
+
+/**
+ * Roll a list of ingredients up into one nutrient vector.
+ *
+ * Note that `finalWeightG` never changes `totals` — only how they're spread
+ * over 100 g. Stating a cooked weight can't create or destroy nutrition.
+ */
+export function rollUpRecipe(
+  ingredients: RecipeIngredient[],
+  finalWeightG?: number | null,
+): RecipeRollUp {
+  const rawG = ingredients.reduce((sum, i) => sum + (i.grams > 0 ? i.grams : 0), 0)
+  const basisG = recipeBasisGrams(rawG, finalWeightG)
+
+  const totals: Record<string, number | null> = {}
+  const per100: Record<string, number | null> = {}
+
+  for (const key of NUTRIENT_KEYS) {
+    totals[key] = null
+    per100[key] = null
+  }
+
+  if (rawG <= 0 || basisG <= 0) return { raw_g: rawG, basis_g: basisG, totals, per100 }
+
+  for (const key of NUTRIENT_KEYS) {
+    let sum = 0
+    let coveredG = 0
+
+    for (const { grams, food } of ingredients) {
+      if (!(grams > 0)) continue
+      const value = food[key]
+      if (typeof value !== 'number' || !Number.isFinite(value)) continue
+      sum += (value * grams) / 100
+      coveredG += grams
+    }
+
+    totals[key] = coveredG / rawG >= NUTRIENT_COVERAGE_MIN ? sum : null
+  }
+
+  // Same fallback custom foods get: people often know the macros when the
+  // energy figure is missing, and 4/4/9 is a better answer than "unknown".
+  if (totals.kcal === null) {
+    const { protein_g: p, carbs_g: c, fat_g: f } = totals
+    if (p !== null || c !== null || f !== null) {
+      totals.kcal = (p ?? 0) * 4 + (c ?? 0) * 4 + (f ?? 0) * 9
+    }
+  }
+
+  for (const key of NUTRIENT_KEYS) {
+    const total = totals[key]
+    per100[key] = total === null ? null : (total / basisG) * 100
+  }
+
+  return { raw_g: rawG, basis_g: basisG, totals, per100 }
+}
+
+/** Grams in one serving, or null when the recipe has nothing in it yet. */
+export function recipeServingGrams(basisG: number, servings: number): number | null {
+  if (!(basisG > 0) || !(servings > 0)) return null
+  return basisG / servings
+}
+
+/**
+ * What the food's own serving option is called.
+ *
+ * A one-serving recipe *is* the whole recipe, and offering both would be two
+ * identical options with different names.
+ */
+export function recipeServingLabel(servings: number): string {
+  return servings === 1 ? WHOLE_RECIPE_LABEL : SERVING_LABEL
+}
+
+/** Does this recipe need a separate "whole recipe" portion alongside a serving? */
+export function needsWholeRecipeOption(servings: number): boolean {
+  return servings !== 1
+}
+
+/**
+ * May the UI offer gram/ounce portions of this food?
+ *
+ * Only when it knows what the food weighs. For a recipe with no stated yield,
+ * the internal basis is the raw ingredient sum, which is the weight that went
+ * *into* the pot — offering "100 g of chili" against it would quietly overstate
+ * a dish that spent an hour boiling down. Servings stay correct either way, so
+ * they are what we offer instead.
+ */
+export function showsGramPortions(food: {
+  source?: unknown
+  recipe_final_weight_g?: unknown
+}): boolean {
+  if (food.source !== RECIPE_SOURCE) return true
+  const weight = food.recipe_final_weight_g
+  return typeof weight === 'number' && Number.isFinite(weight) && weight > 0
+}
+
+/** Is this `foods` row a recipe? */
+export function isRecipe(food: { source?: unknown }): boolean {
+  return food.source === RECIPE_SOURCE
+}

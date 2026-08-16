@@ -4,6 +4,10 @@ const FOOD_FIELDS = [
   'id', 'source', 'barcode', 'name', 'brand', 'quantity', 'categories',
   'image_url', 'serving_size_text', 'serving_grams', 'is_liquid',
   'owner_user_id', 'nutriscore', 'nova_group', 'popularity',
+  // Recipe fields travel with the food so that search results, the diary and
+  // the portion picker can all apply the "no yield, no gram portions" rule
+  // without a second query. Null for everything that isn't a recipe.
+  'recipe_servings', 'recipe_final_weight_g',
   ...NUTRIENT_KEYS,
 ]
 

@@ -2,6 +2,10 @@
   "name": "Fittown",
   "type": "module",
   "private": true,
+  "//imports": "Mirrors the #shared alias Nuxt sets up, so the maintenance scripts in scripts/ can import the same modules the app does under plain `node` (which strips types but knows nothing about bundler aliases). Without this, scripts/recompute-recipes.mjs would need its own copy of the recipe maths.",
+  "imports": {
+    "#shared/*": "./shared/*.ts"
+  },
   "scripts": {
     "build": "nuxt build",
     "dev": "nuxt dev",

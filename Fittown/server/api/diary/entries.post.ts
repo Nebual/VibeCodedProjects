@@ -1,3 +1,5 @@
+import { RECIPE_SOURCE } from '#shared/recipes'
+
 /**
  * Log a food to a meal.
  *
@@ -17,11 +19,22 @@ export default defineEventHandler(async (event) => {
   const db = useDb()
   const food = db
     .prepare(
-      'SELECT id, serving_grams FROM foods WHERE id = ? AND (owner_user_id IS NULL OR owner_user_id = ?)',
+      'SELECT id, source, serving_grams FROM foods WHERE id = ? AND (owner_user_id IS NULL OR owner_user_id = ?)',
     )
-    .get(foodId, user.id) as { id: number; serving_grams: number | null } | undefined
+    .get(foodId, user.id) as
+    | { id: number; source: string; serving_grams: number | null }
+    | undefined
 
   if (!food) throw createError({ statusCode: 404, statusMessage: 'Food not found' })
+
+  // An empty recipe has null nutrients by design, so logging it would add a row
+  // that contributes nothing and reads as a bug. Say why instead.
+  if (food.source === RECIPE_SOURCE && food.serving_grams === null) {
+    throw createError({
+      statusCode: 400,
+      statusMessage: 'This recipe has no ingredients yet',
+    })
+  }
 
   const grams = assertNumber(body.grams, 'grams', { min: 0.1, max: 20000 })
   const servingLabel = optionalText(body.serving_label, 60)

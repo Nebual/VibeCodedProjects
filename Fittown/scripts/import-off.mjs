@@ -405,6 +405,17 @@ progress(true)
 console.log('\nRebuilding full-text search index...')
 db.exec("INSERT INTO foods_fts(foods_fts) VALUES('rebuild')")
 
+// A recipe caches the sum of its ingredients, and this import has just
+// refreshed the nutrition of every food underneath them. Re-roll them now, or
+// last week's chili keeps last week's numbers.
+console.log('Recomputing recipes...')
+const { recomputeRecipe } = await import('../server/utils/recipes.ts')
+const recipeRows = db.prepare("SELECT id FROM foods WHERE source = 'recipe'").all()
+db.exec('BEGIN')
+for (const recipe of recipeRows) recomputeRecipe(db, recipe.id)
+db.exec('COMMIT')
+console.log(`  ${recipeRows.length} recipe(s) recomputed`)
+
 console.log('Optimising database...')
 db.exec('PRAGMA optimize')
 db.exec('ANALYZE')

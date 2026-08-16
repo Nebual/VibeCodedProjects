@@ -1,3 +1,5 @@
+import { exerciseCols, withCategories } from '../../utils/exercises'
+
 /**
  * Exercise library: shared activities plus the caller's own additions.
  *
@@ -32,10 +34,7 @@ export default defineEventHandler(async (event) => {
 
   const results = useDb()
     .prepare(
-      `SELECT e.id, e.name, e.category, e.met, e.met_light, e.met_hard,
-              e.tracks_sets, e.tracks_distance, e.hint, e.owner_user_id,
-              (SELECT GROUP_CONCAT(c.category)
-                 FROM exercise_categories c WHERE c.exercise_id = e.id) AS categories
+      `SELECT ${exerciseCols()}
        FROM exercises e
        WHERE ${where.join(' AND ')}
        ORDER BY (e.owner_user_id IS NOT NULL) DESC, e.name
@@ -43,10 +42,5 @@ export default defineEventHandler(async (event) => {
     )
     .all(...params) as Record<string, unknown>[]
 
-  return {
-    results: results.map((row) => ({
-      ...row,
-      categories: typeof row.categories === 'string' ? row.categories.split(',') : [],
-    })),
-  }
+  return { results: withCategories(results) }
 })

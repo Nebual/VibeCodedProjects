@@ -13,19 +13,25 @@ desktop; it installs to a home screen as a PWA.
 - **Local food database** — ~204,000 US and Canadian products imported from
   Open Food Facts, searchable offline with barcode lookup
 - **Custom foods** — for anything the database doesn't have
+- **Recipes** — a mixture of foods logged as one thing. Name it, put what you
+  like in it in whatever units you like, say how many servings it makes, and
+  it's in the diary as "1 serving" or "whole recipe". Weigh the finished dish
+  if you want to log it by weight too — see [Recipes](#recipes)
 - **Any unit you like** — log a portion in grams, ounces, pounds, kilos or the
   packet's own serving, and see what it works out to before you save it
 - **Water** — quick-add in millilitres or fluid ounces
-- **Fitness** — browse ~95 activities by category (cardio, gym, strength,
-  mobility, sports, outdoors, household, work), pick an effort level, and get a
-  calorie estimate from published MET values and your body weight
+- **Fitness** — your ten most recent activities are one tap away; the rest
+  browse by category (cardio, gym, strength, mobility, sports, outdoors,
+  household, work) or by search. Pick an effort level and get a calorie
+  estimate from published MET values and your body weight
 - **Body measurements** — weight plus anything else you track (bicep, waist,
-  resting heart rate), logged from the diary on any day
+  resting heart rate), logged from the diary on any day and charted on Trends
 - **Calorie target calculator** — age, gender, height, weight and activity
   level give you a maintenance figure, then pick a rate of loss or gain
 - **Macro split** — set protein/carbs/fat as percentages or grams; they stay
   in sync
-- **Trends** — intake, training and weight over 7/14/30 days or a year
+- **Trends** — intake, training, weight and every custom measurement over
+  7/14/30 days or a year
 
 ## Requirements
 
@@ -50,7 +56,8 @@ Everything lives in `.env`:
 | --- | --- | --- |
 | `NUXT_SESSION_PASSWORD` | yes | Encrypts the session cookie. Must be ≥ 32 chars. Generate with `openssl rand -base64 32`. |
 | `NUXT_OAUTH_GOOGLE_CLIENT_ID` | yes | Google OAuth client ID |
-| `NUXT_OAUTH_GOOGLE_CLIENT_SECRET` | yes | Google OAuth client secret |
+| `NUXT_OAUTH_GOOGLE_CLIENT_SECRET` | yes | Google OAuth client secret. Server-side only — never reaches the browser. |
+| `NUXT_OAUTH_GOOGLE_REDIRECT_URL` | no | Pins the OAuth callback URL. Only needed behind a reverse proxy that doesn't send `X-Forwarded-Proto` — see [Deployment](#behind-a-reverse-proxy-nginx-caddy-traefik). |
 | `FITTOWN_ALLOWED_EMAILS` | no | Comma-separated allow-list. Without it **any** Google account can sign in — set it if the app is reachable from the internet. |
 | `FITTOWN_DB_PATH` | no | Database location. Defaults to `./data/fittown.db`. |
 | `FITTOWN_DEV_LOGIN` | no | Set to `1` to enable a password-less dev login. Ignored entirely in production builds. |
@@ -89,6 +96,37 @@ Rows are upserted on `(source, barcode)`, so food IDs stay stable across
 re-imports and existing diary entries never re-point at a different product.
 Re-run it every few months to pick up new products.
 
+## Recipes
+
+A recipe is a mixture of foods you log as one thing — chili, porridge, a
+smoothie. Build one under **Recipes**: add ingredients through the same search
+and barcode scanner you log with, in whatever units suit each one, and the
+nutrition adds up as you go.
+
+Two numbers decide how it appears in the diary:
+
+- **Servings** — how many the recipe makes. This sets the serving size, so
+  logging it is "1 serving" by default. "Whole recipe" is always there as well.
+- **Final weight** — optional, and only worth filling in if you weighed the
+  finished dish. Cooking changes what food weighs, and the ingredients can't
+  tell you by how much, so **without it the recipe is logged in servings only**
+  — no grams or ounces are offered, because the app would be guessing. Add it
+  and the usual units come back.
+
+A serving is always right either way: a quarter of the pot is a quarter of the
+pot however much it weighs.
+
+Two things worth knowing. Editing a recipe changes meals you have already
+logged — nutrition is looked up live, not frozen at the time — and a recipe
+you have logged can't be deleted until those diary entries are gone. And if
+most of what's in the mixture doesn't record, say, iron, the recipe reports
+iron as *not recorded* rather than summing the few ingredients that do; a
+number built from a third of the food is worse than no number.
+
+Re-importing the food database automatically re-totals every recipe, since the
+foods underneath them have changed. After any other bulk edit, run
+`node scripts/recompute-recipes.mjs` yourself.
+
 ## Tests
 
 ```bash
@@ -107,6 +145,7 @@ Other maintenance scripts:
 
 ```bash
 node scripts/fix-liquid-flags.mjs        # recompute ml-vs-g classification
+node scripts/recompute-recipes.mjs       # re-total recipes after a bulk food edit
 node scripts/reset-user-data.mjs         # wipe personal data, keep the foods
 node scripts/screenshots.mjs /tmp/shots  # visual check (needs playwright)
 ```
@@ -144,6 +183,49 @@ The database is a single SQLite file in WAL mode — back it up with:
 ```bash
 sqlite3 /var/lib/fittown/fittown.db ".backup /backups/fittown-$(date +%F).db"
 ```
+
+### Behind a reverse proxy (nginx, Caddy, Traefik)
+
+If TLS is terminated at the proxy, the app is spoken to over plain HTTP and
+**cannot tell that your visitors are on HTTPS** unless the proxy says so. Tell
+it, or Google sign-in will fail with `redirect_uri_mismatch` — the app builds a
+callback URL of `http://your.domain/auth/google`, which won't match the
+`https://` URI registered in the Google console.
+
+```nginx
+server {
+    server_name fittown.example.com;
+    # … listen 443, ssl_certificate, etc.
+
+    location / {
+        proxy_pass http://localhost:3000;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host              $host;
+        proxy_set_header X-Forwarded-Proto $scheme;   # ← the one that matters
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+
+        # WebSocket upgrade, harmless if unused.
+        proxy_set_header Upgrade    $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}
+```
+
+`X-Forwarded-Proto: https` is what flips the derived callback URL to `https://`.
+`Host` matters too — without it the app sees `localhost:3000` and builds a
+callback URL pointing at itself.
+
+If you can't change the proxy, or would rather the flow didn't depend on a
+header, pin the callback URL explicitly instead:
+
+```
+NUXT_OAUTH_GOOGLE_REDIRECT_URL=https://fittown.example.com/auth/google
+```
+
+That overrides the derivation entirely and wins regardless of what headers
+arrive. It must exactly match an authorised redirect URI in the Google console.
 
 ## Notes on design
 
@@ -195,14 +277,18 @@ Safari doesn't support it, so manual barcode entry is always offered alongside.
 ```
 app/
   components/      diary UI, nutrient tables, barcode scanner
-  composables/     useDiary (day data + mutations), useToday (timezone)
-  pages/           diary, add, food/[id], food/new, fitness, trends, settings
+  composables/     useDiary (day data + mutations), useToday (timezone),
+                   usePortionOptions (the portion picker's logic)
+  pages/           diary, add, food/[id], food/new, recipes, recipes/[id],
+                   fitness, trends, settings
   plugins/         timezone.client.ts
 server/
   api/             REST endpoints
   db/              schema + exercise seed data
   routes/auth/     Google OAuth, dev login, logout
-  utils/           db connection, auth guards, validation, search ranking
-shared/            nutrient catalogue, portion units, body/energy maths
+  utils/           db connection, auth guards, validation, search ranking,
+                   recipe roll-up
+shared/            nutrient catalogue, portion units, body/energy maths,
+                   recipe rules
 scripts/           OFF importer and maintenance tools
 ```

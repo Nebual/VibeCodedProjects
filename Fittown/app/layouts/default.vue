@@ -8,11 +8,22 @@ async function signOut() {
   await navigateTo('/login')
 }
 
+/**
+ * The phone dock. Four is what fits comfortably; recipes are reached from the
+ * Recipes tab on the add screen, which is where you are when you want one.
+ */
 const navItems = [
   { to: '/', label: 'Diary', icon: 'book' },
   { to: '/fitness', label: 'Fitness', icon: 'activity' },
   { to: '/trends', label: 'Trends', icon: 'chart' },
   { to: '/settings', label: 'Settings', icon: 'cog' },
+]
+
+/** The desktop header has room for one more. */
+const headerItems = [
+  navItems[0]!,
+  { to: '/recipes', label: 'Recipes', icon: 'book' },
+  ...navItems.slice(1),
 ]
 
 // The dock highlights the section, so '/food/123' still lights up Diary.
@@ -33,7 +44,7 @@ function isActive(to: string) {
 
         <nav class="flex-1 flex gap-1">
           <NuxtLink
-            v-for="item in navItems"
+            v-for="item in headerItems"
             :key="item.to"
             :to="item.to"
             class="btn btn-ghost btn-sm"

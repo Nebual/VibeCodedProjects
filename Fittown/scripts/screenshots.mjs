@@ -42,6 +42,24 @@ for (const [name, path] of shots) {
   await page.screenshot({ path: `${OUT}/${name}.png`, fullPage: true })
 }
 
+// Recipes. Shot from a real recipe rather than an empty one, since the editor's
+// whole job is showing what the mixture comes to.
+const { recipes } = await page.evaluate(() => fetch('/api/recipes').then((r) => r.json()))
+const recipe = [...recipes].reverse().find((r) => r.ingredient_count > 0)
+if (recipe) {
+  for (const [name, path] of [
+    ['12-recipes', '/recipes'],
+    ['13-recipe-editor', `/recipes/${recipe.id}`],
+    ['14-recipe-portion', `/food/${recipe.id}?meal=dinner`],
+  ]) {
+    await page.goto(BASE + path, { waitUntil: 'networkidle' })
+    await page.waitForTimeout(500)
+    await page.screenshot({ path: `${OUT}/${name}.png`, fullPage: true })
+  }
+} else {
+  console.log('No recipe with ingredients to shoot — skipped 12–14.')
+}
+
 // The activity category grid, and one activity's effort picker.
 await page.goto(`${BASE}/fitness`, { waitUntil: 'networkidle' })
 await page.waitForTimeout(700)
@@ -102,6 +120,11 @@ const dp = await dark.newPage()
 await dp.goto(`${BASE}/`, { waitUntil: 'networkidle' })
 await dp.waitForTimeout(400)
 await dp.screenshot({ path: `${OUT}/10-diary-dark.png`, fullPage: true })
+if (recipe) {
+  await dp.goto(`${BASE}/recipes/${recipe.id}`, { waitUntil: 'networkidle' })
+  await dp.waitForTimeout(500)
+  await dp.screenshot({ path: `${OUT}/15-recipe-dark.png`, fullPage: true })
+}
 
 // Desktop
 const desktop = await browser.newContext({
@@ -112,6 +135,11 @@ const dtp = await desktop.newPage()
 await dtp.goto(`${BASE}/`, { waitUntil: 'networkidle' })
 await dtp.waitForTimeout(400)
 await dtp.screenshot({ path: `${OUT}/11-desktop.png` })
+if (recipe) {
+  await dtp.goto(`${BASE}/recipes/${recipe.id}`, { waitUntil: 'networkidle' })
+  await dtp.waitForTimeout(500)
+  await dtp.screenshot({ path: `${OUT}/16-recipe-desktop.png` })
+}
 
 await browser.close()
 

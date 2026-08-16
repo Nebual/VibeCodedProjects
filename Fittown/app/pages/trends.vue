@@ -25,6 +25,12 @@ interface Summary {
   water: Record<string, { total_ml: number }>
   workouts: Record<string, { calories: number | null; minutes: number | null }>
   weights: { date: string; weight_kg: number }[]
+  biometrics: {
+    id: number
+    name: string
+    unit: string
+    points: { date: string; value: number }[]
+  }[]
   goals: Goals
 }
 
@@ -116,7 +122,6 @@ const totalBurned = computed(() => days.value.reduce((s, d) => s + d.burned, 0))
 // --- Weight ---------------------------------------------------------------
 
 const weights = computed(() => data.value?.weights ?? [])
-const latestWeight = computed(() => weights.value[weights.value.length - 1] ?? null)
 
 const weightChange = computed(() => {
   const w = weights.value
@@ -134,45 +139,35 @@ const weightChangeDisplay = computed(() => {
 const goalWeight = computed(() => data.value?.goals?.goal_weight_kg ?? null)
 
 /**
- * The weight line, in a 300×100 user-space box.
- *
- * `preserveAspectRatio="none"` lets the box stretch to whatever width the card
- * is; `vector-effect="non-scaling-stroke"` keeps the line from being stretched
- * with it. Dots are deliberately absent — at a year's worth of daily weigh-ins
- * they'd merge into a smear, and they'd render as ellipses under the stretch.
+ * Weights converted into whatever unit the user reads, because the chart
+ * draws exactly the numbers it's given. Everything is stored in kg.
  */
-const CHART_W = 300
-const CHART_H = 100
+const weightPoints = computed(() =>
+  weights.value.map((w) => ({
+    date: w.date,
+    value: unit.value === 'lb' ? kgToLb(w.weight_kg) : w.weight_kg,
+  })),
+)
 
-const weightChart = computed(() => {
-  const points = weights.value
-  if (!from.value || points.length < 2) return null
-
-  const span = Math.max(range.value - 1, 1)
-  const dayIndex = (date: string) =>
-    Math.round(
-      (fromLocalDate(date).getTime() - fromLocalDate(from.value!).getTime()) / 86_400_000,
-    )
-
-  const values = points.map((p) => p.weight_kg)
-  const withGoal = goalWeight.value === null ? values : [...values, goalWeight.value]
-  const lo = Math.min(...withGoal)
-  const hi = Math.max(...withGoal)
-  // A flat week would otherwise divide by zero and draw at the very top.
-  const pad = Math.max((hi - lo) * 0.15, 0.4)
-  const min = lo - pad
-  const max = hi + pad
-
-  const x = (date: string) => (dayIndex(date) / span) * CHART_W
-  const y = (kg: number) => CHART_H - ((kg - min) / (max - min)) * CHART_H
-
-  return {
-    line: points.map((p) => `${x(p.date).toFixed(2)},${y(p.weight_kg).toFixed(2)}`).join(' '),
-    goalY: goalWeight.value === null ? null : y(goalWeight.value),
-    min,
-    max,
-  }
+const goalWeightDisplay = computed(() => {
+  const goal = goalWeight.value
+  if (goal === null) return null
+  return unit.value === 'lb' ? kgToLb(goal) : goal
 })
+
+// --- Custom measurements ---------------------------------------------------
+
+/**
+ * Bicep, waist, resting heart rate — whatever the user chose to track, each
+ * on its own chart. Series with a single reading are dropped: one point is a
+ * number, not a trend, and MetricChart won't draw a line from it anyway.
+ *
+ * Values are stored in the unit the measurement was defined with, so unlike
+ * weight they need no conversion.
+ */
+const biometricSeries = computed(() =>
+  (data.value?.biometrics ?? []).filter((series) => series.points.length > 1),
+)
 </script>
 
 <template>
@@ -214,60 +209,17 @@ const weightChart = computed(() => {
       page's own flex column would let `order-first` jump the heading too.
     -->
     <div class="flex flex-col gap-3">
-    <section
-      v-if="weightChart"
-      class="card bg-base-100 shadow-sm"
+    <MetricChart
+      v-if="from && to"
+      label="Weight"
+      :points="weightPoints"
+      :unit="unit"
+      :from="from"
+      :to="to"
+      :range-days="range"
+      :goal="goalWeightDisplay"
       :class="isYear ? 'order-first' : 'order-last'"
-    >
-      <div class="card-body p-4 gap-2">
-        <header class="flex items-baseline justify-between">
-          <h2 class="font-semibold text-sm">Weight</h2>
-          <span v-if="latestWeight" class="text-sm tabular">
-            {{ formatWeight(latestWeight.weight_kg, unit) }}
-          </span>
-        </header>
-
-        <div class="relative">
-          <svg
-            class="w-full h-32 overflow-visible"
-            :viewBox="`0 0 ${CHART_W} ${CHART_H}`"
-            preserveAspectRatio="none"
-            role="img"
-            :aria-label="`Weight from ${formatWeight(weightChart.min, unit)} to ${formatWeight(weightChart.max, unit)}`"
-          >
-            <line
-              v-if="weightChart.goalY !== null"
-              x1="0" :y1="weightChart.goalY" :x2="CHART_W" :y2="weightChart.goalY"
-              class="stroke-success/60" stroke-width="1"
-              stroke-dasharray="4 3" vector-effect="non-scaling-stroke"
-            />
-            <polyline
-              :points="weightChart.line"
-              fill="none" class="stroke-secondary" stroke-width="2"
-              stroke-linejoin="round" stroke-linecap="round"
-              vector-effect="non-scaling-stroke"
-            />
-          </svg>
-
-          <span class="absolute top-0 left-0 text-[0.6rem] text-base-content/40 tabular">
-            {{ formatWeight(weightChart.max, unit) }}
-          </span>
-          <span class="absolute bottom-0 left-0 text-[0.6rem] text-base-content/40 tabular">
-            {{ formatWeight(weightChart.min, unit) }}
-          </span>
-          <span
-            v-if="goalWeight !== null"
-            class="absolute right-0 text-[0.6rem] text-success/80 tabular -translate-y-1/2"
-            :style="`top:${(weightChart.goalY! / CHART_H) * 100}%`"
-          >goal</span>
-        </div>
-
-        <div class="flex justify-between text-[0.6rem] text-base-content/40">
-          <span>{{ from }}</span>
-          <span>{{ to }}</span>
-        </div>
-      </div>
-    </section>
+    />
 
     <!-- Calories ----------------------------------------------------------->
     <section class="card bg-base-100 shadow-sm">
@@ -342,7 +294,23 @@ const weightChart = computed(() => {
       </div>
     </section>
 
-    <p v-if="!logged.length && !weights.length" class="text-center text-sm text-base-content/50 py-8">
+    <!-- Whatever else the user tracks, one chart each. -->
+    <MetricChart
+      v-for="series in biometricSeries"
+      :key="series.id"
+      :label="series.name"
+      :points="series.points"
+      :unit="series.unit"
+      :from="from!"
+      :to="to!"
+      :range-days="range"
+      stroke="stroke-accent"
+    />
+
+    <p
+      v-if="!logged.length && !weights.length && !biometricSeries.length"
+      class="text-center text-sm text-base-content/50 py-8"
+    >
       Log some food to see trends here.
     </p>
   </div>

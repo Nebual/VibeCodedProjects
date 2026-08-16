@@ -23,6 +23,12 @@ export interface Exercise {
   categories: string[]
 }
 
+const props = defineProps<{
+  /** Most recently logged activities, newest first. Owned by the page so it
+   *  can be refreshed after a workout is saved. */
+  recent?: Exercise[]
+}>()
+
 const emit = defineEmits<{ select: [exercise: Exercise] }>()
 
 const search = ref('')
@@ -69,6 +75,23 @@ function back() {
         placeholder="Search activities…"
       >
     </label>
+
+    <!--
+      Recently used, above the grid. Training runs in phases, so the handful
+      of things you're doing this month is almost always what you want, and
+      browsing to them every time is three taps you shouldn't need.
+    -->
+    <div v-if="!browsing && props.recent?.length" class="flex flex-col gap-1.5">
+      <span class="label-text text-xs text-base-content/60">Recent</span>
+      <div class="flex flex-wrap gap-1.5">
+        <button
+          v-for="ex in props.recent"
+          :key="ex.id"
+          class="btn btn-sm btn-outline normal-case font-normal"
+          @click="emit('select', ex)"
+        >{{ ex.name }}</button>
+      </div>
+    </div>
 
     <!-- Category grid -->
     <div v-if="!browsing" class="grid grid-cols-2 gap-2">

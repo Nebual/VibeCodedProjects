@@ -52,6 +52,43 @@ export default defineEventHandler(async (event) => {
     )
     .all(user.id, start, end) as { date: string; weight_kg: number }[]
 
+  /**
+   * Custom measurements, already grouped into one series per type.
+   *
+   * Grouping here rather than in the client keeps the payload small and means
+   * the chart component receives exactly the shape it draws. Types with no
+   * readings in the range are left out entirely — an empty chart is worse than
+   * no chart.
+   */
+  const biometricRows = db
+    .prepare(
+      `SELECT t.id, t.name, t.unit, t.sort_order, b.date, b.value
+       FROM biometric_entries b
+       JOIN biometric_types t ON t.id = b.type_id
+       WHERE b.user_id = ? AND b.date BETWEEN ? AND ?
+       ORDER BY t.sort_order, t.id, b.date`,
+    )
+    .all(user.id, start, end) as {
+      id: number
+      name: string
+      unit: string
+      date: string
+      value: number
+    }[]
+
+  const bySeries = new Map<
+    number,
+    { id: number; name: string; unit: string; points: { date: string; value: number }[] }
+  >()
+  for (const row of biometricRows) {
+    let series = bySeries.get(row.id)
+    if (!series) {
+      series = { id: row.id, name: row.name, unit: row.unit, points: [] }
+      bySeries.set(row.id, series)
+    }
+    series.points.push({ date: row.date, value: row.value })
+  }
+
   // Index by date so the client can walk the calendar without searching.
   const byDate = (rows: { date: string }[]) =>
     Object.fromEntries(rows.map((r) => [r.date, r]))
@@ -65,6 +102,7 @@ export default defineEventHandler(async (event) => {
     water: byDate(water),
     workouts: byDate(workouts),
     weights,
+    biometrics: [...bySeries.values()],
     goals,
   }
 })

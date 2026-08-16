@@ -5,7 +5,7 @@ import type { EffortKey } from '#shared/activities'
 
 export interface FoodRow {
   id: number
-  source: 'off' | 'custom'
+  source: 'off' | 'custom' | 'recipe'
   barcode: string | null
   name: string
   brand: string | null
@@ -17,6 +17,13 @@ export interface FoodRow {
   owner_user_id: number | null
   nutriscore: string | null
   kcal: number | null
+  /** Recipes only: how many servings it makes. Null on every other food. */
+  recipe_servings: number | null
+  /**
+   * Recipes only: the finished yield, if it was weighed. Null means unknown,
+   * which is what takes gram portions off the picker — see shared/recipes.ts.
+   */
+  recipe_final_weight_g: number | null
   [nutrient: string]: unknown
 }
 
