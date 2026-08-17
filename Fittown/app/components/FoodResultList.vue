@@ -9,12 +9,19 @@ const props = withDefaults(
     date?: string | null
     /** Set when picking an ingredient: results go into this recipe instead. */
     recipe?: number | null
+    /** Set when replacing an existing ingredient rather than adding one. */
+    ingredient?: number | null
   }>(),
-  { meal: 'snack', date: null, recipe: null },
+  { meal: 'snack', date: null, recipe: null, ingredient: null },
 )
 
 const linkFor = (id: number) =>
-  `/food/${id}?${foodLinkQuery({ meal: props.meal, date: props.date, recipe: props.recipe })}`
+  `/food/${id}?${foodLinkQuery({
+    meal: props.meal,
+    date: props.date,
+    recipe: props.recipe,
+    ingredient: props.ingredient,
+  })}`
 
 /**
  * Energy shown per default serving when there is one, else per 100 g.

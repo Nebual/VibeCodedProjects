@@ -14,6 +14,8 @@ export interface RecipeSummary {
   serving_grams: number | null
   kcal: number | null
   ingredient_count: number
+  /** Imported lines still waiting for a food to be attached. */
+  unresolved_count: number
   /** Null when the recipe is still empty — which is not the same as zero. */
   kcal_per_serving: number | null
 }
@@ -23,8 +25,16 @@ export interface RecipeIngredient {
   grams: number
   serving_label: string | null
   serving_count: number | null
+  /** The line as pasted or scraped. Null on ingredients added by hand. */
+  raw_text: string | null
+  /** Amount descriptor or prep note — "a lot of", "minced". */
+  note: string | null
   sort_order: number
-  food: FoodRow
+  /**
+   * Null when an import couldn't match this line to a food. Such a row has no
+   * nutrition and no weight; `raw_text` is the only name it has.
+   */
+  food: FoodRow | null
   /** What this ingredient contributes, already scaled to its amount. */
   nutrients: NutrientTotals
 }
@@ -36,6 +46,8 @@ export interface RecipeDetail {
   raw_g: number
   /** What the portion maths divides by: the yield if stated, else `raw_g`. */
   basis_g: number
+  /** How many ingredients the totals below are *not* counting. */
+  unresolved_count: number
   totals: NutrientTotals
   per_serving: NutrientTotals
   /** The live public link for this recipe, if its owner made one. */

@@ -11,12 +11,18 @@ export function foodLinkQuery(options: {
   meal?: string | null
   date?: string | null
   recipe?: number | null
+  /**
+   * Set when the picked food is going to *replace* an ingredient that already
+   * exists — how an imported line with no food attached gets one.
+   */
+  ingredient?: number | null
   extra?: Record<string, string>
 }): string {
   const params = new URLSearchParams()
 
   if (options.recipe) {
     params.set('recipe', String(options.recipe))
+    if (options.ingredient) params.set('ingredient', String(options.ingredient))
   } else {
     if (options.meal) params.set('meal', options.meal)
     // Omitted entirely rather than sent as "null", which the API rejects.

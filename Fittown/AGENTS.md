@@ -104,8 +104,8 @@ the evidence of tampering this file tells you to treat as a warning sign.
 Two layers, and they cover different things:
 
 ```bash
-cd $RUN && pnpm test                     # 216 unit tests, ~0.5s, no server needed
-cd $RUN && node scripts/e2e.mjs          # 33 steps, fails on any console error
+cd $RUN && pnpm test                     # 344 unit tests, ~0.8s, no server needed
+cd $RUN && node scripts/e2e.mjs          # 37 steps, fails on any console error
 node scripts/screenshots.mjs /tmp/shots  # mobile, dark, desktop — then Read them
 pnpm build                               # catches things dev mode hides
 ```
@@ -114,9 +114,12 @@ pnpm build                               # catches things dev mode hides
 the pure logic: the nutrient catalogue and its null-vs-zero invariant, portion
 units, body/energy maths, the activity library's internal consistency, the
 request validators, the recipe roll-up (yields, the coverage rule, when gram
-portions may be offered), the invite-expiry and copy-naming rules, and — against
-a real temp SQLite file — the boot-time schema migration, the exercise-library
-sync, `recomputeRecipe()`, the friendship access gate and the deep recipe copy.
+portions may be offered), the invite-expiry and copy-naming rules, the
+ingredient parser, the recipe scraper (against a saved copy of a real Love and
+Lemons page), the URL guard's private-address ranges, and — against a real temp
+SQLite file — the boot-time schema migration, the `recipe_ingredients` rebuild,
+the exercise-library sync, `recomputeRecipe()`, ingredient matching, recipe
+import, the friendship access gate and the deep recipe copy.
 They run in half a second, so run them constantly. They deliberately do **not** boot Nuxt; anything needing a
 running app belongs in the e2e script instead.
 
@@ -180,6 +183,19 @@ searchable. The e2e script asserts this.
 and 404s in a production build even with the env var set. Verified — don't
 loosen it.
 
+**Changing a column's *type or nullability* takes a table rebuild, and there is
+exactly one.** SQLite has no `ALTER COLUMN`, so `ADDED_COLUMNS` cannot express
+it. `rebuildRecipeIngredients()` in `server/utils/db.ts` creates the new shape,
+copies the rows, drops, renames and **recreates both indexes** (SCHEMA_SQL's
+`IF NOT EXISTS` versions have already run this boot and will not put them back).
+It is guarded on the thing it fixes — `food_id`'s `notnull` flag — rather than a
+version number, so it is a no-op on every subsequent boot. It must run with
+foreign key enforcement **off**, which is why `PRAGMA foreign_keys = ON` sits
+*after* it in `useDb()` rather than up with the other pragmas; the pragma cannot
+be changed inside a transaction. Verified against a copy of the shipped
+`data/fittown.db`: 203,695 foods and their FTS rows intact, `quick_check ok`,
+no foreign key violations.
+
 **Adding a column takes two edits, not one.** `SCHEMA_SQL` is all
 `CREATE TABLE IF NOT EXISTS`, which does nothing to a table that already
 exists — so a new column there reaches fresh databases only, and every existing
@@ -242,6 +258,58 @@ and nothing to notice it with. Three rules live inside it:
   is the same lie as `?? 0`.
 - **`food_servings` is rebuilt, not patched.** The picker reads it verbatim, so
   a stale "whole recipe = 900 g" logs the wrong amount without looking wrong.
+
+**An ingredient may have no food, and 0 g is a real amount.** Both come from
+the recipe importer. A pasted or scraped line the matcher can't identify with
+confidence is stored as text — `recipe_ingredients.food_id` is **nullable**,
+with `raw_text` carrying the line — rather than being guessed at or turned into
+a nutrition-less placeholder food. A line with no numeric amount ("pinch of
+salt", "a lot of oregano") is stored at 0 g with the descriptor in `note`.
+Three consequences worth knowing before you touch this code:
+
+- **`listIngredients()` decides "unmatched" from `ri.food_id IS NULL`, never
+  from `f.id IS NULL`.** The join is a LEFT join, so a miss fills all forty of
+  `foodCols()`'s columns with nulls, and the spread would otherwise hand back an
+  object with `name`, `kcal` and `is_liquid` all null that looks exactly like a
+  real food row. `IngredientRow.food` is `null` or a whole row, never a husk.
+- **`rollUpRecipe()` skips `food === null` and `grams <= 0` in *both* the weight
+  sum and the coverage test, and the two must agree.** An ingredient that adds
+  no weight must not sit in the coverage denominator either — otherwise a 0 g
+  pinch of salt counts as weight declaring no vitamin K and blanks the whole
+  recipe's vitamin K.
+- **Copies carry unmatched lines.** `copyRecipeInto()` LEFT joins and brings
+  `raw_text`, `note` and `recipe_instructions` across. A deep copy that dropped
+  them hands someone a vinaigrette with no salt and nothing on screen to say so.
+
+**Never guess which food a written ingredient is.** `matchIngredient()` in
+`server/utils/ingredientMatch.ts` is a set of conditions a candidate has to
+clear, not "best search result wins". A wrong match produces a
+finished-looking recipe whose calories are silently off; an unmatched line
+produces a visible warning. Two rules do the work, and both were found by
+running the importer against the real 203k-row library:
+
+- **Extra words in the candidate name are only allowed for multi-word queries**
+  (`maxExtraWords`). "salt" matched **Salt & Vinegar** — a crisp flavour —
+  until a one-word query was made to demand an exact match.
+- **`FORM_WORDS` rejects candidates that are a different *form* of the food** —
+  spray, powder, dried, canned. "avocado oil" otherwise matches "Avocado Oil
+  Cooking Spray": every query word is present and the search ranks it first.
+
+**Recipe scraping must not assume quoted HTML attributes.** Love and Lemons
+serves `<script type=application/ld+json class=yoast-schema-graph>` — minifiers
+strip quotes routinely. A pattern requiring them finds no structured data,
+falls silently through to the heading scrape, and imports a recipe made of
+navigation links. `attr()` in `shared/recipeScrape.ts` matches all three forms;
+the saved fixture deliberately reproduces the unquoted markup so the test would
+catch a regression.
+
+**The URL importer fetches from inside your network, so it validates every
+hop.** `server/utils/fetchPage.ts` rejects non-http(s) schemes, private and
+loopback addresses (checked *numerically* — `172.66.41.15` is public and
+`172.16/12` stops at `172.31`, so a prefix match on "172." would block a slice
+of the internet), and `localhost` by name; it follows redirects with
+`redirect: 'manual'` and re-validates each one, because validating only the URL
+the user typed is the standard way an SSRF guard gets walked around.
 
 **No yield, no grams.** `showsGramPortions()` in `shared/recipes.ts` is the one
 rule, used by the portion picker, the diary and the search results. A recipe
@@ -374,19 +442,27 @@ server/
   routes/auth/   google.get.ts, dev.post.ts, logout.post.ts
   utils/         db, auth, validate, foods (search ranking lives here),
                  recipes (recomputeRecipe, the FTS re-index, the deep copy),
+                 ingredientMatch (when a written line may claim a food),
+                 recipeImport (parsed lines -> a recipe, both importers),
+                 fetchPage (the URL importer's SSRF + size/time guards),
                  summary (the trends rollup, yours and a friend's),
                  friends (friendship storage + the one access gate)
 shared/          nutrients.ts  — nutrient catalogue used by both sides
                  activities.ts — exercise library, categories, effort METs
                  body.ts      — units, activity levels, BMR/TDEE, target maths
-                 portions.ts  — portion units and their gram equivalents
+                 portions.ts  — portion units and their gram equivalents,
+                                plus RECIPE_UNITS for the importer's parser
                  recipes.ts   — recipe roll-up, coverage rule, gram-portion rule
+                 ingredientText.ts — one written line -> amount + name + note
+                 recipeText.ts     — paste sections, instructions block, yield
+                 recipeScrape.ts   — JSON-LD / microdata / heading extraction
                  friends.ts   — invite lifetime, copy naming, token shape
                  sharing.ts   — the five sharing switches and their defaults
 scripts/         import-off, fix-liquid-flags, reset-user-data,
                  recompute-recipes, e2e, screenshots
 test/            Vitest unit tests (pure logic + schema migration + the
-                 friendship gate and recipe copy against a temp database)
+                 friendship gate, recipe copy and recipe import against a temp
+                 database); test/fixtures/ holds a saved real recipe page
 ```
 
 `server/db/schema.ts` is a TS template literal rather than a `.sql` file so
@@ -475,6 +551,18 @@ curl -sD - -o /dev/null -H 'Host: example.com' http://localhost:3000/auth/google
 - The calorie target is set once and never revisited; nothing nudges you when
   your actual rate of loss diverges from the plan you stored.
 - No meal copying or "log yesterday again".
+- The ingredient parser gives a bare count ("2 large eggs", "1 garlic clove")
+  0 g and a note, because there is no per-egg weight to look up. A small table
+  of typical unit weights would resolve most of them.
+- Volume of a non-liquid food converts at 1 ml = 1 g. Right for water, ~8% low
+  for oil, ~45% high for flour. The portion label is stored alongside so the
+  assumption is visible and one tap from being fixed, but a density table for
+  the dozen things people actually measure by cup would be better.
+- Nothing re-runs the matcher over old unresolved lines when the food library
+  grows, and there is no "try again" button.
+- The URL importer has no JavaScript engine, so a recipe rendered client-side
+  is invisible to it. The paste tab is the fallback, but nothing tells the user
+  that in so many words.
 - Recipes can't contain other recipes (the ingredient's `source` must be `off`
   or `custom`). The arithmetic would work; the missing part is recomputing
   every recipe that depends on one you just edited, and detecting cycles.

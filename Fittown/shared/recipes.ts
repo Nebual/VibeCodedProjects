@@ -31,6 +31,25 @@ export const RECIPE_SOURCE = 'recipe'
  */
 export const NUTRIENT_COVERAGE_MIN = 0.75
 
+/**
+ * Ceiling on a recipe's ingredient list.
+ *
+ * A runaway guard, not a rule — no mixture is worth a hundred lines. Lives here
+ * rather than in the route that first needed it because the bulk importer has
+ * to check the whole paste against it *before* inserting anything, rather than
+ * discovering it forty rows in.
+ */
+export const MAX_INGREDIENTS = 100
+
+/**
+ * Ceiling on the instructions text.
+ *
+ * Generous: an imported recipe arrives carrying its times, its yield, a dozen
+ * numbered steps and a source URL, and truncating someone's method mid-sentence
+ * is a worse failure than storing a few extra kilobytes.
+ */
+export const MAX_INSTRUCTIONS_CHARS = 20000
+
 /** The named portion that logs the entire recipe at once. */
 export const WHOLE_RECIPE_LABEL = 'whole recipe'
 
@@ -38,10 +57,18 @@ export const WHOLE_RECIPE_LABEL = 'whole recipe'
 export const SERVING_LABEL = 'serving'
 
 export interface RecipeIngredient {
-  /** Resolved amount of this ingredient, in grams (or ml for liquids). */
+  /**
+   * Resolved amount of this ingredient, in grams (or ml for liquids).
+   *
+   * Zero is legal: an imported line like "pinch of salt" states no amount, and
+   * is stored as 0 g with the descriptor kept as a note for the user to read.
+   */
   grams: number
-  /** The ingredient's `foods` row — a per-100 g nutrient vector. */
-  food: Record<string, unknown>
+  /**
+   * The ingredient's `foods` row — a per-100 g nutrient vector — or **null**
+   * when an import could not match the line to a food with confidence.
+   */
+  food: Record<string, unknown> | null
 }
 
 export interface RecipeRollUp {
@@ -86,7 +113,13 @@ export function rollUpRecipe(
   ingredients: RecipeIngredient[],
   finalWeightG?: number | null,
 ): RecipeRollUp {
-  const rawG = ingredients.reduce((sum, i) => sum + (i.grams > 0 ? i.grams : 0), 0)
+  // `i.food` and `i.grams > 0` are both tested here and again in the nutrient
+  // loop below, and both tests have to agree. An ingredient that contributes no
+  // weight must also not appear in the coverage denominator — otherwise a 0 g
+  // pinch of salt or an unmatched "garlic powder" would count as weight that
+  // declares no vitamin K, and blank the whole recipe's vitamin K.
+  const counts = (i: RecipeIngredient) => i.food !== null && i.grams > 0
+  const rawG = ingredients.reduce((sum, i) => sum + (counts(i) ? i.grams : 0), 0)
   const basisG = recipeBasisGrams(rawG, finalWeightG)
 
   const totals: Record<string, number | null> = {}
@@ -103,9 +136,10 @@ export function rollUpRecipe(
     let sum = 0
     let coveredG = 0
 
-    for (const { grams, food } of ingredients) {
-      if (!(grams > 0)) continue
-      const value = food[key]
+    for (const ingredient of ingredients) {
+      if (!counts(ingredient)) continue
+      const { grams, food } = ingredient
+      const value = food![key]
       if (typeof value !== 'number' || !Number.isFinite(value)) continue
       sum += (value * grams) / 100
       coveredG += grams

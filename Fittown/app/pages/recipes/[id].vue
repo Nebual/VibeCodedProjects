@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { MASS_UNITS, VOLUME_UNITS, baseUnit, roundGrams } from '#shared/portions'
-import { showsGramPortions } from '#shared/recipes'
+import { MAX_INSTRUCTIONS_CHARS, showsGramPortions } from '#shared/recipes'
 import { sharedRecipeUrl } from '#shared/friends'
+import { ingredientDetail, ingredientName, isResolved } from '~/utils/ingredients'
 import type { RecipeDetail, RecipeIngredient } from '~/composables/useRecipes'
 
 const route = useRoute()
@@ -40,15 +41,27 @@ async function patch(body: Record<string, unknown>) {
 
 const name = ref('')
 const servingsInput = ref(1)
+const instructions = ref('')
 watch(
   recipe,
   (value) => {
     if (!value) return
     name.value = String(value.name ?? '')
     servingsInput.value = Number(value.recipe_servings ?? 1)
+    instructions.value = String(value.recipe_instructions ?? '')
   },
   { immediate: true },
 )
+
+/**
+ * Saved on blur like the other fields. Deliberately not on every keystroke:
+ * this is the one box someone types paragraphs into.
+ */
+function saveInstructions() {
+  const next = instructions.value.trim()
+  if (next === String(recipe.value?.recipe_instructions ?? '')) return
+  patch({ instructions: next === '' ? null : next })
+}
 
 function saveName() {
   const next = name.value.trim()
@@ -112,24 +125,26 @@ function saveWeight() {
 
 // --- ingredients ------------------------------------------------------------
 
-/** "1.5 × cup · 240 g" — the same sentence the diary shows. */
-function portionText(ingredient: RecipeIngredient) {
-  const ingredientUnit = ingredient.food.is_liquid ? 'ml' : 'g'
-  const grams = `${roundGrams(ingredient.grams)} ${ingredientUnit}`
-  if (ingredient.serving_label && ingredient.serving_count) {
-    const count = Number(ingredient.serving_count.toFixed(2))
-    return `${count} × ${ingredient.serving_label} · ${grams}`
-  }
-  return grams
-}
-
-/** Re-opening an ingredient lands on the portion it was added with. */
+/**
+ * Where tapping an ingredient goes.
+ *
+ * A matched one re-opens the portion picker on the food, landing on the portion
+ * it was added with. An unmatched one has no food to open, so it goes to the
+ * search with its own text pre-filled — which is the step that turns an
+ * imported line into a real ingredient.
+ */
 function editLink(ingredient: RecipeIngredient) {
   const params = new URLSearchParams({
     recipe: String(id.value),
     ingredient: String(ingredient.id),
-    g: String(ingredient.grams),
   })
+
+  if (!ingredient.food) {
+    params.set('q', ingredient.raw_text ?? '')
+    return `/add?${params}`
+  }
+
+  params.set('g', String(ingredient.grams))
   if (ingredient.serving_label) params.set('sl', ingredient.serving_label)
   if (ingredient.serving_count) params.set('sc', String(ingredient.serving_count))
   return `/food/${ingredient.food.id}?${params}`
@@ -345,22 +360,32 @@ const logLink = computed(
               <NuxtLink
                 :to="editLink(ingredient)"
                 class="block truncate font-medium text-sm hover:underline"
+                :class="{ 'text-base-content/60 italic': !isResolved(ingredient) }"
               >
-                {{ ingredient.food.name }}
+                {{ ingredientName(ingredient) }}
               </NuxtLink>
-              <div class="text-xs text-base-content/60 truncate tabular">
-                <span v-if="ingredient.food.brand">{{ ingredient.food.brand }} · </span>
-                {{ portionText(ingredient) }}
+              <div class="text-xs truncate tabular" :class="isResolved(ingredient) ? 'text-base-content/60' : 'text-warning'">
+                <template v-if="isResolved(ingredient)">
+                  {{ ingredientDetail(ingredient) || 'no amount given' }}
+                </template>
+                <template v-else>
+                  Tap to pick a food{{ ingredient.note ? ` · ${ingredient.note}` : '' }}
+                </template>
               </div>
             </div>
 
-            <div class="text-sm tabular shrink-0">
-              {{ Math.round(ingredient.nutrients.kcal ?? 0) }}
+            <!-- A dash rather than 0: we don't know what this is, which is not
+                 the same as knowing it has no calories. -->
+            <div
+              class="text-sm tabular shrink-0"
+              :class="{ 'text-base-content/30': !isResolved(ingredient) }"
+            >
+              {{ isResolved(ingredient) ? Math.round(ingredient.nutrients.kcal ?? 0) : '—' }}
             </div>
 
             <button
               class="btn btn-ghost btn-xs btn-square text-base-content/40 hover:text-error"
-              :aria-label="`Remove ${ingredient.food.name}`"
+              :aria-label="`Remove ${ingredientName(ingredient)}`"
               @click="removeIngredient(ingredient.id)"
             >
               <AppIcon name="trash" class="w-4 h-4" />
@@ -377,6 +402,23 @@ const logLink = computed(
           <AppIcon name="plus" class="w-4 h-4" />
           Add ingredient
         </NuxtLink>
+      </div>
+    </section>
+
+    <!-- How to make it -->
+    <section class="card bg-base-100 shadow-sm">
+      <div class="card-body p-4 gap-2">
+        <h2 class="font-semibold">Instructions</h2>
+        <textarea
+          v-model="instructions"
+          class="textarea textarea-bordered w-full min-h-32 text-sm leading-relaxed"
+          :maxlength="MAX_INSTRUCTIONS_CHARS"
+          placeholder="Whisk the vinegar, honey and mustard together, then drizzle in the oil."
+          @blur="saveInstructions"
+        />
+        <p class="text-xs text-base-content/50">
+          Just for you to read while cooking — nothing here affects the nutrition.
+        </p>
       </div>
     </section>
 

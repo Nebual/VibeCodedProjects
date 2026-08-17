@@ -35,14 +35,20 @@ export function useDb(): DatabaseSync {
 
   db = new DatabaseSync(path)
   db.exec('PRAGMA journal_mode = WAL')
-  db.exec('PRAGMA foreign_keys = ON')
   // Wait rather than immediately throwing SQLITE_BUSY if another process
   // (notably the OFF importer) holds the write lock.
   db.exec('PRAGMA busy_timeout = 10000')
   db.exec('PRAGMA synchronous = NORMAL')
 
   db.exec(SCHEMA_SQL)
+  // Deliberately before `PRAGMA foreign_keys = ON`: this one rebuilds a table,
+  // and the pragma cannot be changed inside a transaction. SQLite's default is
+  // off, and neither SCHEMA_SQL nor migrate() relies on enforcement, so the
+  // window is inert for everything except the rebuild itself.
+  rebuildRecipeIngredients(db)
   migrate(db)
+  db.exec('PRAGMA foreign_keys = ON')
+
   syncExerciseLibrary(db)
 
   return db
@@ -93,8 +99,92 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
   foods: {
     recipe_servings: 'REAL',
     recipe_final_weight_g: 'REAL',
+    recipe_instructions: 'TEXT',
     sugar_alcohols_g: 'REAL',
   },
+  // Also created by rebuildRecipeIngredients() below, which ships the whole new
+  // shape at once. Listed here anyway: the rebuild is guarded on food_id's
+  // nullability, so a database that somehow has one change without the other
+  // still catches up, and this is where a reader looks for the column list.
+  recipe_ingredients: {
+    raw_text: 'TEXT',
+    note: 'TEXT',
+  },
+}
+
+/**
+ * Make `recipe_ingredients.food_id` nullable on a database that predates the
+ * recipe importer.
+ *
+ * SQLite has no `ALTER COLUMN`, so dropping a NOT NULL means the documented
+ * rebuild: create the new shape, copy the rows, drop, rename, recreate the
+ * indexes. `ADDED_COLUMNS` cannot express this, which makes it the one schema
+ * change in this app that isn't a two-line edit.
+ *
+ * Guarded on the thing it fixes rather than on a version number, so it is a
+ * no-op on every boot after the first and on every fresh database (where
+ * SCHEMA_SQL already created the new shape).
+ *
+ * Must run with foreign key enforcement OFF — see useDb(). Nothing references
+ * `recipe_ingredients` as a parent, so the DROP is safe regardless; the
+ * `foreign_key_check` at the end is there to prove that rather than to fix it.
+ */
+function rebuildRecipeIngredients(conn: DatabaseSync) {
+  const columns = conn
+    .prepare('PRAGMA table_info(recipe_ingredients)')
+    .all() as { name: string; notnull: number }[]
+
+  const foodId = columns.find((column) => column.name === 'food_id')
+  // No table yet (fresh database, SCHEMA_SQL just made it) or already nullable.
+  if (!foodId || foodId.notnull === 0) return
+
+  conn.exec('BEGIN')
+  try {
+    conn.exec(`
+      CREATE TABLE recipe_ingredients_new (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        recipe_food_id INTEGER NOT NULL REFERENCES foods(id) ON DELETE CASCADE,
+        food_id        INTEGER REFERENCES foods(id) ON DELETE RESTRICT,
+        grams          REAL NOT NULL,
+        serving_label  TEXT,
+        serving_count  REAL,
+        raw_text       TEXT,
+        note           TEXT,
+        sort_order     INTEGER NOT NULL DEFAULT 0,
+        created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+        CHECK (food_id IS NOT NULL OR raw_text IS NOT NULL)
+      );
+
+      INSERT INTO recipe_ingredients_new
+        (id, recipe_food_id, food_id, grams, serving_label, serving_count,
+         sort_order, created_at)
+      SELECT id, recipe_food_id, food_id, grams, serving_label, serving_count,
+             sort_order, created_at
+      FROM recipe_ingredients;
+
+      DROP TABLE recipe_ingredients;
+      ALTER TABLE recipe_ingredients_new RENAME TO recipe_ingredients;
+
+      -- Dropped along with the old table. SCHEMA_SQL's IF NOT EXISTS versions
+      -- already ran this boot, so they will not put them back.
+      CREATE INDEX IF NOT EXISTS idx_recipe_ingredients_recipe
+        ON recipe_ingredients(recipe_food_id);
+      CREATE INDEX IF NOT EXISTS idx_recipe_ingredients_food
+        ON recipe_ingredients(food_id);
+    `)
+
+    const violations = conn.prepare('PRAGMA foreign_key_check(recipe_ingredients)').all()
+    if (violations.length > 0) {
+      throw new Error(
+        `recipe_ingredients rebuild left ${violations.length} foreign key violation(s)`,
+      )
+    }
+
+    conn.exec('COMMIT')
+  } catch (err) {
+    conn.exec('ROLLBACK')
+    throw err
+  }
 }
 
 function migrate(conn: DatabaseSync) {

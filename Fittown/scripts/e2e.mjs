@@ -241,7 +241,7 @@ await step('body metrics and calculated calorie target', async () => {
   await page.getByRole('button', { name: /Save settings/i }).click()
   await page.waitForTimeout(1200)
 
-  await page.getByRole('button', { name: /Calculate calorie target/i }).click()
+  await page.getByRole('button', { name: /Calculate calorie/i }).click()
   await page.waitForTimeout(600)
 
   const dialog = page.locator('dialog.modal')
@@ -326,15 +326,15 @@ await step('macro split edits grams', async () => {
   await page.goto(`${BASE}/settings`, { waitUntil: 'networkidle' })
   await page.waitForTimeout(800)
 
-  await page.getByRole('button', { name: /Reset to 25 \/ 45 \/ 30/ }).click()
+  await page.getByRole('button', { name: /Reset to 20 \/ 50 \/ 30/ }).click()
   await page.waitForTimeout(400)
 
   const percent = await page.getByLabel('Protein percentage').inputValue()
-  if (Number(percent) !== 25) throw new Error(`protein should be 25%, got ${percent}`)
+  if (Number(percent) !== 20) throw new Error(`protein should be 20%, got ${percent}`)
 
   const goal = Number(await page.locator('label:has-text("Daily calories") input').inputValue())
   const grams = Number(await page.getByLabel('Protein grams').inputValue())
-  const expected = Math.round((goal * 0.25) / 4)
+  const expected = Math.round((goal * 0.2) / 4)
   if (grams !== expected) {
     throw new Error(`protein grams should be ${expected} for a ${goal} kcal goal, got ${grams}`)
   }
@@ -356,7 +356,7 @@ await step('goal weight picks the direction', async () => {
     await page.waitForTimeout(1300)
   }
 
-  await page.getByRole('button', { name: /Calculate calorie target/i }).click()
+  await page.getByRole('button', { name: /Calculate calorie/i }).click()
   await page.waitForTimeout(600)
 
   const dialog = page.locator('dialog.modal')
@@ -606,6 +606,139 @@ await step('a logged recipe refuses to be deleted', async () => {
   const text = await page.locator('main').innerText()
   if (!/Logged 1 time/.test(text)) {
     throw new Error(`expected a refusal naming the diary entries: ${text.slice(0, 400)}`)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Importing a recipe.
+//
+// The parser and the matcher are covered exhaustively by the unit suite; what
+// only a running app can show is that a paste reaches the database as real
+// ingredient rows, that a line nobody could match survives as text instead of
+// being dropped or guessed at, and that the screen says so rather than
+// presenting a confident total that is quietly missing an ingredient.
+//
+// Deliberately no URL import here: that would make the suite depend on a third
+// party's website being up and unchanged. `test/recipe-scrape.test.ts` covers
+// the scraping against a saved copy of a real page instead.
+// ---------------------------------------------------------------------------
+
+const importName = `E2E Import ${Date.now()}`
+
+await step('paste a list of ingredients into a new recipe', async () => {
+  await page.goto(`${BASE}/recipes/import`, { waitUntil: 'networkidle' })
+  await page.getByPlaceholder('Balsamic vinaigrette').fill(importName)
+  await page.locator('textarea').fill(
+    ['1/4c avocado oil', '45g balsamic vinegar', 'pinch of salt', 'a lot of oregano', 'garlic powder'].join('\n'),
+  )
+  await page.waitForTimeout(400)
+
+  // The preview parses in the browser, before anything is saved — the point
+  // being that the user sees the guesses while they can still fix them.
+  const preview = await page.locator('main').innerText()
+  if (!/5 ingredients/.test(preview)) {
+    throw new Error(`preview did not parse five lines: ${preview.slice(0, 400)}`)
+  }
+  if (!/no amount/.test(preview)) {
+    throw new Error(`preview should flag the lines with no amount: ${preview.slice(0, 400)}`)
+  }
+
+  await page.getByRole('button', { name: /Create recipe/i }).click()
+  await page.waitForURL(/\/recipes\/\d+/, { timeout: 15000 })
+  await page.waitForTimeout(900)
+})
+
+await step('an unmatched line survives as text, and the page says so', async () => {
+  const text = await page.locator('main').innerText()
+
+  // Every line is present, whether or not a food was found for it.
+  for (const term of ['avocado oil', 'balsamic vinegar', 'salt', 'oregano', 'garlic powder']) {
+    if (!new RegExp(term, 'i').test(text)) {
+      throw new Error(`imported ingredient "${term}" is missing: ${text.slice(0, 600)}`)
+    }
+  }
+
+  // The descriptors are kept for the user to interpret, which is the whole
+  // reason an unmeasurable ingredient is worth storing.
+  if (!/a lot of/.test(text)) {
+    throw new Error(`the amount descriptor was dropped: ${text.slice(0, 600)}`)
+  }
+
+  // 1/4 cup at 1 ml = 1 g, plus 45 g. Everything else is 0 g by design.
+  if (!/104 g in/.test(text)) {
+    throw new Error(`expected 104 g of weighed ingredients: ${text.slice(0, 600)}`)
+  }
+
+  // Whatever the matcher managed against the real food library, anything it
+  // left unresolved has to be visible as a warning rather than silently
+  // missing from a confident-looking total.
+  const unresolved = await page.locator('.alert-warning').count()
+  const dashes = await page.locator('li:has-text("Tap to pick a food")').count()
+  if (unresolved !== (dashes > 0 ? 1 : 0)) {
+    throw new Error(
+      `unresolved rows (${dashes}) and the warning banner (${unresolved}) disagree`,
+    )
+  }
+})
+
+await step('an unresolved line can be given a food, and the totals follow', async () => {
+  // A line nothing can match, so this step doesn't depend on what happens to be
+  // in the food library. "chicken breast" is what we'll resolve it to, which
+  // makes the arithmetic below checkable.
+  await page.goto(`${BASE}/recipes/import`, { waitUntil: 'networkidle' })
+  await page.locator('textarea').fill('200g zzqqx unmatchable\n100g chicken breast')
+  await page.waitForTimeout(400)
+  await page.getByRole('button', { name: /Create recipe/i }).click()
+  await page.waitForURL(/\/recipes\/\d+/, { timeout: 15000 })
+  await page.waitForTimeout(900)
+
+  const before = await page.locator('main').innerText()
+  if (!/needs a food/.test(before)) {
+    throw new Error(`expected an unresolved warning: ${before.slice(0, 500)}`)
+  }
+
+  // Tapping the row goes to the search with its own text already in the box.
+  await page.locator('a:has-text("zzqqx unmatchable")').first().click()
+  await page.waitForURL(/\/add\?/, { timeout: 15000 })
+  await page.waitForLoadState('networkidle')
+  const prefilled = await page.getByPlaceholder('Search foods').inputValue()
+  if (!/zzqqx/.test(prefilled)) {
+    throw new Error(`search box was not pre-filled with the line: ${JSON.stringify(prefilled)}`)
+  }
+
+  await page.getByPlaceholder('Search foods').fill('chicken breast')
+  await page.waitForTimeout(1400)
+  await page.locator('a[href^="/food/"]').first().click()
+  await page.waitForLoadState('networkidle')
+  await page.waitForTimeout(600)
+
+  await page.locator('label:has-text("Portion") select').selectOption({ label: 'g' })
+  await page.locator('label:has-text("Amount") input').fill('200')
+  await page.getByRole('button', { name: /Save ingredient/i }).click()
+  await page.waitForURL(/\/recipes\/\d+/, { timeout: 15000 })
+  await page.waitForTimeout(900)
+
+  const after = await page.locator('main').innerText()
+  if (/needs a food/.test(after)) {
+    throw new Error(`the warning should be gone once every line has a food: ${after.slice(0, 500)}`)
+  }
+  // 200 g of the food we just attached, plus the 100 g that already matched.
+  if (!/300 g in/.test(after)) {
+    throw new Error(`the roll-up did not pick up the resolved line: ${after.slice(0, 500)}`)
+  }
+})
+
+await step('instructions save and come back', async () => {
+  const steps = 'Whisk the vinegar and mustard, then drizzle in the oil.'
+  await page.locator('textarea').fill(steps)
+  await page.locator('textarea').blur()
+  await page.waitForTimeout(1200)
+
+  await page.reload({ waitUntil: 'networkidle' })
+  await page.waitForTimeout(700)
+  const value = await page.locator('textarea').inputValue()
+  if (value !== steps) {
+    throw new Error(`instructions did not round-trip: ${JSON.stringify(value)}`)
   }
 })
 

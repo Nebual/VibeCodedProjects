@@ -73,6 +73,63 @@ export function defaultAmount(unit: PortionUnit): number {
   return 100 // straight grams / millilitres
 }
 
+/**
+ * Units that turn up in written recipes, for the bulk/URL importer.
+ *
+ * Deliberately a separate table from `MASS_UNITS` / `VOLUME_UNITS`, which are
+ * the *portion picker's* lists and are short on purpose. A recipe says
+ * "2 tbsp olive oil" and nobody logs a meal in tablespoons, so adding these
+ * there would clutter every portion dropdown in the app to serve one parser.
+ *
+ * `size` is in base units — grams for mass, millilitres for volume — which is
+ * what `recipe_ingredients.grams` stores either way. That is also why a volume
+ * of a food measured per 100 g resolves 1:1: without a density we would be
+ * inventing a number, and the label rides along on the row so the user can see
+ * the assumption and correct it.
+ *
+ * US definitions throughout, matching `VOLUME_UNITS` — the food library is a
+ * US + Canada import, and a UK fluid ounce would be a quiet 4% error.
+ *
+ * Aliases are matched longest-first and case-insensitively, with two exceptions
+ * handled by the parser: a bare `T` is a tablespoon and a bare `t` a teaspoon.
+ */
+export interface RecipeUnit extends PortionUnit {
+  /** Base units are millilitres rather than grams. */
+  volume: boolean
+  /** Every spelling seen in the wild, lowercase. */
+  aliases: string[]
+}
+
+export const RECIPE_UNITS: RecipeUnit[] = [
+  { key: 'g', label: 'g', size: 1, volume: false,
+    aliases: ['g', 'gr', 'gm', 'gram', 'grams'] },
+  { key: 'kg', label: 'kg', size: 1000, volume: false,
+    aliases: ['kg', 'kilo', 'kilos', 'kilogram', 'kilograms'] },
+  { key: 'mg', label: 'mg', size: 0.001, volume: false,
+    aliases: ['mg', 'milligram', 'milligrams'] },
+  { key: 'oz', label: 'oz', size: 28.349523125, volume: false,
+    aliases: ['oz', 'ounce', 'ounces'] },
+  { key: 'lb', label: 'lb', size: 453.59237, volume: false,
+    aliases: ['lb', 'lbs', 'pound', 'pounds'] },
+
+  { key: 'ml', label: 'ml', size: 1, volume: true,
+    aliases: ['ml', 'cc', 'milliliter', 'milliliters', 'millilitre', 'millilitres'] },
+  { key: 'cl', label: 'cl', size: 10, volume: true, aliases: ['cl'] },
+  { key: 'dl', label: 'dl', size: 100, volume: true, aliases: ['dl'] },
+  { key: 'l', label: 'L', size: 1000, volume: true,
+    aliases: ['l', 'liter', 'liters', 'litre', 'litres'] },
+  // Before `oz` is irrelevant (aliases are matched longest-first) but the
+  // spelling with a space has to be listed explicitly or "fl oz" reads as "fl".
+  { key: 'floz', label: 'fl oz', size: 29.5735295625, volume: true,
+    aliases: ['fl oz', 'fl. oz', 'floz', 'fluid ounce', 'fluid ounces'] },
+  { key: 'cup', label: 'cup', size: 236.5882365, volume: true,
+    aliases: ['c', 'cup', 'cups'] },
+  { key: 'tbsp', label: 'tbsp', size: 14.78676478125, volume: true,
+    aliases: ['tbsp', 'tbsps', 'tbs', 'tb', 'tablespoon', 'tablespoons'] },
+  { key: 'tsp', label: 'tsp', size: 4.92892159375, volume: true,
+    aliases: ['tsp', 'tsps', 'teaspoon', 'teaspoons'] },
+]
+
 /** Round a gram figure the way a scale would: whole grams, tenths under 10 g. */
 export function roundGrams(grams: number): number {
   return grams >= 10 ? Math.round(grams) : Math.round(grams * 10) / 10

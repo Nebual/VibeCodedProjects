@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { baseUnit, roundGrams } from '#shared/portions'
 import { showsGramPortions } from '#shared/recipes'
-import type { RecipeDetail, RecipeIngredient } from '~/composables/useRecipes'
+import { ingredientDetail, ingredientName, isResolved } from '~/utils/ingredients'
+import type { RecipeDetail } from '~/composables/useRecipes'
 
 /**
  * Somebody else's recipe, as read by a friend or by whoever opened a share
@@ -19,17 +20,6 @@ defineProps<{
 }>()
 
 const view = ref<'serving' | 'whole'>('serving')
-
-/** "1.5 × cup · 240 g" — the same sentence the diary and the editor show. */
-function portionText(ingredient: RecipeIngredient) {
-  const unit = ingredient.food.is_liquid ? 'ml' : 'g'
-  const grams = `${roundGrams(ingredient.grams)} ${unit}`
-  if (ingredient.serving_label && ingredient.serving_count) {
-    const count = Number(ingredient.serving_count.toFixed(2))
-    return `${count} × ${ingredient.serving_label} · ${grams}`
-  }
-  return grams
-}
 </script>
 
 <template>
@@ -72,19 +62,41 @@ function portionText(ingredient: RecipeIngredient) {
             class="flex items-center gap-3 px-4 py-2.5"
           >
             <div class="flex-1 min-w-0">
-              <div class="truncate font-medium text-sm">{{ ingredient.food.name }}</div>
+              <div
+                class="truncate font-medium text-sm"
+                :class="{ 'text-base-content/60 italic': !isResolved(ingredient) }"
+              >
+                {{ ingredientName(ingredient) }}
+              </div>
               <div class="text-xs text-base-content/60 truncate tabular">
-                <span v-if="ingredient.food.brand">{{ ingredient.food.brand }} · </span>
-                {{ portionText(ingredient) }}
+                {{ ingredientDetail(ingredient) || 'amount not given' }}
               </div>
             </div>
-            <div class="text-sm tabular shrink-0">
-              {{ Math.round(ingredient.nutrients.kcal ?? 0) }}
+            <!-- A dash, not a zero: an unmatched line contributes nothing
+                 because we don't know what it is, which is not the same as it
+                 contributing nothing because it has no calories. -->
+            <div class="text-sm tabular shrink-0" :class="{ 'text-base-content/30': !isResolved(ingredient) }">
+              {{ isResolved(ingredient) ? Math.round(ingredient.nutrients.kcal ?? 0) : '—' }}
             </div>
           </li>
         </ul>
 
         <p v-else class="px-4 pb-3 text-sm text-base-content/40">Nothing in it yet.</p>
+
+        <p v-if="detail.unresolved_count" class="px-4 pb-3 text-xs text-warning">
+          {{ detail.unresolved_count }}
+          {{ detail.unresolved_count === 1 ? 'ingredient has' : 'ingredients have' }}
+          no food attached, so the nutrition below leaves
+          {{ detail.unresolved_count === 1 ? 'it' : 'them' }} out.
+        </p>
+      </div>
+    </section>
+
+    <!-- How to make it. Rendered as typed: it is prose, not markup. -->
+    <section v-if="detail.recipe.recipe_instructions" class="card bg-base-100 shadow-sm">
+      <div class="card-body p-4 gap-2">
+        <h2 class="font-semibold">Instructions</h2>
+        <p class="text-sm whitespace-pre-wrap break-words">{{ detail.recipe.recipe_instructions }}</p>
       </div>
     </section>
 

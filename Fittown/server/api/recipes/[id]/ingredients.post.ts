@@ -1,49 +1,66 @@
-import { RECIPE_SOURCE } from '#shared/recipes'
+import { MAX_INGREDIENTS, RECIPE_SOURCE } from '#shared/recipes'
 import { findRecipe, nextIngredientOrder, recomputeRecipe } from '../../../utils/recipes'
-
-/** No mixture is worth a hundred lines; the cap is a runaway guard, not a rule. */
-const MAX_INGREDIENTS = 100
 
 /**
  * Add an ingredient.
  *
  * The client sends the same shape the diary does — resolved grams plus the
  * label and count it came from — because the same portion picker produced it.
+ *
+ * `food_id` is optional. Omitting it (with `raw_text` instead) records a line
+ * we have a name for but no nutrition: what the bulk importer produces when it
+ * can't match "a lot of oregano" to anything with confidence.
  */
 export default defineEventHandler(async (event) => {
   const user = await requireUser(event)
   const recipeId = assertId(getRouterParam(event, 'id'), 'recipe id')
   const body = await readBody<Record<string, unknown>>(event)
 
-  const foodId = assertId(body.food_id, 'food_id')
-  const grams = assertNumber(body.grams, 'grams', { min: 0.1, max: 20000 })
+  const rawText = optionalText(body.raw_text, 200)
+  const foodId = body.food_id === undefined || body.food_id === null
+    ? null
+    : assertId(body.food_id, 'food_id')
+
+  if (foodId === null && rawText === null) {
+    throw createError({
+      statusCode: 400,
+      statusMessage: 'An ingredient needs either a food_id or raw_text',
+    })
+  }
+
+  // Zero is allowed — see the note in the schema. An ingredient with no stated
+  // amount contributes nothing rather than being guessed at.
+  const grams = assertNumber(body.grams, 'grams', { min: 0, max: 20000 })
   const servingLabel = optionalText(body.serving_label, 60)
   const servingCount = optionalNumber(body.serving_count, 'serving_count', {
     min: 0.01,
     max: 1000,
   })
+  const note = optionalText(body.note, 200)
 
   return transact((db) => {
     const recipe = findRecipe(db, recipeId, user.id)
     if (!recipe) throw createError({ statusCode: 404, statusMessage: 'Recipe not found' })
 
-    const food = db
-      .prepare(
-        'SELECT id, source FROM foods WHERE id = ? AND (owner_user_id IS NULL OR owner_user_id = ?)',
-      )
-      .get(foodId, user.id) as { id: number; source: string } | undefined
+    if (foodId !== null) {
+      const food = db
+        .prepare(
+          'SELECT id, source FROM foods WHERE id = ? AND (owner_user_id IS NULL OR owner_user_id = ?)',
+        )
+        .get(foodId, user.id) as { id: number; source: string } | undefined
 
-    if (!food) throw createError({ statusCode: 404, statusMessage: 'Food not found' })
+      if (!food) throw createError({ statusCode: 404, statusMessage: 'Food not found' })
 
-    // Recipes inside recipes are blocked for now. The arithmetic would work —
-    // a recipe carries real per-100g values — but editing an inner recipe would
-    // silently stale every recipe built on it, which needs a dependency walk
-    // and cycle detection this app doesn't have yet.
-    if (food.source === RECIPE_SOURCE) {
-      throw createError({
-        statusCode: 400,
-        statusMessage: 'A recipe can’t be an ingredient in another recipe yet',
-      })
+      // Recipes inside recipes are blocked for now. The arithmetic would work —
+      // a recipe carries real per-100g values — but editing an inner recipe would
+      // silently stale every recipe built on it, which needs a dependency walk
+      // and cycle detection this app doesn't have yet.
+      if (food.source === RECIPE_SOURCE) {
+        throw createError({
+          statusCode: 400,
+          statusMessage: 'A recipe can’t be an ingredient in another recipe yet',
+        })
+      }
     }
 
     const { count } = db
@@ -59,8 +76,9 @@ export default defineEventHandler(async (event) => {
     const info = db
       .prepare(
         `INSERT INTO recipe_ingredients
-           (recipe_food_id, food_id, grams, serving_label, serving_count, sort_order)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+           (recipe_food_id, food_id, grams, serving_label, serving_count,
+            raw_text, note, sort_order)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         recipeId,
@@ -68,6 +86,8 @@ export default defineEventHandler(async (event) => {
         grams,
         servingLabel,
         servingCount,
+        rawText,
+        note,
         nextIngredientOrder(db, recipeId),
       )
 

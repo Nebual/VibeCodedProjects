@@ -25,8 +25,20 @@ useHead({
       : `Add to ${MEAL_LABELS[meal.value] ?? 'diary'} · Fittown`,
 })
 
-const query = ref('')
-const debounced = ref('')
+/**
+ * Set when this screen is finding a food for an ingredient that already
+ * exists — an imported line the matcher wasn't confident about. Everything
+ * below carries it along so the food you pick lands on that row rather than
+ * being appended as a new one.
+ */
+const ingredientId = computed(() =>
+  route.query.ingredient ? Number(route.query.ingredient) : null,
+)
+
+// Pre-filled when we arrived from an unmatched ingredient, whose own text is
+// the best search term anyone has for it.
+const query = ref(typeof route.query.q === 'string' ? route.query.q : '')
+const debounced = ref(query.value)
 
 // Debounce so a fast typist doesn't fire a query per keystroke.
 let timer: ReturnType<typeof setTimeout> | undefined
@@ -47,7 +59,10 @@ const { data: searchData, pending: searching } = await useFetch<{
   // recipes come back and the sections below de-duplicate them by id.
   query: { q: debounced, exclude_recipes: computed(() => (recipeId.value ? 1 : 0)) },
   watch: [debounced],
-  immediate: false,
+  // Normally nothing to search for until the user types. Arriving with a term
+  // already in the box is the exception, and the watcher won't fire for a value
+  // that was set before it existed.
+  immediate: !!debounced.value,
   default: () => ({ results: [], friend_results: [] }),
 })
 
@@ -129,7 +144,13 @@ function friendRecipeLink(recipe: FriendRecipeResult) {
 }
 
 const newFoodLink = computed(
-  () => `/food/new?${foodLinkQuery({ meal: meal.value, date: date.value, recipe: recipeId.value })}`,
+  () =>
+    `/food/new?${foodLinkQuery({
+      meal: meal.value,
+      date: date.value,
+      recipe: recipeId.value,
+      ingredient: ingredientId.value,
+    })}`,
 )
 
 const showScanner = ref(false)
@@ -173,7 +194,7 @@ const showScanner = ref(false)
         <header class="px-3 pt-2.5 pb-1 text-xs font-semibold text-base-content/50 uppercase tracking-wide">
           Frequent
         </header>
-        <FoodResultList :foods="frequent" :meal="meal" :date="date" :recipe="recipeId" />
+        <FoodResultList :foods="frequent" :meal="meal" :date="date" :recipe="recipeId" :ingredient="ingredientId" />
       </template>
 
       <template v-if="!recipeId && recipes.length">
@@ -197,7 +218,7 @@ const showScanner = ref(false)
         >
           Search results
         </header>
-        <FoodResultList :foods="searchResults" :meal="meal" :date="date" :recipe="recipeId" />
+        <FoodResultList :foods="searchResults" :meal="meal" :date="date" :recipe="recipeId" :ingredient="ingredientId" />
       </template>
 
       <template v-if="friendResults.length">

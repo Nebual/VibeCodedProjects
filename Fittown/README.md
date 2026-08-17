@@ -122,6 +122,49 @@ Two numbers decide how it appears in the diary:
 A serving is always right either way: a quarter of the pot is a quarter of the
 pot however much it weighs.
 
+There is also an **Instructions** box for the method — free text, just for you
+to read while cooking. Nothing in it affects the nutrition, and it travels with
+the recipe when you share or copy one.
+
+### Importing a recipe
+
+**Recipes → Import from a list or a link** builds a recipe two ways.
+
+**Paste a list** takes ingredients one per line, in whatever notation you'd
+actually write:
+
+```
+1/4c avocado oil
+45g balsamic vinegar
+pinch of salt
+a lot of oregano
+garlic powder
+```
+
+Amounts are read as you type and shown back to you *before* anything is saved,
+so you can see what was understood while you can still fix it. Fractions
+(`1/4`, `1½`), ranges (`1 to 2 tbsp` — the lower end is used), teaspoons,
+tablespoons, cups, ounces and grams all work, as do bullets and numbering.
+
+**A line with no clear amount is worth 0 g**, with the words you used kept as a
+note: salt arrives as *"pinch of"*, oregano as *"a lot of"*. Nothing is
+guessed — the recipe simply doesn't count them until you say what they are.
+
+Each line is then matched against the food database, but **only when the match
+is unambiguous**. "balsamic vinegar" will find balsamic vinegar; "avocado oil"
+will not settle for *Avocado Oil Cooking Spray*. Anything left over stays on the
+recipe as text with a warning above the nutrition, and tapping it opens the
+search with that line already typed in. Picking a food attaches it and the
+totals update.
+
+**From a link** takes a recipe URL — `https://www.loveandlemons.com/balsamic-vinaigrette/`
+and most food blogs work — and pulls across the ingredients, the method, the
+prep and total times and the yield, putting the times, servings and a link back
+to the original into the Instructions box. Ingredients go through exactly the
+same parsing and matching as a paste. If a page can't be read (some sites build
+their recipe in the browser, where there's nothing to fetch), copy the
+ingredients and use the paste tab instead.
+
 Two things worth knowing. Editing a recipe changes meals you have already
 logged — nutrition is looked up live, not frozen at the time — and a recipe
 you have logged can't be deleted until those diary entries are gone. And if

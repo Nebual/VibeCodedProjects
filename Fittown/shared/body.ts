@@ -278,3 +278,42 @@ export function ratePresets(unit: WeightUnit): { label: string; kgPerWeek: numbe
   }
   return [0.25, 0.5, 0.75, 1].map((kg) => ({ label: `${kg} kg`, kgPerWeek: kg }))
 }
+
+/** Matches the `calorie_goal` column default in server/db/schema.ts. */
+export const DEFAULT_CALORIE_GOAL = 2000
+
+// ---------------------------------------------------------------------------
+// Water
+// ---------------------------------------------------------------------------
+
+/**
+ * A flat "8 glasses a day" ignores body size and how much you move, which is
+ * why NASEM/IOM, EFSA and sports-nutrition guidance all scale water needs off
+ * body weight instead. 30-35 mL/kg/day is the standard baseline (higher for
+ * more active people); it lands close to NASEM's adequate-intake figures for
+ * an average adult (3.7 L/day for a ~70 kg man, 2.7 L for a ~60 kg woman)
+ * without a separate sex constant — weight already carries most of that
+ * difference. Activity level doubles as the exercise adjustment, since it's
+ * already collected for the calorie estimate above and already stands for a
+ * typical week's training.
+ */
+const WATER_ML_PER_KG: Record<ActivityKey, number> = {
+  sedentary: 30,
+  light: 32,
+  moderate: 35,
+  very: 38,
+  extra: 40,
+}
+
+/**
+ * Suggested daily water-from-drinks target, in mL.
+ *
+ * This is total fluid intake, not the ~20% of water that ordinarily comes
+ * from food — the number an app should ask you to actually drink. An
+ * estimate like the calorie figures above: hot climates, illness, pregnancy
+ * and breastfeeding all raise real needs beyond it.
+ */
+export function waterGoalMl(weightKg: number, activity: ActivityKey | null | undefined): number {
+  const factor = WATER_ML_PER_KG[activity ?? 'sedentary'] ?? WATER_ML_PER_KG.sedentary
+  return weightKg * factor
+}

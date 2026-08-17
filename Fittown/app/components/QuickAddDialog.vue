@@ -49,13 +49,28 @@ watch(
   },
 )
 
+/**
+ * `v-model.number` leaves a *cleared* field as `''` rather than `null` — Vue's
+ * number coercion only replaces the typed string when it parses, and an empty
+ * string parses to nothing, so it passes straight through unchanged. Reading
+ * every numeric ref through this keeps `''` from silently defeating the `??`
+ * fallback below (`'' ?? x` is `''`, not `x`) and from turning into `NaN` in
+ * the macro arithmetic (`'' * 4` is `NaN`, which poisons the whole sum).
+ */
+function num(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
 /** Same "derive from macros" rule as creating a custom food — see food/new.vue. */
 const derivedKcal = computed(() => {
-  if (protein_g.value === null && carbs_g.value === null && fat_g.value === null) return null
-  return Math.round((protein_g.value ?? 0) * 4 + (carbs_g.value ?? 0) * 4 + (fat_g.value ?? 0) * 9)
+  const p = num(protein_g.value)
+  const c = num(carbs_g.value)
+  const f = num(fat_g.value)
+  if (p === null && c === null && f === null) return null
+  return Math.round((p ?? 0) * 4 + (c ?? 0) * 4 + (f ?? 0) * 9)
 })
 
-const effectiveKcal = computed(() => kcal.value ?? derivedKcal.value)
+const effectiveKcal = computed(() => num(kcal.value) ?? derivedKcal.value)
 
 const macroFields = [
   { key: 'fat_g' as const, model: fat_g, label: 'Fat', unit: 'g' },
@@ -80,12 +95,12 @@ async function save() {
       body: {
         name: name.value.trim() || 'Quick add',
         basis_grams: 100,
-        kcal: kcal.value,
-        fat_g: fat_g.value,
-        carbs_g: carbs_g.value,
-        protein_g: protein_g.value,
-        fiber_g: fiber_g.value,
-        sugar_alcohols_g: sugar_alcohols_g.value,
+        kcal: num(kcal.value),
+        fat_g: num(fat_g.value),
+        carbs_g: num(carbs_g.value),
+        protein_g: num(protein_g.value),
+        fiber_g: num(fiber_g.value),
+        sugar_alcohols_g: num(sugar_alcohols_g.value),
       },
     })
     await $fetch('/api/diary/entries', {
@@ -122,32 +137,32 @@ async function save() {
         </div>
       </label>
 
-      <label class="form-control">
-        <span class="label-text text-xs mb-1">Name <span class="opacity-50">optional</span></span>
-        <input
-          v-model="name"
-          type="text"
-          class="input input-bordered"
-          placeholder="Quick add"
-        >
-      </label>
-
-      <label class="form-control">
-        <span class="label-text text-xs mb-1">
-          Calories (kcal)
-          <span v-if="kcal === null && derivedKcal !== null" class="opacity-60">
-            — will use {{ derivedKcal }} from macros
-          </span>
-        </span>
-        <input
-          v-model.number="kcal"
-          type="number" min="0" step="any" inputmode="decimal"
-          class="input input-bordered"
-          :placeholder="derivedKcal !== null ? String(derivedKcal) : ''"
-        >
-      </label>
-
       <div class="grid grid-cols-2 gap-2">
+        <label class="form-control">
+          <span class="label-text text-xs mb-1">
+            Calories (kcal)
+            <span v-if="num(kcal) === null && derivedKcal !== null" class="opacity-60">
+              — will use {{ derivedKcal }} from macros
+            </span>
+          </span>
+          <input
+            v-model.number="kcal"
+            type="number" min="0" step="any" inputmode="decimal"
+            class="input input-bordered w-full"
+            :placeholder="derivedKcal !== null ? String(derivedKcal) : ''"
+          >
+        </label>
+
+        <label class="form-control">
+          <span class="label-text text-xs mb-1">Name <span class="opacity-50">optional</span></span>
+          <input
+            v-model="name"
+            type="text"
+            class="input input-bordered w-full"
+            placeholder="Quick add"
+          >
+        </label>
+
         <label v-for="f in macroFields" :key="f.key" class="form-control">
           <span class="label-text text-xs mb-1">{{ f.label }} ({{ f.unit }})</span>
           <input

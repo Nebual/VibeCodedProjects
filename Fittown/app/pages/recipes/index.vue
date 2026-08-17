@@ -66,6 +66,11 @@ async function create() {
           </div>
         </label>
         <p v-if="error" class="text-xs text-error">{{ error }}</p>
+
+        <NuxtLink to="/recipes/import" class="btn btn-ghost btn-sm justify-start gap-2 -mx-1 text-primary">
+          <AppIcon name="link" class="w-4 h-4" />
+          Import from a list or a link
+        </NuxtLink>
       </div>
     </section>
 

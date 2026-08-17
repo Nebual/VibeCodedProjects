@@ -12,10 +12,12 @@ import {
   maintenanceCalories,
   planFromRate,
   ratePresets,
+  waterGoalMl,
   type ActivityKey,
   type Sex,
   type WeightUnit,
 } from '#shared/body'
+import { VOLUME_UNITS } from '#shared/portions'
 import { addDays, fromLocalDate } from '~/utils/dates'
 
 const props = defineProps<{
@@ -26,6 +28,7 @@ const props = defineProps<{
   weightKg: number
   activity: ActivityKey
   weightUnit: WeightUnit
+  volumeUnit: 'ml' | 'floz'
   /** Current macro grams, so they can be rescaled alongside the target. */
   macros: { protein_g: number; carbs_g: number; fat_g: number }
   /** The calorie goal those macros were chosen against. */
@@ -44,6 +47,7 @@ const emit = defineEmits<{
     goal_weight_kg: number | null
     goal_rate_kg_per_week: number
     macros?: { protein_g: number; carbs_g: number; fat_g: number }
+    water_goal_ml?: number
   }]
 }>()
 
@@ -56,6 +60,7 @@ const direction = ref<Direction>('maintain')
 const magnitude = ref(DEFAULT_RATE_KG_PER_WEEK)
 const goalWeight = ref<number | null>(null)
 const rescaleMacros = ref(true)
+const applyWater = ref(true)
 
 const body = computed(() => ({
   sex: props.sex,
@@ -66,6 +71,19 @@ const body = computed(() => ({
 
 const maintenance = computed(() =>
   Math.round(maintenanceCalories(body.value, props.activity)),
+)
+
+/** Rounded to 50 mL, matching the water field's own step in Settings. */
+const waterTarget = computed(
+  () => Math.round(waterGoalMl(props.weightKg, props.activity) / 50) * 50,
+)
+
+const FLOZ_SIZE = VOLUME_UNITS.find((u) => u.key === 'floz')!.size
+
+const waterTargetDisplay = computed(() =>
+  props.volumeUnit === 'floz'
+    ? `${Math.round(waterTarget.value / FLOZ_SIZE)} fl oz`
+    : `${waterTarget.value} ml`,
 )
 
 const rateKgPerWeek = computed(() => {
@@ -224,6 +242,7 @@ function apply() {
           fat_g: Math.round(props.macros.fat_g * scale),
         }
       : undefined,
+    water_goal_ml: applyWater.value ? waterTarget.value : undefined,
   })
 }
 </script>
@@ -366,6 +385,31 @@ function apply() {
         </template>
         Real metabolisms vary by around 10% either way — treat this as a
         starting point and adjust once you see how your weight actually moves.
+      </p>
+
+      <!-- Water ------------------------------------------------------------->
+      <div class="divider my-0" />
+
+      <div class="rounded-box bg-base-200 p-3 flex items-center justify-between">
+        <div>
+          <div class="text-xs text-base-content/60">Water target</div>
+          <div class="text-xs text-base-content/50">
+            {{ activityName }} · {{ formatWeight(weightKg, weightUnit) }}
+          </div>
+        </div>
+        <div class="text-2xl font-semibold tabular">{{ waterTargetDisplay }}</div>
+      </div>
+
+      <label class="label cursor-pointer justify-start gap-3 py-0">
+        <input v-model="applyWater" type="checkbox" class="checkbox checkbox-sm">
+        <span class="label-text text-xs">Update my water target to match</span>
+      </label>
+
+      <p class="text-[0.65rem] text-base-content/40 leading-snug">
+        30-40 ml per kg of body weight a day, scaled by activity level rather
+        than a flat "8 glasses" — sports-nutrition guidance most people run
+        ahead of. Hot climates, illness, pregnancy and breastfeeding all raise
+        real needs beyond this estimate.
       </p>
 
       <div class="modal-action mt-1">

@@ -1,11 +1,15 @@
+import { MAX_INSTRUCTIONS_CHARS } from '#shared/recipes'
 import { findRecipe, recomputeRecipe, reindexFood } from '../../utils/recipes'
 
 /**
- * Rename a recipe, change how many servings it makes, or record its yield.
+ * Rename a recipe, change how many servings it makes, record its yield, or
+ * write down how to make it.
  *
- * Every one of these changes what a serving is, so all of them end in a
+ * All but the instructions change what a serving is, so every request ends in a
  * recompute — inside the same transaction, so a crash can't leave the food row
- * describing a recipe that no longer exists in that shape.
+ * describing a recipe that no longer exists in that shape. Recomputing after an
+ * instructions-only edit is wasted work on a handful of rows, and cheaper than
+ * a conditional that has to stay correct as fields are added.
  */
 export default defineEventHandler(async (event) => {
   const user = await requireUser(event)
@@ -34,6 +38,13 @@ export default defineEventHandler(async (event) => {
   if (body.is_liquid !== undefined) {
     sets.push('is_liquid = ?')
     params.push(body.is_liquid ? 1 : 0)
+  }
+  if (body.instructions !== undefined) {
+    // Null is meaningful — clearing the box removes the steps. The cap is
+    // generous because an imported recipe arrives with its times, its yield,
+    // a dozen numbered steps and a source URL already in it.
+    sets.push('recipe_instructions = ?')
+    params.push(optionalText(body.instructions, MAX_INSTRUCTIONS_CHARS))
   }
 
   if (sets.length === 0) {

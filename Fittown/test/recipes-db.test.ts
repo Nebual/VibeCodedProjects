@@ -115,6 +115,107 @@ describe('schema', () => {
     expect(old.recipe_servings).toBeNull()
   })
 
+  it('makes food_id nullable on a database that predates the importer', async () => {
+    // The one schema change ADDED_COLUMNS cannot express: SQLite has no
+    // ALTER COLUMN, so dropping NOT NULL means rebuilding the table. If this
+    // regresses, every existing database rejects an unmatched imported line
+    // with a constraint error instead of storing it.
+    const { SCHEMA_SQL } = await import('../server/db/schema')
+    const { DatabaseSync } = await import('node:sqlite')
+
+    // Derived from the real schema rather than hand-copied, so it cannot drift.
+    const legacySql = SCHEMA_SQL
+      .replace(/^\s*recipe_instructions\s+TEXT,\s*$/m, '')
+      .replace(
+        /CREATE TABLE IF NOT EXISTS recipe_ingredients \([\s\S]*?\n\);/,
+        `CREATE TABLE IF NOT EXISTS recipe_ingredients (
+           id             INTEGER PRIMARY KEY AUTOINCREMENT,
+           recipe_food_id INTEGER NOT NULL REFERENCES foods(id) ON DELETE CASCADE,
+           food_id        INTEGER NOT NULL REFERENCES foods(id) ON DELETE RESTRICT,
+           grams          REAL NOT NULL,
+           serving_label  TEXT,
+           serving_count  REAL,
+           sort_order     INTEGER NOT NULL DEFAULT 0,
+           created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+         );`,
+      )
+    expect(legacySql).not.toContain('recipe_instructions')
+    expect(legacySql).not.toContain('raw_text')
+
+    const legacy = new DatabaseSync(dbPath)
+    legacy.exec(legacySql)
+    const foods = seed(legacy)
+    legacy
+      .prepare(
+        `INSERT INTO foods (id, source, owner_user_id, name, recipe_servings)
+         VALUES (900, 'recipe', 1, 'Old Stew', 2)`,
+      )
+      .run()
+    legacy
+      .prepare(
+        `INSERT INTO recipe_ingredients
+           (id, recipe_food_id, food_id, grams, serving_label, serving_count, sort_order)
+         VALUES (77, 900, ?, 250, 'cup', 2, 3)`,
+      )
+      .run(foods.rice)
+    legacy.close()
+
+    const db = await boot()
+
+    const columns = db.prepare('PRAGMA table_info(recipe_ingredients)').all() as {
+      name: string
+      notnull: number
+    }[]
+    expect(columns.find((c) => c.name === 'food_id')?.notnull).toBe(0)
+    expect(columns.map((c) => c.name)).toEqual(
+      expect.arrayContaining(['raw_text', 'note']),
+    )
+
+    // The rebuild copies rows; ids and every column value have to survive it,
+    // because sort_order is what keeps a recipe in the order it was written.
+    const row = db.prepare('SELECT * FROM recipe_ingredients WHERE id = 77').get() as Record<
+      string,
+      unknown
+    >
+    expect(row).toMatchObject({
+      recipe_food_id: 900,
+      food_id: foods.rice,
+      grams: 250,
+      serving_label: 'cup',
+      serving_count: 2,
+      sort_order: 3,
+    })
+
+    // Both indexes were dropped with the old table and must be back — the
+    // schema's IF NOT EXISTS versions already ran, so they will not restore them.
+    const indexes = (
+      db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'index'")
+        .all() as { name: string }[]
+    ).map((r) => r.name)
+    expect(indexes).toContain('idx_recipe_ingredients_recipe')
+    expect(indexes).toContain('idx_recipe_ingredients_food')
+
+    // And an unmatched line now inserts, which is the whole point.
+    db.prepare(
+      "INSERT INTO recipe_ingredients (recipe_food_id, grams, raw_text, note) VALUES (900, 0, 'oregano', 'a lot of')",
+    ).run()
+  })
+
+  it('refuses an ingredient that is neither a food nor any text', async () => {
+    const db = await boot()
+    seed(db)
+    db.prepare(
+      "INSERT INTO foods (id, source, owner_user_id, name) VALUES (901, 'recipe', 1, 'Stew')",
+    ).run()
+
+    expect(() =>
+      db
+        .prepare('INSERT INTO recipe_ingredients (recipe_food_id, grams) VALUES (901, 10)')
+        .run(),
+    ).toThrow(/CHECK/i)
+  })
+
   it('is safe to boot repeatedly', async () => {
     await boot()
     await boot()

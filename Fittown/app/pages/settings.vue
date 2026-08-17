@@ -2,6 +2,7 @@
 import type { Goals } from '~/composables/useDiary'
 import {
   ACTIVITY_LEVELS,
+  DEFAULT_CALORIE_GOAL,
   activityLevel,
   cmToFtIn,
   formatWeight,
@@ -58,8 +59,8 @@ const macroGap = computed(() => macroCalories.value - (form.calorie_goal ?? 0))
  * add to 100% are exactly a split that uses the whole budget.
  */
 const MACROS = [
-  { key: 'protein_g', label: 'Protein', kcalPerGram: 4, defaultPercent: 25 },
-  { key: 'carbs_g', label: 'Carbs', kcalPerGram: 4, defaultPercent: 45 },
+  { key: 'protein_g', label: 'Protein', kcalPerGram: 4, defaultPercent: 20 },
+  { key: 'carbs_g', label: 'Carbs', kcalPerGram: 4, defaultPercent: 50 },
   { key: 'fat_g', label: 'Fat', kcalPerGram: 9, defaultPercent: 30 },
 ] as const
 
@@ -81,7 +82,7 @@ const splitTotal = computed(() =>
   MACROS.reduce((sum, macro) => sum + macroPercent(macro), 0),
 )
 
-/** 25 / 45 / 30 — a balanced split that suits most people most of the time. */
+/** 20 / 50 / 30 — a balanced split that suits most people most of the time. */
 function applyDefaultSplit() {
   for (const macro of MACROS) setMacroPercent(macro, macro.defaultPercent)
 }
@@ -311,14 +312,24 @@ async function applyPlan(plan: {
   goal_weight_kg: number | null
   goal_rate_kg_per_week: number
   macros?: { protein_g: number; carbs_g: number; fat_g: number }
+  water_goal_ml?: number
 }) {
   form.calorie_goal = plan.calorie_goal
   form.goal_weight_kg = plan.goal_weight_kg
   form.goal_rate_kg_per_week = plan.goal_rate_kg_per_week
   if (plan.macros) Object.assign(form, plan.macros)
+  if (plan.water_goal_ml !== undefined) form.water_goal_ml = plan.water_goal_ml
   calculatorOpen.value = false
   await save()
 }
+
+/**
+ * Primary rather than outline when the calorie goal is still whatever a new
+ * account starts with — a nudge to actually run the numbers, that backs off
+ * once someone has set a real target of their own (even one that happens to
+ * equal the default).
+ */
+const calorieGoalIsDefault = computed(() => form.calorie_goal === DEFAULT_CALORIE_GOAL)
 
 async function clearPlan() {
   form.goal_weight_kg = null
@@ -523,12 +534,13 @@ const goalFields = [
         </div>
 
         <button
-          class="btn btn-outline btn-sm gap-2"
+          class="btn btn-sm gap-2"
+          :class="calorieGoalIsDefault ? 'btn-primary' : 'btn-outline'"
           :disabled="missingForCalculator.length > 0"
           @click="calculatorOpen = true"
         >
           <AppIcon name="chart" class="w-4 h-4" />
-          Calculate calorie target
+          Calculate calorie &amp; water targets
         </button>
         <p v-if="missingForCalculator.length" class="text-xs text-base-content/50">
           Add your {{ missingForCalculator.join(', ') }} above to calculate a target.
@@ -693,14 +705,6 @@ const goalFields = [
       {{ saved ? 'Saved' : 'Save settings' }}
     </button>
 
-    <section class="card bg-base-100 shadow-sm">
-      <div class="card-body p-4 gap-2">
-        <h2 class="font-semibold">Account</h2>
-        <p class="text-sm text-base-content/60">{{ user?.email }}</p>
-        <button class="btn btn-outline btn-sm mt-1" @click="signOut">Sign out</button>
-      </div>
-    </section>
-
     <!--
       A joke, and deliberately a purely local one: nothing is sent anywhere and
       nothing is stored. Both buttons record a "Yes", which is the entire gag.
@@ -736,6 +740,12 @@ const goalFields = [
       </div>
     </section>
 
+    <section class="card bg-base-100 shadow-sm">
+      <div class="card-body p-4 gap-2">
+        <button class="btn btn-outline btn-sm mt-1" @click="signOut">Sign out</button>
+      </div>
+    </section>
+
     <CalorieTargetDialog
       v-if="missingForCalculator.length === 0"
       :open="calculatorOpen"
@@ -745,6 +755,7 @@ const goalFields = [
       :weight-kg="currentWeightKg ?? 0"
       :activity="form.activity_level!"
       :weight-unit="weightUnit"
+      :volume-unit="form.volume_unit ?? 'ml'"
       :macros="{
         protein_g: form.protein_g ?? 0,
         carbs_g: form.carbs_g ?? 0,

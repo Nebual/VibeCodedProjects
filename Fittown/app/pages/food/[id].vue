@@ -96,7 +96,10 @@ async function save() {
       if (ingredientId.value) {
         await $fetch(`/api/recipes/${recipeId.value}/ingredients/${ingredientId.value}`, {
           method: 'PATCH',
-          body,
+          // `food_id` matters when the row didn't have one: this is how an
+          // imported line the matcher wasn't sure about gets its food. Sending
+          // it when the row already points here is a harmless no-op.
+          body: { ...body, food_id: food.value.id },
         })
       } else {
         await $fetch(`/api/recipes/${recipeId.value}/ingredients`, {

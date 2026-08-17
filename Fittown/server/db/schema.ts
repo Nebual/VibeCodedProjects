@@ -21,10 +21,10 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS user_goals (
   user_id         INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   calorie_goal    REAL NOT NULL DEFAULT 2000,
-  -- 25% protein / 45% carbs / 30% fat of 2000 kcal, a common balanced split.
+  -- 20% protein / 50% carbs / 30% fat of 2000 kcal, a common balanced split.
   -- Grams are the stored form; the ratio is derived from them in Settings.
-  protein_g       REAL NOT NULL DEFAULT 125,
-  carbs_g         REAL NOT NULL DEFAULT 225,
+  protein_g       REAL NOT NULL DEFAULT 100,
+  carbs_g         REAL NOT NULL DEFAULT 250,
   fat_g           REAL NOT NULL DEFAULT 67,
   fiber_g         REAL NOT NULL DEFAULT 30,
   water_goal_ml   REAL NOT NULL DEFAULT 2500,
@@ -106,6 +106,10 @@ CREATE TABLE IF NOT EXISTS foods (
   -- which is what stops the UI offering gram portions of it — see
   -- shared/recipes.ts.
   recipe_final_weight_g REAL,
+  -- How to actually make it. Free text, edited by hand, and the landing place
+  -- for an imported recipe's steps, times, yield and source URL. Nothing
+  -- derives anything from it — it is prose for a human to read while cooking.
+  recipe_instructions   TEXT,
 
   -- Is this measured per 100ml rather than per 100g?
   is_liquid       INTEGER NOT NULL DEFAULT 0,
@@ -208,15 +212,33 @@ CREATE INDEX IF NOT EXISTS idx_food_servings_food ON food_servings(food_id);
 CREATE TABLE IF NOT EXISTS recipe_ingredients (
   id             INTEGER PRIMARY KEY AUTOINCREMENT,
   recipe_food_id INTEGER NOT NULL REFERENCES foods(id) ON DELETE CASCADE,
-  food_id        INTEGER NOT NULL REFERENCES foods(id) ON DELETE RESTRICT,
+  -- Nullable since the bulk/URL import landed: a pasted line we couldn't match
+  -- to a food with confidence is stored as text and contributes nothing, rather
+  -- than being guessed at or minting a nutrition-less placeholder food. See
+  -- \`raw_text\` below and server/utils/ingredientMatch.ts.
+  food_id        INTEGER REFERENCES foods(id) ON DELETE RESTRICT,
   -- The resolved amount, exactly as diary_entries stores it: grams are what the
   -- maths uses, the label and count ride along so the row can redisplay
   -- "2 x cup" instead of "480 g".
+  --
+  -- Zero is legal and meaningful: "pinch of salt" has no numeric amount, so it
+  -- is stored as 0 g with the descriptor in \`note\`. rollUpRecipe() skips it in
+  -- both the weight sum and the nutrient-coverage test, so it neither adds
+  -- nutrition nor blanks anybody else's.
   grams          REAL NOT NULL,
   serving_label  TEXT,
   serving_count  REAL,
+  -- The line exactly as it was pasted or scraped, kept on matched rows too:
+  -- it is what shows that "Balsamic Vinegar of Modena" came from "45g balsamic
+  -- vinegar", and it is the only display name an unmatched row has.
+  raw_text       TEXT,
+  -- The bit of the line that isn't an amount or a name — "a lot of", "minced",
+  -- "1 to 2 tbsp". Shown to the user to interpret; never parsed again.
+  note           TEXT,
   sort_order     INTEGER NOT NULL DEFAULT 0,
-  created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+  -- A row with neither a food nor any text is not an ingredient, it's a bug.
+  CHECK (food_id IS NOT NULL OR raw_text IS NOT NULL)
 );
 -- The FK asymmetry is deliberate and mirrors diary_entries: deleting a recipe
 -- takes its ingredient rows with it, but an ingredient food can never vanish

@@ -42,6 +42,38 @@ for (const [name, path] of shots) {
   await page.screenshot({ path: `${OUT}/${name}.png`, fullPage: true })
 }
 
+// The import screen, and its preview — which is the part worth looking at,
+// since it is what the user reads before deciding to trust the parser.
+await page.goto(`${BASE}/recipes/import`, { waitUntil: 'networkidle' })
+await page.waitForTimeout(300)
+await page.screenshot({ path: `${OUT}/17-import-empty.png`, fullPage: true })
+
+await page.getByPlaceholder('Balsamic vinaigrette').fill('Balsamic vinaigrette')
+await page.locator('textarea').fill(
+  ['1/4c avocado oil', '45g balsamic vinegar', 'pinch of salt', 'a lot of oregano', 'garlic powder'].join('\n'),
+)
+await page.waitForTimeout(400)
+await page.screenshot({ path: `${OUT}/18-import-preview.png`, fullPage: true })
+
+// And what an imported recipe looks like once saved, unresolved rows and all.
+const imported = await page.evaluate(async () => {
+  const res = await fetch('/api/recipes/import/text', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      name: `Screenshot vinaigrette ${Date.now()}`,
+      text: '1/4c avocado oil\n45g balsamic vinegar\npinch of salt\na lot of oregano\ngarlic powder',
+      instructions: 'Total Time: 5 mins\nServes 6 to 8\n\n1. Whisk everything but the oil together.\n\n2. Drizzle the oil in while whisking until it emulsifies.\n\nSource: https://www.loveandlemons.com/balsamic-vinaigrette/',
+    }),
+  })
+  return res.ok ? res.json() : null
+})
+if (imported) {
+  await page.goto(`${BASE}/recipes/${imported.id}`, { waitUntil: 'networkidle' })
+  await page.waitForTimeout(600)
+  await page.screenshot({ path: `${OUT}/19-imported-recipe.png`, fullPage: true })
+}
+
 // Recipes. Shot from a real recipe rather than an empty one, since the editor's
 // whole job is showing what the mixture comes to.
 const { recipes } = await page.evaluate(() => fetch('/api/recipes').then((r) => r.json()))
@@ -83,7 +115,7 @@ await page.screenshot({ path: `${OUT}/04b-trends-year.png`, fullPage: true })
 // The calorie target calculator, if the profile is complete enough to open it.
 await page.goto(`${BASE}/settings`, { waitUntil: 'networkidle' })
 await page.waitForTimeout(500)
-const calculate = page.getByRole('button', { name: /Calculate calorie target/i })
+const calculate = page.getByRole('button', { name: /Calculate calorie/i })
 if (!(await calculate.isDisabled())) {
   await calculate.click()
   await page.waitForTimeout(500)
@@ -124,6 +156,13 @@ if (recipe) {
   await dp.goto(`${BASE}/recipes/${recipe.id}`, { waitUntil: 'networkidle' })
   await dp.waitForTimeout(500)
   await dp.screenshot({ path: `${OUT}/15-recipe-dark.png`, fullPage: true })
+}
+if (imported) {
+  // The warning colours are the thing to check here — a warning that vanishes
+  // into the background in dark mode is not a warning.
+  await dp.goto(`${BASE}/recipes/${imported.id}`, { waitUntil: 'networkidle' })
+  await dp.waitForTimeout(500)
+  await dp.screenshot({ path: `${OUT}/20-imported-dark.png`, fullPage: true })
 }
 
 // Desktop

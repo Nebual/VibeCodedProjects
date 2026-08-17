@@ -10,7 +10,7 @@ const emit = defineEmits<{ add: [amountMl: number] }>()
 const ML_PER_FLOZ = 29.5735
 
 /** Quick-add sizes, in the user's own unit. */
-const presets = computed(() =>
+const sizePresets = computed(() =>
   props.unit === 'floz'
     ? [
         { label: '8 oz', ml: 8 * ML_PER_FLOZ },
@@ -23,6 +23,16 @@ const presets = computed(() =>
         { label: '750 ml', ml: 750 },
       ],
 )
+
+/** A can/bottle — common enough to offer in both units at once, rather than
+ * switching with the metric/imperial toggle like the sizes above. Sits
+ * between the first two sizes, closest to where its own volume falls. */
+const CAN_PRESET = { label: '12oz / 350ml', ml: 350 }
+
+const presets = computed(() => {
+  const [first, ...rest] = sizePresets.value
+  return [first!, CAN_PRESET, ...rest]
+})
 
 function display(ml: number) {
   return props.unit === 'floz'
@@ -77,7 +87,7 @@ const glasses = computed(() => {
           class="btn btn-sm btn-ghost btn-square"
           :disabled="totalMl <= 0"
           aria-label="Undo last water"
-          @click="emit('add', -presets[0]!.ml)"
+          @click="emit('add', -(Math.min(totalMl, presets[0]!.ml)))"
         >
           <AppIcon name="minus" class="w-4 h-4" />
         </button>

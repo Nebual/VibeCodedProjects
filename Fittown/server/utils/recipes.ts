@@ -33,6 +33,7 @@ export interface RecipeRow {
   is_liquid: number
   recipe_servings: number | null
   recipe_final_weight_g: number | null
+  recipe_instructions: string | null
   serving_grams: number | null
   owner_user_id: number | null
   [column: string]: unknown
@@ -43,9 +44,27 @@ export interface IngredientRow {
   grams: number
   serving_label: string | null
   serving_count: number | null
+  /** The line as pasted or scraped. Null on rows added the normal way. */
+  raw_text: string | null
+  /** Amount descriptor or prep note — "a lot of", "minced". */
+  note: string | null
   sort_order: number
-  food: Record<string, unknown>
+  /**
+   * The ingredient's food row, or **null** when the import couldn't match this
+   * line to one with confidence. A null food contributes no nutrition and no
+   * weight; `raw_text` is all such a row has to show for itself.
+   */
+  food: Record<string, unknown> | null
 }
+
+/**
+ * Instructions are fetched only where a recipe is the subject.
+ *
+ * Deliberately not in `FOOD_FIELDS`: that list is also what a 60-row food
+ * search selects, and hauling a page of prose through every query to render a
+ * name and a calorie count is a cost with no reader.
+ */
+const RECIPE_EXTRA_COLS = 'f.recipe_instructions'
 
 /** A recipe belonging to this user, or undefined — a guessed id finds nothing. */
 export function findRecipe(
@@ -55,7 +74,7 @@ export function findRecipe(
 ): RecipeRow | undefined {
   return db
     .prepare(
-      `SELECT ${foodCols()} FROM foods f
+      `SELECT ${foodCols()}, ${RECIPE_EXTRA_COLS} FROM foods f
        WHERE f.id = ? AND f.owner_user_id = ? AND f.source = ?`,
     )
     .get(id, userId, RECIPE_SOURCE) as RecipeRow | undefined
@@ -66,14 +85,22 @@ export function findRecipe(
  *
  * `ri.id` is aliased: `foods` has an `id` too, and the later column would
  * silently overwrite the earlier one in the result object.
+ *
+ * The join is a LEFT join because an imported line may have no food. Note that
+ * "unmatched" is decided by `ri.food_id IS NULL`, **not** by `f.id IS NULL`: a
+ * LEFT join miss fills every one of `foodCols()`'s forty columns with null, and
+ * the spread below would otherwise hand back an object that has `name`,
+ * `kcal`, `is_liquid` and the rest — all null — and looks for all the world
+ * like a real food row.
  */
 export function listIngredients(db: DatabaseSync, recipeFoodId: number): IngredientRow[] {
   const rows = db
     .prepare(
       `SELECT ri.id AS ingredient_id, ri.grams, ri.serving_label, ri.serving_count,
-              ri.sort_order, ${foodCols()}
+              ri.raw_text, ri.note, ri.sort_order, ri.food_id AS ri_food_id,
+              ${foodCols()}
        FROM recipe_ingredients ri
-       JOIN foods f ON f.id = ri.food_id
+       LEFT JOIN foods f ON f.id = ri.food_id
        WHERE ri.recipe_food_id = ?
        ORDER BY ri.sort_order, ri.id`,
     )
@@ -85,7 +112,10 @@ export function listIngredients(db: DatabaseSync, recipeFoodId: number): Ingredi
       grams,
       serving_label: servingLabel,
       serving_count: servingCount,
+      raw_text: rawText,
+      note,
       sort_order: sortOrder,
+      ri_food_id: foodId,
       ...food
     } = row
     return {
@@ -93,8 +123,10 @@ export function listIngredients(db: DatabaseSync, recipeFoodId: number): Ingredi
       grams: Number(grams),
       serving_label: (servingLabel as string | null) ?? null,
       serving_count: servingCount === null ? null : Number(servingCount),
+      raw_text: (rawText as string | null) ?? null,
+      note: (note as string | null) ?? null,
       sort_order: Number(sortOrder),
-      food,
+      food: foodId === null || foodId === undefined ? null : food,
     }
   })
 }
@@ -242,7 +274,12 @@ export function listRecipeSummaries(db: DatabaseSync, userId: number) {
               f.recipe_servings, f.recipe_final_weight_g,
               f.serving_grams, f.kcal,
               (SELECT COUNT(*) FROM recipe_ingredients ri
-               WHERE ri.recipe_food_id = f.id) AS ingredient_count
+               WHERE ri.recipe_food_id = f.id) AS ingredient_count,
+              -- So the list can say "2 need a food" on an imported recipe. It
+              -- is the only prompt the user gets to go back and finish one.
+              (SELECT COUNT(*) FROM recipe_ingredients ri
+               WHERE ri.recipe_food_id = f.id AND ri.food_id IS NULL)
+                AS unresolved_count
        FROM foods f
        WHERE f.owner_user_id = ? AND f.source = ?
        ORDER BY f.name COLLATE NOCASE`,
@@ -302,12 +339,22 @@ export function recipeDetail(db: DatabaseSync, id: number, ownerId: number) {
       grams: ingredient.grams,
       serving_label: ingredient.serving_label,
       serving_count: ingredient.serving_count,
+      raw_text: ingredient.raw_text,
+      note: ingredient.note,
       sort_order: ingredient.sort_order,
       food: ingredient.food,
-      nutrients: scaleNutrients(ingredient.food, ingredient.grams),
+      // An empty object, not a row of zeroes: the UI renders a missing key as
+      // "not recorded", which is the honest answer for a line we never matched.
+      nutrients: ingredient.food
+        ? scaleNutrients(ingredient.food, ingredient.grams)
+        : {},
     })),
     raw_g: rollUp.raw_g,
     basis_g: rollUp.basis_g,
+    // What the totals below are *not* counting. The editor turns this into a
+    // warning, because a recipe missing two of its ingredients still shows a
+    // confident calorie figure and nothing else would say otherwise.
+    unresolved_count: ingredients.filter((i) => i.food === null).length,
     totals,
     per_serving: perServing,
   }
@@ -335,7 +382,10 @@ export function copyRecipeInto(
   userId: number,
 ): number {
   const source = db
-    .prepare(`SELECT ${foodCols()} FROM foods f WHERE f.id = ? AND f.source = ?`)
+    .prepare(
+      `SELECT ${foodCols()}, ${RECIPE_EXTRA_COLS} FROM foods f
+       WHERE f.id = ? AND f.source = ?`,
+    )
     .get(sourceRecipeId, RECIPE_SOURCE) as RecipeRow | undefined
 
   if (!source) throw new Error(`No recipe with id ${sourceRecipeId}`)
@@ -350,26 +400,39 @@ export function copyRecipeInto(
   const servings = Number(source.recipe_servings ?? 1) || 1
   const newId = createRecipeFood(db, userId, name, servings)
 
-  db.prepare('UPDATE foods SET is_liquid = ?, recipe_final_weight_g = ? WHERE id = ?').run(
+  db.prepare(
+    `UPDATE foods
+     SET is_liquid = ?, recipe_final_weight_g = ?, recipe_instructions = ?
+     WHERE id = ?`,
+  ).run(
     source.is_liquid ? 1 : 0,
     source.recipe_final_weight_g ?? null,
+    // The method travels with the mixture. A copied recipe without its steps is
+    // a shopping list, and the source URL at the bottom is the attribution.
+    source.recipe_instructions ?? null,
     newId,
   )
 
+  // LEFT join: an imported recipe may carry lines that were never matched to a
+  // food, and they have to come across too. Dropping them would hand someone a
+  // vinaigrette with no salt and no oregano, with nothing on screen to say so.
   const ingredients = db
     .prepare(
-      `SELECT ri.food_id, ri.grams, ri.serving_label, ri.serving_count, ri.sort_order,
+      `SELECT ri.food_id, ri.grams, ri.serving_label, ri.serving_count,
+              ri.raw_text, ri.note, ri.sort_order,
               f.owner_user_id
        FROM recipe_ingredients ri
-       JOIN foods f ON f.id = ri.food_id
+       LEFT JOIN foods f ON f.id = ri.food_id
        WHERE ri.recipe_food_id = ?
        ORDER BY ri.sort_order, ri.id`,
     )
     .all(sourceRecipeId) as {
-      food_id: number
+      food_id: number | null
       grams: number
       serving_label: string | null
       serving_count: number | null
+      raw_text: string | null
+      note: string | null
       sort_order: number
       owner_user_id: number | null
     }[]
@@ -379,17 +442,23 @@ export function copyRecipeInto(
 
   const insert = db.prepare(
     `INSERT INTO recipe_ingredients
-       (recipe_food_id, food_id, grams, serving_label, serving_count, sort_order)
-     VALUES (?, ?, ?, ?, ?, ?)`,
+       (recipe_food_id, food_id, grams, serving_label, serving_count,
+        raw_text, note, sort_order)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
   )
 
   for (const ingredient of ingredients) {
     let foodId = ingredient.food_id
-    if (ingredient.owner_user_id !== null && ingredient.owner_user_id !== userId) {
-      let copy = localised.get(ingredient.food_id)
+    // Unmatched rows have nothing to localise — they are already just text.
+    if (
+      foodId !== null
+      && ingredient.owner_user_id !== null
+      && ingredient.owner_user_id !== userId
+    ) {
+      let copy = localised.get(foodId)
       if (copy === undefined) {
-        copy = copyCustomFoodInto(db, ingredient.food_id, userId)
-        localised.set(ingredient.food_id, copy)
+        copy = copyCustomFoodInto(db, foodId, userId)
+        localised.set(foodId, copy)
       }
       foodId = copy
     }
@@ -400,6 +469,11 @@ export function copyRecipeInto(
       ingredient.grams,
       ingredient.serving_label,
       ingredient.serving_count,
+      // The CHECK constraint needs one of the two. A row with no food that
+      // somehow also has no text cannot be copied into a legal row, so give it
+      // something rather than failing the whole copy.
+      foodId === null ? (ingredient.raw_text ?? 'Unnamed ingredient') : ingredient.raw_text,
+      ingredient.note,
       ingredient.sort_order,
     )
   }
