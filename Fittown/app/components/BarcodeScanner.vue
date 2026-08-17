@@ -1,5 +1,14 @@
 <script setup lang="ts">
 import type { FoodRow } from '~/composables/useDiary'
+import { BarcodeDetector as WasmBarcodeDetector, setZXingModuleOverrides } from 'barcode-detector/pure'
+// The polyfill defaults to fetching its WASM binary from the jsDelivr CDN on
+// first use. Point it at the copy Vite already bundles instead, so scanning
+// doesn't depend on a third-party host being reachable.
+import zxingReaderWasmUrl from 'zxing-wasm/reader/zxing_reader.wasm?url'
+
+setZXingModuleOverrides({
+  locateFile: (path, prefix) => (path.endsWith('.wasm') ? zxingReaderWasmUrl : prefix + path),
+})
 
 const props = withDefaults(
   defineProps<{
@@ -18,7 +27,7 @@ const target = computed(() =>
 const emit = defineEmits<{ close: [] }>()
 
 const video = ref<HTMLVideoElement | null>(null)
-const status = ref<'idle' | 'starting' | 'scanning' | 'unsupported' | 'denied' | 'looking-up'>('idle')
+const status = ref<'idle' | 'starting' | 'scanning' | 'denied' | 'looking-up'>('idle')
 const manualCode = ref('')
 const notFound = ref<string | null>(null)
 
@@ -26,18 +35,20 @@ let stream: MediaStream | null = null
 let raf: number | undefined
 
 /**
- * Uses the native BarcodeDetector API — no scanning library in the bundle.
- * It's available in Chrome/Edge on Android and desktop, but notably absent in
- * Safari, so manual entry is always offered alongside rather than as a
- * grudging fallback.
+ * Prefers the native BarcodeDetector API (Chrome/Edge) since it's fast and
+ * adds nothing to the bundle. Firefox and Safari never implemented it, so
+ * there we fall back to the `barcode-detector` WASM polyfill (zxing-wasm
+ * under the hood, ~1MB, only fetched once scanning actually starts) rather
+ * than leaving those browsers with manual entry as the only option.
  */
-const hasDetector = () => typeof window !== 'undefined' && 'BarcodeDetector' in window
+function getDetectorCtor(): typeof WasmBarcodeDetector {
+  if (typeof window !== 'undefined' && 'BarcodeDetector' in window) {
+    return (window as unknown as { BarcodeDetector: typeof WasmBarcodeDetector }).BarcodeDetector
+  }
+  return WasmBarcodeDetector
+}
 
 async function start() {
-  if (!hasDetector()) {
-    status.value = 'unsupported'
-    return
-  }
   status.value = 'starting'
   try {
     stream = await navigator.mediaDevices.getUserMedia({
@@ -55,8 +66,8 @@ async function start() {
 }
 
 async function detectLoop() {
-  // @ts-expect-error — BarcodeDetector isn't in the DOM lib types yet.
-  const detector = new window.BarcodeDetector({
+  const Detector = getDetectorCtor()
+  const detector = new Detector({
     formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128'],
   })
 
@@ -86,7 +97,7 @@ async function lookup(code: string) {
   } catch {
     notFound.value = code
     // Resume scanning so they can try another angle or a different product.
-    status.value = hasDetector() && stream ? 'scanning' : 'idle'
+    status.value = stream ? 'scanning' : 'idle'
     if (status.value === 'scanning') detectLoop()
   }
 }
@@ -131,11 +142,8 @@ onBeforeUnmount(stop)
         </div>
       </div>
 
-      <div v-if="status === 'unsupported'" class="alert alert-info mt-3 text-sm">
-        <span>This browser can't scan barcodes (Safari doesn't support it yet). Type the number instead.</span>
-      </div>
-      <div v-else-if="status === 'denied'" class="alert alert-warning mt-3 text-sm">
-        <span>Camera access was blocked. Enter the barcode manually below.</span>
+      <div v-if="status === 'denied'" class="alert alert-warning mt-3 text-sm">
+        <span>Camera access was blocked or unavailable. Enter the barcode manually below.</span>
       </div>
       <div v-if="notFound" class="alert alert-error mt-3 text-sm">
         <span>No food found for {{ notFound }}. Try again or create a custom food.</span>
