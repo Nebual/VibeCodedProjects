@@ -2,7 +2,12 @@
 import { MASS_UNITS, VOLUME_UNITS, baseUnit, roundGrams } from '#shared/portions'
 import { MAX_INSTRUCTIONS_CHARS, showsGramPortions } from '#shared/recipes'
 import { sharedRecipeUrl } from '#shared/friends'
-import { ingredientDetail, ingredientName, isResolved } from '~/utils/ingredients'
+import {
+  ingredientDetail,
+  ingredientName,
+  ingredientSearchTerm,
+  isResolved,
+} from '~/utils/ingredients'
 import type { RecipeDetail, RecipeIngredient } from '~/composables/useRecipes'
 
 const route = useRoute()
@@ -126,25 +131,46 @@ function saveWeight() {
 // --- ingredients ------------------------------------------------------------
 
 /**
- * Where tapping an ingredient goes.
+ * Pick a *different* food for this ingredient.
  *
- * A matched one re-opens the portion picker on the food, landing on the portion
- * it was added with. An unmatched one has no food to open, so it goes to the
- * search with its own text pre-filled — which is the step that turns an
- * imported line into a real ingredient.
+ * The same search the importer's unmatched rows use, so "it guessed wrong" and
+ * "it couldn't guess" land in one place. Whatever gets picked replaces the food
+ * on this row rather than being appended as a new ingredient — see the
+ * `ingredient` parameter in `app/utils/foodLink.ts`.
  */
-function editLink(ingredient: RecipeIngredient) {
+function changeLink(ingredient: RecipeIngredient) {
   const params = new URLSearchParams({
     recipe: String(id.value),
     ingredient: String(ingredient.id),
+    q: ingredientSearchTerm(ingredient),
   })
 
-  if (!ingredient.food) {
-    params.set('q', ingredient.raw_text ?? '')
-    return `/add?${params}`
-  }
+  // The amount rides along so swapping the food keeps it. Changing "Avocado Oil
+  // Cooking Spray" to "Avocado Oil" is a correction to *what* it is, not to how
+  // much of it there is, and making the user re-enter 0.25 cup would say
+  // otherwise. Carried through /add to the portion picker.
+  if (ingredient.grams > 0) params.set('g', String(ingredient.grams))
+  if (ingredient.serving_label) params.set('sl', ingredient.serving_label)
+  if (ingredient.serving_count) params.set('sc', String(ingredient.serving_count))
+  return `/add?${params}`
+}
 
-  params.set('g', String(ingredient.grams))
+/**
+ * Where tapping an ingredient's name goes.
+ *
+ * A matched one re-opens the portion picker on the food, landing on the portion
+ * it was added with — the common case is "how much of this again?", not "this
+ * is the wrong food", which is what the Change button beside it is for. An
+ * unmatched row has no food to open, so its name goes straight to the search.
+ */
+function editLink(ingredient: RecipeIngredient) {
+  if (!ingredient.food) return changeLink(ingredient)
+
+  const params = new URLSearchParams({
+    recipe: String(id.value),
+    ingredient: String(ingredient.id),
+    g: String(ingredient.grams),
+  })
   if (ingredient.serving_label) params.set('sl', ingredient.serving_label)
   if (ingredient.serving_count) params.set('sc', String(ingredient.serving_count))
   return `/food/${ingredient.food.id}?${params}`
@@ -382,6 +408,19 @@ const logLink = computed(
             >
               {{ isResolved(ingredient) ? Math.round(ingredient.nutrients.kcal ?? 0) : '—' }}
             </div>
+
+            <!-- Only for rows that already have a food. An unmatched row's own
+                 name is the link to the same search, so a second one beside it
+                 would be two controls doing one job. -->
+            <NuxtLink
+              v-if="isResolved(ingredient)"
+              :to="changeLink(ingredient)"
+              class="btn btn-ghost btn-xs btn-square text-base-content/40 hover:text-primary"
+              :aria-label="`Change ${ingredientName(ingredient)} to a different food`"
+              title="Pick a different food"
+            >
+              <AppIcon name="swap" class="w-4 h-4" />
+            </NuxtLink>
 
             <button
               class="btn btn-ghost btn-xs btn-square text-base-content/40 hover:text-error"

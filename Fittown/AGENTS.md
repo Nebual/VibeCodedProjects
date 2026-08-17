@@ -104,8 +104,8 @@ the evidence of tampering this file tells you to treat as a warning sign.
 Two layers, and they cover different things:
 
 ```bash
-cd $RUN && pnpm test                     # 344 unit tests, ~0.8s, no server needed
-cd $RUN && node scripts/e2e.mjs          # 37 steps, fails on any console error
+cd $RUN && pnpm test                     # 358 unit tests, ~0.8s, no server needed
+cd $RUN && node scripts/e2e.mjs          # 38 steps, fails on any console error
 node scripts/screenshots.mjs /tmp/shots  # mobile, dark, desktop — then Read them
 pnpm build                               # catches things dev mode hides
 ```
@@ -116,7 +116,8 @@ units, body/energy maths, the activity library's internal consistency, the
 request validators, the recipe roll-up (yields, the coverage rule, when gram
 portions may be offered), the invite-expiry and copy-naming rules, the
 ingredient parser, the recipe scraper (against a saved copy of a real Love and
-Lemons page), the URL guard's private-address ranges, and — against a real temp
+Lemons page), the URL guard's private-address ranges, how an ingredient row
+reads on screen when it has no food, and — against a real temp
 SQLite file — the boot-time schema migration, the `recipe_ingredients` rebuild,
 the exercise-library sync, `recomputeRecipe()`, ingredient matching, recipe
 import, the friendship access gate and the deep recipe copy.

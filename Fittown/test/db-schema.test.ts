@@ -67,7 +67,7 @@ describe('fresh database', () => {
     }
   })
 
-  it('defaults a new user to a 25/45/30 macro split', async () => {
+  it('defaults a new user to a 20/50/30 macro split', async () => {
     const db = await boot()
     db.prepare("INSERT INTO users (email, name) VALUES ('a@b.c', 'A')").run()
     db.prepare('INSERT INTO user_goals (user_id) VALUES (1)').run()
@@ -77,8 +77,8 @@ describe('fresh database', () => {
       number
     >
     expect(goals.calorie_goal).toBe(2000)
-    expect((goals.protein_g * 4) / goals.calorie_goal).toBeCloseTo(0.25, 2)
-    expect((goals.carbs_g * 4) / goals.calorie_goal).toBeCloseTo(0.45, 2)
+    expect((goals.protein_g * 4) / goals.calorie_goal).toBeCloseTo(0.2, 2)
+    expect((goals.carbs_g * 4) / goals.calorie_goal).toBeCloseTo(0.5, 2)
     expect((goals.fat_g * 9) / goals.calorie_goal).toBeCloseTo(0.3, 2)
   })
 })

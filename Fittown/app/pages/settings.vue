@@ -87,6 +87,14 @@ function applyDefaultSplit() {
   for (const macro of MACROS) setMacroPercent(macro, macro.defaultPercent)
 }
 
+/**
+ * "20 / 50 / 30", read off MACROS rather than written out.
+ *
+ * It was a hardcoded string, and when the defaults moved it kept advertising the
+ * old split while the button applied the new one.
+ */
+const defaultSplitLabel = MACROS.map((macro) => macro.defaultPercent).join(' / ')
+
 async function save() {
   saving.value = true
   saved.value = false
@@ -561,7 +569,7 @@ const goalFields = [
         <div class="flex items-center justify-between gap-2 mt-1">
           <span class="label-text text-xs font-medium">Macro split</span>
           <button class="btn btn-ghost btn-xs" @click="applyDefaultSplit">
-            Reset to 25 / 45 / 30
+            Reset to {{ defaultSplitLabel }}
           </button>
         </div>
 

@@ -18,25 +18,42 @@ const date = computed(() => (route.query.d as string) || today.value)
  */
 const recipeId = computed(() => (route.query.recipe ? Number(route.query.recipe) : null))
 
-useHead({
-  title: () =>
-    recipeId.value
-      ? 'Add ingredient · Fittown'
-      : `Add to ${MEAL_LABELS[meal.value] ?? 'diary'} · Fittown`,
-})
-
 /**
  * Set when this screen is finding a food for an ingredient that already
- * exists — an imported line the matcher wasn't confident about. Everything
- * below carries it along so the food you pick lands on that row rather than
- * being appended as a new one.
+ * exists — one nothing matched on import, or one whose food the user is
+ * swapping. Everything below carries it along so the food you pick lands on
+ * that row rather than being appended as a new one.
  */
 const ingredientId = computed(() =>
   route.query.ingredient ? Number(route.query.ingredient) : null,
 )
 
-// Pre-filled when we arrived from an unmatched ingredient, whose own text is
-// the best search term anyone has for it.
+/** "Add" and "Change" are different promises; the heading should keep them. */
+const heading = computed(() => {
+  if (ingredientId.value) return 'Change ingredient'
+  if (recipeId.value) return 'Add ingredient'
+  return `Add to ${MEAL_LABELS[meal.value] ?? 'diary'}`
+})
+
+useHead({ title: () => `${heading.value} · Fittown` })
+
+/**
+ * The portion the ingredient already has, carried straight through to the
+ * picker. Swapping an ingredient's food is a correction to *what* it is, not to
+ * how much of it there is, so the amount has to survive the trip.
+ */
+const carriedPortion = computed(() => {
+  const carried: Record<string, string> = {}
+  for (const key of ['g', 'sl', 'sc']) {
+    const value = route.query[key]
+    if (typeof value === 'string' && value !== '') carried[key] = value
+  }
+  return carried
+})
+
+// Pre-filled when we arrived from an ingredient — either one nothing matched,
+// or one the user is swapping — since its own text is the best search term
+// anyone has for it.
 const query = ref(typeof route.query.q === 'string' ? route.query.q : '')
 const debounced = ref(query.value)
 
@@ -150,6 +167,7 @@ const newFoodLink = computed(
       date: date.value,
       recipe: recipeId.value,
       ingredient: ingredientId.value,
+      extra: carriedPortion.value,
     })}`,
 )
 
@@ -162,9 +180,7 @@ const showScanner = ref(false)
       <button class="btn btn-ghost btn-sm btn-square" aria-label="Back" @click="$router.back()">
         <AppIcon name="chevronLeft" class="w-5 h-5" />
       </button>
-      <h1 class="font-semibold flex-1">
-        {{ recipeId ? 'Add ingredient' : `Add to ${MEAL_LABELS[meal]}` }}
-      </h1>
+      <h1 class="font-semibold flex-1">{{ heading }}</h1>
     </header>
 
     <div class="flex gap-2">
@@ -194,7 +210,14 @@ const showScanner = ref(false)
         <header class="px-3 pt-2.5 pb-1 text-xs font-semibold text-base-content/50 uppercase tracking-wide">
           Frequent
         </header>
-        <FoodResultList :foods="frequent" :meal="meal" :date="date" :recipe="recipeId" :ingredient="ingredientId" />
+        <FoodResultList
+          :foods="frequent"
+          :meal="meal"
+          :date="date"
+          :recipe="recipeId"
+          :ingredient="ingredientId"
+          :extra="carriedPortion"
+        />
       </template>
 
       <template v-if="!recipeId && recipes.length">
@@ -218,7 +241,14 @@ const showScanner = ref(false)
         >
           Search results
         </header>
-        <FoodResultList :foods="searchResults" :meal="meal" :date="date" :recipe="recipeId" :ingredient="ingredientId" />
+        <FoodResultList
+          :foods="searchResults"
+          :meal="meal"
+          :date="date"
+          :recipe="recipeId"
+          :ingredient="ingredientId"
+          :extra="carriedPortion"
+        />
       </template>
 
       <template v-if="friendResults.length">

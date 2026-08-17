@@ -1,3 +1,4 @@
+import { parseIngredientLine } from '#shared/ingredientText'
 import { roundGrams } from '#shared/portions'
 import type { RecipeIngredient } from '~/composables/useRecipes'
 
@@ -37,6 +38,24 @@ export function portionText(ingredient: RecipeIngredient): string {
     return amount ? `${portion} · ${amount}` : portion
   }
   return amount
+}
+
+/**
+ * What to put in the search box when swapping this ingredient's food.
+ *
+ * The imported line is the best description of what the user meant, but it
+ * can't be searched raw: full-text search prefix-matches every term with AND,
+ * so "1/4c avocado oil" looks for something beginning "1", "4c", "avocado"
+ * *and* "oil" and finds nothing. Running it back through the same parser the
+ * import used strips the amount and the prep words and leaves "avocado oil".
+ *
+ * Falling back to the matched food's own name is deliberate but second choice:
+ * for a wrong match like "Avocado Oil Cooking Spray" it carries the very words
+ * that made it wrong, so the original line wins whenever we still have it.
+ */
+export function ingredientSearchTerm(ingredient: RecipeIngredient): string {
+  const parsed = ingredient.raw_text ? parseIngredientLine(ingredient.raw_text) : null
+  return parsed?.name || ingredient.food?.name || ingredient.raw_text || ''
 }
 
 /**

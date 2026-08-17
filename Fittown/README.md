@@ -153,9 +153,13 @@ guessed — the recipe simply doesn't count them until you say what they are.
 Each line is then matched against the food database, but **only when the match
 is unambiguous**. "balsamic vinegar" will find balsamic vinegar; "avocado oil"
 will not settle for *Avocado Oil Cooking Spray*. Anything left over stays on the
-recipe as text with a warning above the nutrition, and tapping it opens the
-search with that line already typed in. Picking a food attaches it and the
-totals update.
+recipe as text, shown in amber with a dash instead of a calorie figure, and
+tapping it opens the search with that line already typed in. Picking a food
+attaches it and the totals update.
+
+When it matches the *wrong* thing, the **⇄** button on the ingredient opens the
+same search so you can swap the food. The amount comes with it — changing what
+an ingredient is shouldn't make you retype how much of it there is.
 
 **From a link** takes a recipe URL — `https://www.loveandlemons.com/balsamic-vinaigrette/`
 and most food blogs work — and pulls across the ingredients, the method, the

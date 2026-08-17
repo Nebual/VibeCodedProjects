@@ -18,6 +18,9 @@ export default defineConfig({
     alias: {
       '#shared': fileURLToPath(new URL('./shared', import.meta.url)),
       '~~': fileURLToPath(new URL('.', import.meta.url)),
+      // Nuxt 4 points `~` at srcDir, which is `app/`. Mirrored here so the
+      // pure display helpers under `app/utils/` can be tested directly.
+      '~': fileURLToPath(new URL('./app', import.meta.url)),
     },
   },
   test: {

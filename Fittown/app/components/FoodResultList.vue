@@ -11,8 +11,13 @@ const props = withDefaults(
     recipe?: number | null
     /** Set when replacing an existing ingredient rather than adding one. */
     ingredient?: number | null
+    /**
+     * Extra query parameters to carry to the portion picker — the amount an
+     * ingredient already has, so swapping its food doesn't reset it.
+     */
+    extra?: Record<string, string>
   }>(),
-  { meal: 'snack', date: null, recipe: null, ingredient: null },
+  { meal: 'snack', date: null, recipe: null, ingredient: null, extra: () => ({}) },
 )
 
 const linkFor = (id: number) =>
@@ -21,6 +26,7 @@ const linkFor = (id: number) =>
     date: props.date,
     recipe: props.recipe,
     ingredient: props.ingredient,
+    extra: props.extra,
   })}`
 
 /**

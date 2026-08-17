@@ -670,13 +670,14 @@ await step('an unmatched line survives as text, and the page says so', async () 
   }
 
   // Whatever the matcher managed against the real food library, anything it
-  // left unresolved has to be visible as a warning rather than silently
-  // missing from a confident-looking total.
-  const unresolved = await page.locator('.alert-warning').count()
-  const dashes = await page.locator('li:has-text("Tap to pick a food")').count()
-  if (unresolved !== (dashes > 0 ? 1 : 0)) {
+  // left unresolved has to be visible on its own row rather than silently
+  // missing from a confident-looking total. Each such row prompts for a food
+  // and shows a dash instead of a calorie figure.
+  const unresolvedRows = await page.locator('li:has-text("Tap to pick a food")').count()
+  const dashes = await page.locator('li:has-text("Tap to pick a food"):has-text("—")').count()
+  if (dashes !== unresolvedRows) {
     throw new Error(
-      `unresolved rows (${dashes}) and the warning banner (${unresolved}) disagree`,
+      `${unresolvedRows} unresolved rows but ${dashes} showed a dash instead of a number`,
     )
   }
 })
@@ -693,14 +694,16 @@ await step('an unresolved line can be given a food, and the totals follow', asyn
   await page.waitForTimeout(900)
 
   const before = await page.locator('main').innerText()
-  if (!/needs a food/.test(before)) {
-    throw new Error(`expected an unresolved warning: ${before.slice(0, 500)}`)
+  if (!/Tap to pick a food/.test(before)) {
+    throw new Error(`expected the row to prompt for a food: ${before.slice(0, 500)}`)
   }
 
   // Tapping the row goes to the search with its own text already in the box.
   await page.locator('a:has-text("zzqqx unmatchable")').first().click()
   await page.waitForURL(/\/add\?/, { timeout: 15000 })
-  await page.waitForLoadState('networkidle')
+  await page
+    .getByRole('heading', { name: /Change ingredient/i })
+    .waitFor({ timeout: 15000 })
   const prefilled = await page.getByPlaceholder('Search foods').inputValue()
   if (!/zzqqx/.test(prefilled)) {
     throw new Error(`search box was not pre-filled with the line: ${JSON.stringify(prefilled)}`)
@@ -719,12 +722,86 @@ await step('an unresolved line can be given a food, and the totals follow', asyn
   await page.waitForTimeout(900)
 
   const after = await page.locator('main').innerText()
-  if (/needs a food/.test(after)) {
-    throw new Error(`the warning should be gone once every line has a food: ${after.slice(0, 500)}`)
+  if (/Tap to pick a food/.test(after)) {
+    throw new Error(`the prompt should be gone once every line has a food: ${after.slice(0, 500)}`)
   }
   // 200 g of the food we just attached, plus the 100 g that already matched.
   if (!/300 g in/.test(after)) {
     throw new Error(`the roll-up did not pick up the resolved line: ${after.slice(0, 500)}`)
+  }
+})
+
+await step('a matched ingredient can be swapped for a different food', async () => {
+  // The other half of the same journey: the importer picked *something*, but it
+  // picked wrong. Built through the normal add flow rather than an import so
+  // the starting ingredient is deterministic whatever is in the food library.
+  await page.goto(`${BASE}/recipes`, { waitUntil: 'networkidle' })
+  await page.getByPlaceholder('Grandma').fill(`E2E Change ${Date.now()}`)
+  await page.getByRole('button', { name: /^Create$/ }).click()
+  await page.waitForURL(/\/recipes\/\d+/, { timeout: 15000 })
+  await page.waitForTimeout(600)
+
+  await page.getByRole('link', { name: /Add ingredient/i }).click()
+  await page.waitForLoadState('networkidle')
+  await page.getByPlaceholder('Search foods').fill('chicken breast')
+  await page.waitForTimeout(1200)
+  await page.locator('a[href^="/food/"]').first().click()
+  await page.waitForLoadState('networkidle')
+  await page.waitForTimeout(600)
+  await page.locator('label:has-text("Portion") select').selectOption({ label: 'g' })
+  await page.locator('label:has-text("Amount") input').fill('200')
+  await page.getByRole('button', { name: /Add to recipe/i }).click()
+  await page.waitForURL(/\/recipes\/\d+/, { timeout: 15000 })
+  await page.waitForTimeout(800)
+
+  const before = await page.locator('main').innerText()
+  if (!/200 g in/.test(before)) {
+    throw new Error(`expected 200 g before the swap: ${before.slice(0, 400)}`)
+  }
+
+  await page.locator('a[aria-label^="Change "]').first().click()
+  await page.waitForURL(/\/add\?/, { timeout: 15000 })
+  // Waiting on the rendered heading rather than a load state: an SPA route
+  // change satisfies both waitForURL and networkidle before Vue has swapped the
+  // component, so a plain read here sees the page we just left.
+  // It also asserts the thing we care about — this reads as a change, not as
+  // adding a second ingredient.
+  await page
+    .getByRole('heading', { name: /Change ingredient/i })
+    .waitFor({ timeout: 15000 })
+
+  const prefilled = await page.getByPlaceholder('Search foods').inputValue()
+  if (!/chicken/i.test(prefilled)) {
+    throw new Error(`search should start from the current food: ${JSON.stringify(prefilled)}`)
+  }
+
+  await page.getByPlaceholder('Search foods').fill('white rice')
+  await page.waitForTimeout(1400)
+  await page.locator('a[href^="/food/"]').first().click()
+  await page.waitForLoadState('networkidle')
+  await page.waitForTimeout(700)
+
+  // The amount came along. Swapping the food is a correction to *what* it is,
+  // and making the user retype 200 g would say the amount was wrong too.
+  const carried = await page.locator('label:has-text("Amount") input').inputValue()
+  if (Number(carried) !== 200) {
+    throw new Error(`the existing amount was not carried over: ${JSON.stringify(carried)}`)
+  }
+
+  await page.getByRole('button', { name: /Save ingredient/i }).click()
+  await page.waitForURL(/\/recipes\/\d+/, { timeout: 15000 })
+  await page.waitForTimeout(900)
+
+  const after = await page.locator('main').innerText()
+  // Swapped, not appended — still one ingredient, still 200 g.
+  if (!/200 g in/.test(after)) {
+    throw new Error(`the swap changed the weight: ${after.slice(0, 400)}`)
+  }
+  if (!/rice/i.test(after)) {
+    throw new Error(`the new food is not on the recipe: ${after.slice(0, 400)}`)
+  }
+  if (/chicken/i.test(after)) {
+    throw new Error(`the old food is still there — it was added, not swapped: ${after.slice(0, 400)}`)
   }
 })
 
