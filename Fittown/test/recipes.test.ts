@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import {
-  NUTRIENT_COVERAGE_MIN,
   RECIPE_SOURCE,
   WHOLE_RECIPE_LABEL,
   isRecipe,
@@ -16,9 +15,9 @@ import {
  * The recipe maths, with no database in sight.
  *
  * These cover the three things that would go quietly wrong: a cooked yield
- * changing nutrition it can't change, a partly-recorded micronutrient being
- * reported as though it were complete, and gram portions being offered for a
- * dish nobody weighed.
+ * changing nutrition it can't change, a partly-recorded nutrient being shown
+ * as zero instead of absent, and gram portions being offered for a dish
+ * nobody weighed.
  */
 
 /** A food row as the database hands it over: per 100 g, nulls for unknowns. */
@@ -110,8 +109,7 @@ describe('rolling ingredients up', () => {
 })
 
 describe('partly-recorded nutrients', () => {
-  it('reports a nutrient when enough of the weight declares it', () => {
-    // 450 g of 500 g declare iron — 90%, comfortably over the threshold.
+  it('sums a nutrient over just the ingredients that declare it', () => {
     const { totals } = rollUpRecipe([
       { grams: 250, food: chicken },
       { grams: 200, food: rice },
@@ -120,31 +118,33 @@ describe('partly-recorded nutrients', () => {
     expect(totals.iron_mg).toBeCloseTo(2.5 + 0.4, 6)
   })
 
-  it('reports "not recorded" when too little of the weight declares it', () => {
-    // Only 100 g of 500 g declare iron. Summing those would tell someone their
-    // dinner had 1 mg of iron when the truth is that we do not know.
+  it('still sums a nutrient when most of the weight is silent about it', () => {
+    // Only 100 g of 500 g declare iron — the rest simply don't carry the
+    // field. A vegetable-heavy recipe with a spoon of butter should show the
+    // butter's fat rather than "not recorded" because the vegetables don't
+    // carry a fat figure at all.
     const { totals } = rollUpRecipe([
       { grams: 100, food: chicken },
       { grams: 400, food: oil },
     ])
-    expect(totals.iron_mg).toBeNull()
+    expect(totals.iron_mg).toBeCloseTo(1, 6)
     expect(totals.kcal).not.toBeNull()
   })
 
-  it('measures coverage against the raw weight, not the yield', () => {
-    // A reduction shrinks the yield but not what went in, so a yield can never
-    // push a nutrient over or under the threshold.
+  it('reports "not recorded" only when nothing in the mixture declares it', () => {
+    const { totals } = rollUpRecipe([{ grams: 100, food: oil }])
+    expect(totals.iron_mg).toBeNull()
+  })
+
+  it('sums declared nutrients the same with or without a stated yield', () => {
+    // Note this differs from `totals.kcal`, which is unaffected by yield for
+    // the same reason: weighing the pan can't create or destroy nutrition.
     const mixture = [
       { grams: 100, food: chicken },
       { grams: 400, food: oil },
     ]
-    expect(rollUpRecipe(mixture, 250).totals.iron_mg).toBeNull()
+    expect(rollUpRecipe(mixture, 250).totals.iron_mg).toBeCloseTo(1, 6)
     expect(rollUpRecipe(mixture, 250).totals.kcal).toBeCloseTo(165 + 3536, 6)
-  })
-
-  it('uses a threshold that tolerates a pinch of something unrecorded', () => {
-    expect(NUTRIENT_COVERAGE_MIN).toBeGreaterThan(0.5)
-    expect(NUTRIENT_COVERAGE_MIN).toBeLessThanOrEqual(1)
   })
 
   it('derives missing energy from the macros, like custom foods do', () => {

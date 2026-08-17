@@ -254,9 +254,9 @@ describe('importing a pasted list', () => {
   })
 
   it('does not let a 0 g ingredient blank the recipe’s nutrition', async () => {
-    // The coverage rule blanks a nutrient unless ingredients covering 75% of
-    // the weight declare it. A 0 g pinch of salt is not weight, and must not
-    // count against that — or every imported recipe reports "not recorded".
+    // A 0 g pinch of salt is not weight, and must not be counted as an
+    // ingredient that declares no nutrients — or it would zero out a total
+    // that should be the vinegar's alone.
     const db = await boot()
     seedUser(db)
     addFood(db, 'Balsamic vinegar', { kcal: 88 })

@@ -18,20 +18,6 @@ import { NUTRIENT_KEYS } from './nutrients.ts'
 export const RECIPE_SOURCE = 'recipe'
 
 /**
- * How much of a recipe's weight must declare a nutrient before we report it.
- *
- * Open Food Facts records maybe a third of micronutrients, so summing only the
- * ingredients that happen to declare iron and calling the result "the recipe's
- * iron" understates it — and `null ≠ zero` is the invariant that keeps the app
- * saying "not recorded" instead of lying with a small number.
- *
- * Below 100% so a 2 g pinch of salt with no vitamin K entry doesn't blank the
- * whole recipe's vitamin K. Coverage is measured against the *raw* ingredient
- * weight — what is actually in the mixture — not the finished yield.
- */
-export const NUTRIENT_COVERAGE_MIN = 0.75
-
-/**
  * Ceiling on a recipe's ingredient list.
  *
  * A runaway guard, not a rule — no mixture is worth a hundred lines. Lives here
@@ -114,10 +100,9 @@ export function rollUpRecipe(
   finalWeightG?: number | null,
 ): RecipeRollUp {
   // `i.food` and `i.grams > 0` are both tested here and again in the nutrient
-  // loop below, and both tests have to agree. An ingredient that contributes no
-  // weight must also not appear in the coverage denominator — otherwise a 0 g
-  // pinch of salt or an unmatched "garlic powder" would count as weight that
-  // declares no vitamin K, and blank the whole recipe's vitamin K.
+  // loop below, and both tests have to agree: a 0 g pinch of salt or an
+  // unmatched "garlic powder" contributes no weight to the mixture, so it
+  // must not count toward `rawG` either.
   const counts = (i: RecipeIngredient) => i.food !== null && i.grams > 0
   const rawG = ingredients.reduce((sum, i) => sum + (counts(i) ? i.grams : 0), 0)
   const basisG = recipeBasisGrams(rawG, finalWeightG)
@@ -134,7 +119,7 @@ export function rollUpRecipe(
 
   for (const key of NUTRIENT_KEYS) {
     let sum = 0
-    let coveredG = 0
+    let covered = false
 
     for (const ingredient of ingredients) {
       if (!counts(ingredient)) continue
@@ -142,10 +127,15 @@ export function rollUpRecipe(
       const value = food![key]
       if (typeof value !== 'number' || !Number.isFinite(value)) continue
       sum += (value * grams) / 100
-      coveredG += grams
+      covered = true
     }
 
-    totals[key] = coveredG / rawG >= NUTRIENT_COVERAGE_MIN ? sum : null
+    // `null` means not one ingredient recorded this nutrient — as opposed to a
+    // partial sum, which we now show even when most of the recipe's weight
+    // didn't declare it. A vegetable-heavy dish with a spoon of butter should
+    // show the butter's fat, not hide it because the vegetables don't carry a
+    // fat figure at all.
+    totals[key] = covered ? sum : null
   }
 
   // Same fallback custom foods get: people often know the macros when the

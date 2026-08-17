@@ -298,7 +298,7 @@ describe('recomputing a recipe', () => {
     expect((row.kcal as number) * ((row.serving_grams as number) / 100)).toBeCloseTo(180, 6)
   })
 
-  it('keeps "not recorded" for a nutrient most of the mixture never declared', async () => {
+  it('sums a nutrient most of the mixture never declared, from what did', async () => {
     const db = await boot()
     const { chicken, oil } = seed(db)
     const { createRecipeFood, recomputeRecipe } = await recipes()
@@ -308,9 +308,24 @@ describe('recomputing a recipe', () => {
     addIngredient(db, id, oil, 400)
     recomputeRecipe(db, id)
 
+    // 100 g of chicken at 1 mg/100 g iron is 1 mg total, spread over the 500 g
+    // mixture — 0.2 mg/100 g. The oil has no iron figure at all, but that
+    // shouldn't hide the chicken's.
     const row = foodRow(db, id)
-    expect(row.iron_mg).toBeNull()
+    expect(row.iron_mg).toBeCloseTo(0.2, 6)
     expect(row.kcal).not.toBeNull()
+  })
+
+  it('leaves a nutrient not recorded when nothing in the mixture declares it', async () => {
+    const db = await boot()
+    const { oil } = seed(db)
+    const { createRecipeFood, recomputeRecipe } = await recipes()
+
+    const id = createRecipeFood(db, 1, 'Just oil', 2)
+    addIngredient(db, id, oil, 400)
+    recomputeRecipe(db, id)
+
+    expect(foodRow(db, id).iron_mg).toBeNull()
   })
 
   it('blanks a recipe whose last ingredient was removed', async () => {
