@@ -18,9 +18,13 @@ useHead({ title: 'Import a recipe · Fittown' })
 
 const router = useRouter()
 
-const tab = ref<'paste' | 'url'>('paste')
+const tab = ref<'paste' | 'url' | 'photo'>('paste')
 const busy = ref(false)
 const error = ref<string | null>(null)
+
+/** Set server-side from NUXT_RECIPE_OCR_BASE_URL; empty hides the photo tab entirely. */
+const { public: publicConfig } = useRuntimeConfig()
+const photoImportEnabled = computed(() => Boolean(publicConfig.recipeOcrEnabled))
 
 // --- paste -------------------------------------------------------------------
 
@@ -75,6 +79,81 @@ async function importUrl() {
     busy.value = false
   }
 }
+
+// --- photo ---------------------------------------------------------------------
+
+const photoPreviewUrl = ref<string | null>(null)
+const photoDataUrl = ref<string | null>(null)
+const photoFileInput = ref<HTMLInputElement | null>(null)
+
+/** Plenty for the model to read text from, and a fraction of a raw phone photo's size. */
+const MAX_PHOTO_DIMENSION = 1600
+
+async function onPhotoSelected(event: Event) {
+  const file = (event.target as HTMLInputElement).files?.[0]
+  if (!file) return
+  error.value = null
+  try {
+    photoDataUrl.value = await resizeImageToJpeg(file, MAX_PHOTO_DIMENSION)
+    photoPreviewUrl.value = photoDataUrl.value
+  } catch {
+    error.value = 'Could not read that photo'
+  }
+}
+
+/**
+ * Downscale and re-encode as JPEG in the browser before it ever reaches the
+ * server. A raw phone photo can be 10+ MB; the model reads text just as well
+ * from a resized copy, and a smaller upload means a faster round trip on a
+ * home network.
+ */
+function resizeImageToJpeg(file: File, maxDimension: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    const objectUrl = URL.createObjectURL(file)
+    img.onload = () => {
+      URL.revokeObjectURL(objectUrl)
+      const scale = Math.min(1, maxDimension / Math.max(img.width, img.height))
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.round(img.width * scale)
+      canvas.height = Math.round(img.height * scale)
+      const ctx = canvas.getContext('2d')
+      if (!ctx) {
+        reject(new Error('no canvas context'))
+        return
+      }
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+      resolve(canvas.toDataURL('image/jpeg', 0.85))
+    }
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl)
+      reject(new Error('could not load image'))
+    }
+    img.src = objectUrl
+  })
+}
+
+function clearPhoto() {
+  photoDataUrl.value = null
+  photoPreviewUrl.value = null
+  if (photoFileInput.value) photoFileInput.value.value = ''
+}
+
+async function importPhoto() {
+  if (!photoDataUrl.value || busy.value) return
+  busy.value = true
+  error.value = null
+  try {
+    const { id } = await $fetch<{ id: number }>('/api/recipes/import/photo', {
+      method: 'POST',
+      body: { image: photoDataUrl.value },
+    })
+    await router.push(`/recipes/${id}`)
+  } catch (err) {
+    error.value = (err as { statusMessage?: string }).statusMessage ?? 'Could not read that photo'
+    busy.value = false
+  }
+}
 </script>
 
 <template>
@@ -102,6 +181,15 @@ async function importUrl() {
         @click="tab = 'url'; error = null"
       >
         From a link
+      </button>
+      <button
+        v-if="photoImportEnabled"
+        role="tab"
+        class="tab flex-1"
+        :class="{ 'tab-active': tab === 'photo' }"
+        @click="tab = 'photo'; error = null"
+      >
+        Scan a photo
       </button>
     </div>
 
@@ -183,7 +271,7 @@ async function importUrl() {
     </template>
 
     <!-- URL --------------------------------------------------------------->
-    <template v-else>
+    <template v-else-if="tab === 'url'">
       <section class="card bg-base-100 shadow-sm">
         <div class="card-body p-4 gap-3">
           <label class="form-control">
@@ -212,6 +300,49 @@ async function importUrl() {
         <span v-if="busy" class="loading loading-spinner loading-sm" />
         <AppIcon v-else name="link" class="w-4 h-4" />
         Import
+      </button>
+    </template>
+
+    <!-- Photo ------------------------------------------------------------->
+    <template v-else-if="tab === 'photo'">
+      <section class="card bg-base-100 shadow-sm">
+        <div class="card-body p-4 gap-3">
+          <label class="form-control">
+            <span class="label-text text-xs mb-1">A cookbook page, recipe card, or handwritten note</span>
+            <input
+              ref="photoFileInput"
+              type="file"
+              accept="image/*"
+              capture="environment"
+              class="file-input file-input-bordered w-full"
+              @change="onPhotoSelected"
+            >
+          </label>
+
+          <div v-if="photoPreviewUrl" class="relative w-fit">
+            <img :src="photoPreviewUrl" alt="Selected recipe photo" class="max-h-64 rounded-box border border-base-300">
+            <button
+              class="btn btn-circle btn-xs absolute top-1 right-1"
+              aria-label="Remove photo"
+              @click="clearPhoto"
+            >
+              <AppIcon name="x" class="w-3 h-3" />
+            </button>
+          </div>
+
+          <p class="text-xs text-base-content/50">
+            We'll read the ingredients and method off the photo. Anything the scanner
+            can't identify is added as a note for you to sort out.
+          </p>
+        </div>
+      </section>
+
+      <p v-if="error" class="text-xs text-error">{{ error }}</p>
+
+      <button class="btn btn-primary gap-2" :disabled="busy || !photoDataUrl" @click="importPhoto">
+        <span v-if="busy" class="loading loading-spinner loading-sm" />
+        <AppIcon v-else name="camera" class="w-4 h-4" />
+        Scan recipe
       </button>
     </template>
   </div>

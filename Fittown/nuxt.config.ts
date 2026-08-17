@@ -33,6 +33,13 @@ export default defineNuxtConfig({
   },
 
   runtimeConfig: {
+    public: {
+      // Whether the client should offer the "scan a photo" recipe import tab.
+      // Derived from the same env var as `recipeOcr.baseUrl` below, computed
+      // once here rather than sent to the client, which has no business
+      // knowing the vision model's LAN address.
+      recipeOcrEnabled: Boolean(process.env.NUXT_RECIPE_OCR_BASE_URL),
+    },
     // Filled from NUXT_OAUTH_GOOGLE_CLIENT_ID / _SECRET at runtime.
     oauth: {
       google: {
@@ -59,6 +66,13 @@ export default defineNuxtConfig({
       cookie: {
         sameSite: 'lax',
       },
+    },
+    // The "scan a photo" recipe importer, backed by a vision model running in
+    // llama-server. See .env.example — the dev box and the production box run
+    // it at different addresses, so this is never hardcoded.
+    recipeOcr: {
+      baseUrl: '', // NUXT_RECIPE_OCR_BASE_URL — empty disables the feature.
+      model: 'qwen3-vl', // NUXT_RECIPE_OCR_MODEL
     },
   },
 })
