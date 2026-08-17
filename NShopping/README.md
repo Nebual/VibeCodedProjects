@@ -111,7 +111,7 @@ quietly clearing it.
 ## Photo OCR
 
 The take-a-photo flow needs a local OCR model running. It's a `llama-server` instance
-serving **Qwen2.5-VL** (an image-to-text model), GPU-accelerated on an AMD RX 580 via
+serving **Qwen3-VL-2B** (an image-to-text model), GPU-accelerated on an AMD RX 580 via
 Vulkan, packaged as a compose service:
 
 ```bash

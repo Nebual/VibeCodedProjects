@@ -58,8 +58,10 @@ pipeline. The key decisions:
 
 ## The hardware/model decision (already settled — don't redo it)
 
-Target box has an **AMD RX 580 (Polaris / `gfx803`)**. Model is **Qwen2.5-VL 3B Q4_K_M**
-via `llama-server`.
+Target box has an **AMD RX 580 (Polaris / `gfx803`)**. Model is **Qwen3-VL 2B Q8_0**
+via `llama-server` (switched from Qwen2.5-VL 3B Q4_K_M — the `ocr-benchmark/` harness
+showed it slightly faster and more accurate). Requires a rebuilt image, since
+`ocr-benchmark/Dockerfile` clones llama.cpp master and older builds don't know Qwen3-VL.
 
 - **Vulkan, never ROCm.** AMD dropped Polaris from ROCm, so Ollama's AMD path can't use this
   card at all. `ocr-benchmark/Dockerfile` builds llama.cpp with `-DGGML_VULKAN=ON` and
@@ -68,7 +70,9 @@ via `llama-server`.
   without them), and `libssl-dev` with `-DLLAMA_OPENSSL=ON` (else `-hf` model downloads fail
   with "HTTPS is not supported" — llama.cpp replaced libcurl with a native downloader).
 
-**Measured, model resident, 768px** (`ocr-benchmark/run-server.sh`):
+**Measured, model resident, 768px, Qwen2.5-VL 3B Q4_K_M** (`ocr-benchmark/run-server.sh`) —
+**stale**, from before the Qwen3-VL-2B switch; re-run `run-server.sh` and replace this table
+before relying on the numbers below for the current model:
 
 | | Total | Prefill | Generation |
 |---|---|---|---|

@@ -1,12 +1,12 @@
 import { createError } from 'h3'
 
-// The OCR model runs as a resident llama-server (Qwen2.5-VL) in a docker-compose
+// The OCR model runs as a resident llama-server (Qwen3-VL-2B) in a docker-compose
 // container on the same box — see docker-compose.yml. We proxy through the app server
 // rather than calling it from the browser so the GPU box is never exposed and there's
 // no CORS surface; the browser only ever talks to this Nuxt origin.
 const OCR_SERVER_URL = (process.env.OCR_SERVER_URL ?? 'http://localhost:8191').replace(/\/+$/, '')
 // llama-server ignores the model name, but the OpenAI-shaped payload wants the field.
-const OCR_MODEL = process.env.OCR_MODEL ?? 'Qwen2.5-VL-3B-Instruct'
+const OCR_MODEL = process.env.OCR_MODEL ?? 'Qwen3-VL-2B-Instruct'
 // A photo of a list transcribes to well under this; it only caps a runaway generation.
 const MAX_TOKENS = 256
 // The RX 580 answers in ~5s; allow generous headroom (cold cache, a busier box) before failing.
