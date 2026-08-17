@@ -1,4 +1,5 @@
 import { ACTIVITY_KEYS } from '#shared/body'
+import { SHARE_KEYS } from '#shared/sharing'
 
 /** Numeric goal fields and their accepted ranges. */
 const NUMERIC_GOALS: Record<string, { min: number; max: number }> = {
@@ -15,6 +16,12 @@ const NUMERIC_GOALS: Record<string, { min: number; max: number }> = {
   // ±1 kg/week rather than refusing) while still rejecting a typo'd 50.
   goal_rate_kg_per_week: { min: -2, max: 2 },
 }
+
+/**
+ * Stored as 0/1. The sharing switches live here rather than in their own table
+ * because they are settings, and this is the settings row.
+ */
+const BOOLEAN_GOALS: string[] = ['exercise_adds_calories', ...SHARE_KEYS]
 
 const ENUM_GOALS: Record<string, string[]> = {
   weight_unit: ['kg', 'lb'],
@@ -51,9 +58,10 @@ export default defineEventHandler(async (event) => {
     params.push(value)
   }
 
-  if (body.exercise_adds_calories !== undefined) {
-    sets.push('exercise_adds_calories = ?')
-    params.push(body.exercise_adds_calories ? 1 : 0)
+  for (const field of BOOLEAN_GOALS) {
+    if (body[field] === undefined) continue
+    sets.push(`${field} = ?`)
+    params.push(body[field] ? 1 : 0)
   }
 
   if (sets.length === 0) {

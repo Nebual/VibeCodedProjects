@@ -57,6 +57,18 @@ db.exec('DELETE FROM weight_entries')
 db.exec('DELETE FROM biometric_entries')
 db.exec('DELETE FROM biometric_types')
 db.exec('DELETE FROM exercises WHERE owner_user_id IS NOT NULL')
+
+// Who knows whom, and every live invite or share link. Same reasoning as
+// above, plus these are the rows that would let a stranger holding an old link
+// walk into a handed-over database. Skipped when the table isn't there yet, so
+// this still runs against a database from before friends existed.
+for (const table of ['recipe_shares', 'friend_invites', 'friendships']) {
+  const exists = db
+    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .get(table)
+  if (exists) db.exec(`DELETE FROM ${table}`)
+}
+
 db.exec('DELETE FROM user_goals')
 db.exec('DELETE FROM users')
 db.exec('COMMIT')

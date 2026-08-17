@@ -56,6 +56,12 @@ export interface Goals {
   activity_level: ActivityKey | null
   goal_weight_kg: number | null
   goal_rate_kg_per_week: number | null
+  // What accepted friends may see. 0/1, defaulting to on — see shared/sharing.ts.
+  share_recipes: number
+  share_diary: number
+  share_weight: number
+  share_calories: number
+  share_exercise: number
 }
 
 export interface BiometricRow {

@@ -9,13 +9,15 @@ async function signOut() {
 }
 
 /**
- * The phone dock. Four is what fits comfortably; recipes are reached from the
- * Recipes tab on the add screen, which is where you are when you want one.
+ * The phone dock. Five is the most that stays tappable at 390px; recipes are
+ * reached from the Recipes tab on the add screen, which is where you are when
+ * you want one.
  */
 const navItems = [
   { to: '/', label: 'Diary', icon: 'book' },
   { to: '/fitness', label: 'Fitness', icon: 'activity' },
   { to: '/trends', label: 'Trends', icon: 'chart' },
+  { to: '/friends', label: 'Friends', icon: 'friends' },
   { to: '/settings', label: 'Settings', icon: 'cog' },
 ]
 
@@ -86,5 +88,12 @@ function isActive(to: string) {
         <span class="dock-label">{{ item.label }}</span>
       </NuxtLink>
     </nav>
+
+    <!--
+      Asks about incoming friend requests wherever the user happens to be.
+      In the layout rather than on the Friends tab because the whole point is
+      that someone who was added by email hasn't gone looking for it.
+    -->
+    <FriendRequestPrompt v-if="user" />
   </div>
 </template>

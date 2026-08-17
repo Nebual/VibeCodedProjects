@@ -27,6 +27,10 @@ const paths: Record<string, string> = {
   pencil: 'M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z',
   scale: 'M12 3v18M8 21h8M6 8h12l3 8a5 5 0 0 1-6 0l3-8M3 16l3-8',
   ruler: 'M3 15 15 3l6 6L9 21l-6-6ZM7 11l2 2M10 8l2 2M13 5l2 2',
+  // Two people, the second one shouldered behind the first — at dock size a
+  // pair of equal heads reads as a blur, an offset pair reads as company.
+  friends: 'M15 20v-1.5a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4V20M8.5 10.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7M22 20v-1.5a4 4 0 0 0-3-3.87M16 3.7a4 4 0 0 1 0 7.5',
+  link: 'M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7',
 
   // Activity categories. Deliberately simple single-stroke shapes — they sit
   // at 28px in the category grid, where detail turns to mud.

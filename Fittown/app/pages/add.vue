@@ -2,6 +2,8 @@
 import type { FoodRow } from '~/composables/useDiary'
 import { MEAL_LABELS, type MealName } from '~/composables/useDiary'
 import type { RecipeSummary } from '~/composables/useRecipes'
+import type { FriendRecipeResult } from '~/composables/useFriends'
+import { friendDisplayName } from '#shared/friends'
 
 const route = useRoute()
 const meal = computed(() => (route.query.meal as MealName) || 'snack')
@@ -11,8 +13,8 @@ const date = computed(() => (route.query.d as string) || today.value)
 
 /**
  * Set when this screen is picking an *ingredient* for a recipe rather than
- * something to eat now. Same search, same scanner, same portion picker —
- * only the destination differs.
+ * something to eat now. Same search, same scanner, only the destination and
+ * the recipe list (a recipe can't yet contain another) differ.
  */
 const recipeId = computed(() => (route.query.recipe ? Number(route.query.recipe) : null))
 
@@ -25,7 +27,6 @@ useHead({
 
 const query = ref('')
 const debounced = ref('')
-const tab = ref<'search' | 'recent' | 'recipes'>('recent')
 
 // Debounce so a fast typist doesn't fire a query per keystroke.
 let timer: ReturnType<typeof setTimeout> | undefined
@@ -33,24 +34,30 @@ watch(query, (value) => {
   clearTimeout(timer)
   timer = setTimeout(() => {
     debounced.value = value.trim()
-    if (debounced.value.length >= 2) tab.value = 'search'
   }, 220)
 })
 onBeforeUnmount(() => clearTimeout(timer))
 
-const { data: searchData, pending: searching } = await useFetch<{ results: FoodRow[] }>(
-  '/api/foods/search',
-  {
-    // A recipe can't be an ingredient in another recipe yet, so don't offer it.
-    query: { q: debounced, exclude_recipes: computed(() => (recipeId.value ? 1 : undefined)) },
-    watch: [debounced],
-    immediate: false,
-    default: () => ({ results: [] }),
-  },
-)
+const { data: searchData, pending: searching } = await useFetch<{
+  results: FoodRow[]
+  friend_results: FriendRecipeResult[]
+}>('/api/foods/search', {
+  // `exclude_recipes` means "I'm picking an ingredient", which is the one case
+  // where a recipe — yours or a friend's — can't be the answer. Otherwise
+  // recipes come back and the sections below de-duplicate them by id.
+  query: { q: debounced, exclude_recipes: computed(() => (recipeId.value ? 1 : 0)) },
+  watch: [debounced],
+  immediate: false,
+  default: () => ({ results: [], friend_results: [] }),
+})
 
-const { data: recentData } = await useFetch<{ results: FoodRow[] }>('/api/foods/recent', {
+const { data: mealRecentData } = await useFetch<{ results: FoodRow[] }>('/api/foods/recent', {
   query: { meal },
+  default: () => ({ results: [] }),
+})
+
+/** Everything recently logged, any meal — used to fill out "Frequent" below the meal-specific rows. */
+const { data: allRecentData } = await useFetch<{ results: FoodRow[] }>('/api/foods/recent', {
   default: () => ({ results: [] }),
 })
 
@@ -60,9 +67,66 @@ const { data: recipeData } = await useFetch<{ recipes: RecipeSummary[] }>('/api/
   immediate: !recipeId.value,
 })
 
-const results = computed(() =>
-  tab.value === 'search' ? (searchData.value?.results ?? []) : (recentData.value?.results ?? []),
+/** Case-insensitive match against name/brand; an empty query matches everything. */
+function matches(text: string, food: { name: string; brand?: string | null }) {
+  if (!text) return true
+  const q = text.toLowerCase()
+  return food.name.toLowerCase().includes(q) || (food.brand ?? '').toLowerCase().includes(q)
+}
+
+const mealFrequent = computed(() =>
+  (mealRecentData.value?.results ?? []).filter((f) => matches(debounced.value, f)),
 )
+const mealFrequentIds = computed(() => new Set(mealFrequent.value.map((f) => f.id)))
+
+/** Frequent items from other meals, appended after this meal's own — never duplicated. */
+const otherFrequent = computed(() =>
+  (allRecentData.value?.results ?? [])
+    .filter((f) => !mealFrequentIds.value.has(f.id))
+    .filter((f) => matches(debounced.value, f)),
+)
+
+const frequent = computed(() => [...mealFrequent.value, ...otherFrequent.value])
+
+const recipes = computed(() =>
+  (recipeData.value?.recipes ?? []).filter((f) => matches(debounced.value, f)),
+)
+
+/** What a query already surfaced above — raw search results never repeat it. */
+const shownIds = computed(() => {
+  const ids = new Set(frequent.value.map((f) => f.id))
+  for (const r of recipes.value) ids.add(r.id)
+  return ids
+})
+
+const searchResults = computed(() =>
+  (searchData.value?.results ?? []).filter((f) => !shownIds.value.has(f.id)),
+)
+
+/**
+ * Friends' recipes, under everything of your own.
+ *
+ * They aren't loggable rows — tapping one opens the friend's recipe, which
+ * offers to copy it into yours first. Mixing them into the ranking above would
+ * put things in the list that the portion picker can't accept.
+ */
+const friendResults = computed(() => searchData.value?.friend_results ?? [])
+
+const nothingFound = computed(
+  () =>
+    !frequent.value.length
+    && !recipes.value.length
+    && !searchResults.value.length
+    && !friendResults.value.length
+    && !searching.value,
+)
+
+/** Opens the friend's recipe, carrying the meal so "Log food" lands right. */
+function friendRecipeLink(recipe: FriendRecipeResult) {
+  const params = new URLSearchParams({ meal: meal.value })
+  if (date.value) params.set('d', date.value)
+  return `/friends/${recipe.owner_id}/recipes/${recipe.id}?${params}`
+}
 
 const newFoodLink = computed(
   () => `/food/new?${foodLinkQuery({ meal: meal.value, date: date.value, recipe: recipeId.value })}`,
@@ -104,75 +168,81 @@ const showScanner = ref(false)
       </button>
     </div>
 
-    <div role="tablist" class="tabs tabs-box">
-      <button
-        role="tab"
-        class="tab flex-1"
-        :class="{ 'tab-active': tab === 'recent' }"
-        @click="tab = 'recent'"
-      >
-        Frequent
-      </button>
-      <button
-        role="tab"
-        class="tab flex-1"
-        :class="{ 'tab-active': tab === 'search' }"
-        :disabled="debounced.length < 2"
-        @click="tab = 'search'"
-      >
-        Search
-      </button>
-      <button
-        v-if="!recipeId"
-        role="tab"
-        class="tab flex-1"
-        :class="{ 'tab-active': tab === 'recipes' }"
-        @click="tab = 'recipes'"
-      >
-        Recipes
-      </button>
-    </div>
-
     <div class="card bg-base-100 shadow-sm overflow-hidden">
-      <template v-if="tab === 'recipes'">
+      <template v-if="frequent.length">
+        <header class="px-3 pt-2.5 pb-1 text-xs font-semibold text-base-content/50 uppercase tracking-wide">
+          Frequent
+        </header>
+        <FoodResultList :foods="frequent" :meal="meal" :date="date" :recipe="recipeId" />
+      </template>
+
+      <template v-if="!recipeId && recipes.length">
+        <header
+          class="px-3 pt-2.5 pb-1 text-xs font-semibold text-base-content/50 uppercase tracking-wide"
+          :class="{ 'border-t border-base-200 mt-1': frequent.length }"
+        >
+          Recipes
+        </header>
         <FoodResultList
-          v-if="recipeData.recipes.length"
-          :foods="(recipeData.recipes as unknown as FoodRow[])"
+          :foods="(recipes as unknown as FoodRow[])"
           :meal="meal"
           :date="date"
         />
-        <p v-else class="p-6 text-center text-sm text-base-content/50">
-          No recipes yet. A recipe is a mixture of foods you log as one thing.
-        </p>
       </template>
 
-      <template v-else>
-        <FoodResultList
-          v-if="results.length"
-          :foods="results"
-          :meal="meal"
-          :date="date"
-          :recipe="recipeId"
-        />
-
-        <p v-else-if="tab === 'search' && debounced.length >= 2 && !searching" class="p-6 text-center text-sm text-base-content/50">
-          No matches for “{{ debounced }}”.
-        </p>
-        <p v-else-if="tab === 'recent'" class="p-6 text-center text-sm text-base-content/50">
-          Foods you log will appear here for quick re-adding.
-        </p>
-        <p v-else class="p-6 text-center text-sm text-base-content/50">
-          Type at least two letters to search 200,000+ foods.
-        </p>
+      <template v-if="searchResults.length">
+        <header
+          class="px-3 pt-2.5 pb-1 text-xs font-semibold text-base-content/50 uppercase tracking-wide"
+          :class="{ 'border-t border-base-200 mt-1': frequent.length || recipes.length }"
+        >
+          Search results
+        </header>
+        <FoodResultList :foods="searchResults" :meal="meal" :date="date" :recipe="recipeId" />
       </template>
+
+      <template v-if="friendResults.length">
+        <header
+          class="px-3 pt-2.5 pb-1 text-xs font-semibold text-base-content/50 uppercase tracking-wide"
+          :class="{ 'border-t border-base-200 mt-1': frequent.length || recipes.length || searchResults.length }"
+        >
+          From friends
+        </header>
+        <ul class="flex flex-col divide-y divide-base-200">
+          <li v-for="recipe in friendResults" :key="`friend-${recipe.id}`">
+            <NuxtLink
+              :to="friendRecipeLink(recipe)"
+              class="flex items-center gap-3 px-3 py-2.5 hover:bg-base-200 transition-colors"
+            >
+              <div class="flex-1 min-w-0">
+                <div class="font-medium text-sm truncate">
+                  {{ recipe.name }}
+                  <span class="badge badge-xs badge-primary align-middle">recipe</span>
+                </div>
+                <div class="text-xs text-base-content/60 truncate">
+                  {{ friendDisplayName({ name: recipe.owner_name, email: recipe.owner_email }) }}
+                  <template v-if="recipe.kcal !== null && recipe.serving_grams">
+                    · {{ Math.round((recipe.kcal * recipe.serving_grams) / 100) }} kcal per serving
+                  </template>
+                </div>
+              </div>
+              <AppIcon name="chevronRight" class="w-4 h-4 text-base-content/30 shrink-0" />
+            </NuxtLink>
+          </li>
+        </ul>
+      </template>
+
+      <p v-if="nothingFound" class="p-6 text-center text-sm text-base-content/50">
+        <template v-if="debounced.length >= 2">No matches for “{{ debounced }}”.</template>
+        <template v-else>Foods you log will appear here for quick re-adding.</template>
+      </p>
     </div>
 
-    <NuxtLink v-if="tab === 'recipes'" to="/recipes" class="btn btn-outline gap-2">
+    <NuxtLink v-if="!recipeId" to="/recipes" class="btn btn-outline gap-2">
       <AppIcon name="plus" class="w-4 h-4" />
-      New recipe
+      Create a new recipe
     </NuxtLink>
 
-    <NuxtLink v-else :to="newFoodLink" class="btn btn-outline gap-2">
+    <NuxtLink :to="newFoodLink" class="btn btn-outline gap-2">
       <AppIcon name="plus" class="w-4 h-4" />
       Create a custom food
     </NuxtLink>

@@ -70,6 +70,21 @@ produced a file showing 2 diary entries when the database really had 26. Either
 `PRAGMA wal_checkpoint(TRUNCATE)` first, or use `VACUUM INTO` (which is what
 `reset-user-data.mjs --out` does).
 
+**This has already destroyed the deliverable once.** The `data/fittown.db`
+shipped before the friends work was **unreadable** — `SELECT … FROM
+sqlite_master` returned "database disk image is malformed", so every table in
+it, not just the personal ones. Its header was self-consistent (20,042 pages,
+file size to match, WAL mode) which is exactly what a main file separated from
+its WAL looks like. It was regenerated from `$RUN` with the procedure above and
+verified: `quick_check` ok, 203,695 OFF foods, 203,695 FTS rows, a live search
+hit, and zero rows in all twelve personal tables.
+
+So: **verify the deliverable, don't assume it.** And verify it *off* the
+Windows mount — open a copy on native storage and compare with `md5sum`/`cmp`.
+Opening `$SRC/data/fittown.db` in place is its own hazard: even a `readOnly`
+connection creates `-shm`/`-wal` beside it over virtiofs, which then looks like
+the evidence of tampering this file tells you to treat as a warning sign.
+
 ### Shell traps
 
 - `pkill -f "nuxt dev"` **matches the Bash tool's own command line and kills
@@ -89,8 +104,8 @@ produced a file showing 2 diary entries when the database really had 26. Either
 Two layers, and they cover different things:
 
 ```bash
-cd $RUN && pnpm test                     # 169 unit tests, ~0.3s, no server needed
-cd $RUN && node scripts/e2e.mjs          # 30 steps, fails on any console error
+cd $RUN && pnpm test                     # 216 unit tests, ~0.5s, no server needed
+cd $RUN && node scripts/e2e.mjs          # 33 steps, fails on any console error
 node scripts/screenshots.mjs /tmp/shots  # mobile, dark, desktop — then Read them
 pnpm build                               # catches things dev mode hides
 ```
@@ -99,15 +114,19 @@ pnpm build                               # catches things dev mode hides
 the pure logic: the nutrient catalogue and its null-vs-zero invariant, portion
 units, body/energy maths, the activity library's internal consistency, the
 request validators, the recipe roll-up (yields, the coverage rule, when gram
-portions may be offered), and — against a real temp SQLite file — the boot-time
-schema migration, the exercise-library sync and `recomputeRecipe()`. They run in a third of a second, so
-run them constantly. They deliberately do **not** boot Nuxt; anything needing a
+portions may be offered), the invite-expiry and copy-naming rules, and — against
+a real temp SQLite file — the boot-time schema migration, the exercise-library
+sync, `recomputeRecipe()`, the friendship access gate and the deep recipe copy.
+They run in half a second, so run them constantly. They deliberately do **not** boot Nuxt; anything needing a
 running app belongs in the e2e script instead.
 
 The unit suite was mutation-checked when written: a wrong Mifflin-St Jeor
 constant, a `?? 0` slipped into `scaleNutrients`, and a forgotten
-`ADDED_COLUMNS` entry each failed the tests you'd expect and nothing else. If
-you add tests, break the thing on purpose once and confirm they notice.
+`ADDED_COLUMNS` entry each failed the tests you'd expect and nothing else. The
+friends tests were checked the same way — disabling the per-section permission
+check, making the recipe copy shallow, ordering the friendship pair index, and
+dropping the timestamp normalisation each failed exactly their own tests. If you
+add tests, break the thing on purpose once and confirm they notice.
 
 `scripts/e2e.mjs` needs `FITTOWN_DEV_LOGIN=1` in `.env` and a running dev
 server. **Actually look at the screenshots** — several real bugs here (oats
@@ -239,6 +258,61 @@ delete has to replay the *old* values — read them before the UPDATE and use
 Deletes/updates use `WHERE id = ? AND user_id = ?` so a guessed ID is a no-op.
 Keep that pattern.
 
+**Friends are the *only* exception to that rule, and they get exactly one
+gate.** `requireSharedSection(db, viewerId, ownerId, key)` in
+`server/utils/friends.ts` is the single place that decides whether one person
+may read another's rows. Every route under `server/api/friends/**` calls it
+first; nothing else opens that door. If you add a friend-scoped endpoint, call
+it — don't write your own join. A missed check here leaks a health diary, not a
+preference. Two refusals, deliberately different:
+
+- **404 for a stranger** — whether a given user id exists is not something an
+  outsider should be able to probe, and "you have no such friend" is also the
+  honest answer.
+- **403 naming the person** when they *are* a friend but have switched that
+  section off, so the page can say why instead of looking broken.
+
+Sharing is per-category (`share_recipes`, `share_diary`, `share_weight`,
+`share_calories`, `share_exercise` on `user_goals`, all defaulting to 1). The
+catalogue lives in `shared/sharing.ts`; Settings, the gate and the friend view
+all read it, so adding a switch is one entry plus a column in both places (see
+the two-edit rule above). **An absent column reads as shared**, matching the
+default — a database that predates the migration must not blank a friend's page.
+Enforcement is server-side: `/api/friends/[id]/summary` strips the sections its
+owner withheld on the way out, and the UI merely hides what it wasn't given.
+
+**Two token-addressed routes answer without a session**, and they are the only
+ones: `/api/shared/recipes/[token]` and `/api/friends/invites/[token]`. Both
+take an unguessable token (16 random bytes, base64url) rather than an id, both
+return one object and a display name, and every *mutation* behind them still
+calls `requireUser`. `app/middleware/auth.global.ts` lets `/r/` and `/invite/`
+through to match; everything else stays private by default.
+
+**Copying a shared recipe is a deep copy**, and has to be. `copyRecipeInto()`
+references Open Food Facts ingredients as they are but duplicates any ingredient
+that is somebody's *custom* food, because pointing at a row you can't see gives
+you a recipe that changes when they edit it, vanishes from your search, and
+pins their food in place for ever (`recipe_ingredients.food_id` is ON DELETE
+RESTRICT). The duplicate drops its barcode: `(source, barcode)` is unique, so
+carrying it across collides with the row being copied.
+
+**A friendship row is unordered.** `idx_friendships_pair` is unique over
+`MIN(requester_id, addressee_id), MAX(...)`, not over the ordered pair — two
+people inviting each other at the same moment otherwise get two rows, one of
+which stays pending for ever. `requestFriendship()` treats "I asked you while
+you were asking me" as mutual consent.
+
+**SQLite and JavaScript write timestamps differently** (`2026-08-16 12:00:00`
+vs `2026-08-16T12:00:00.000Z`), and `' '` sorts before `'T'`. Comparing an
+`expires_at` against `new Date().toISOString()` raw makes a link read as expired
+for the rest of the day it was issued. `comparableTime()` in `shared/friends.ts`
+normalises both; use it rather than comparing strings by hand.
+
+**Link URLs are composed in the browser, from `window.location.origin`.** The
+API returns tokens only. Deriving a public URL server-side means guessing the
+hostname and scheme from request headers — the same guess that broke Google
+sign-in behind nginx (§6).
+
 ---
 
 ## 4. Open Food Facts is crowd-sourced and dirty
@@ -276,27 +350,43 @@ app/
   components/    CalorieSummary, MealSection, WaterTracker, FitnessSection,
                  BodyMeasurements, CalorieTargetDialog, ActivityPicker,
                  MetricChart (weight + any custom biometric),
+                 TrendsPanel (the whole trends screen, pointed at your own
+                   summary endpoint or a friend's),
                  NutrientBreakdown, FoodResultList, BarcodeScanner, DateNav,
+                 RecipeReadOnly (a recipe you don't own — friend or link),
+                 FriendRequestPrompt (the accept prompt, in the layout),
                  AppIcon (inline SVG set — no icon dependency)
-  composables/   useDiary (day data + all mutations), useToday (timezone)
+  composables/   useDiary (day data + all mutations), useToday (timezone),
+                 useRecipes / useFriends (response shapes)
+  layouts/       default.vue, public.vue (signed-out link targets)
   pages/         index (diary), add, food/[id], food/new, recipes/index,
-                 recipes/[id], fitness, trends, settings, login
+                 recipes/[id], fitness, trends, settings, login,
+                 friends/index, friends/[id]/index,
+                 friends/[id]/recipes/[recipeId],
+                 invite/[token], r/[token] (both readable signed out)
   plugins/       timezone.client.ts
-  middleware/    auth.global.ts — every route is private except /login
+  middleware/    auth.global.ts — private except /login, /r/…, /invite/…
 server/
-  api/           REST endpoints; diary/index.get.ts assembles a whole day
+  api/           REST endpoints; diary/index.get.ts assembles a whole day;
+                 friends/** is the only place one user reads another's rows;
+                 shared/recipes/[token].get.ts is the only unauthenticated one
   db/            schema.ts (single source of truth)
   routes/auth/   google.get.ts, dev.post.ts, logout.post.ts
   utils/         db, auth, validate, foods (search ranking lives here),
-                 recipes (recomputeRecipe + the FTS re-index)
+                 recipes (recomputeRecipe, the FTS re-index, the deep copy),
+                 summary (the trends rollup, yours and a friend's),
+                 friends (friendship storage + the one access gate)
 shared/          nutrients.ts  — nutrient catalogue used by both sides
                  activities.ts — exercise library, categories, effort METs
                  body.ts      — units, activity levels, BMR/TDEE, target maths
                  portions.ts  — portion units and their gram equivalents
                  recipes.ts   — recipe roll-up, coverage rule, gram-portion rule
+                 friends.ts   — invite lifetime, copy naming, token shape
+                 sharing.ts   — the five sharing switches and their defaults
 scripts/         import-off, fix-liquid-flags, reset-user-data,
                  recompute-recipes, e2e, screenshots
-test/            Vitest unit tests (pure logic + schema migration)
+test/            Vitest unit tests (pure logic + schema migration + the
+                 friendship gate and recipe copy against a temp database)
 ```
 
 `server/db/schema.ts` is a TS template literal rather than a `.sql` file so
@@ -324,6 +414,17 @@ custom foods, goals, trends, dark mode, production build, the production
 security posture (dev login 404, API 401, `/` redirects), and — as of the
 user's own deployment — **Google sign-in end to end**, behind nginx with TLS
 termination.
+
+Friends and sharing were checked the same way, with three signed-in people and
+an anonymous visitor: request by email → prompt → accept, invite links
+(single-use, cancellable, self-accept refused, previewable signed out), a
+friend's trends / recipes / diary, each of the five switches closing its own
+door on the *server* (403) and not merely in the UI, copying by friendship and
+by public link, revocation (410, with copies already taken unaffected), and
+unfriending (access stops at once, copies survive, and the two can start over).
+In production: every friend and copy route 401s without a session, the two
+token routes answer without one, a junk token 404s, and the public recipe page's
+HTML carries no email address.
 
 That last one took one fix, and it will catch out the next person who deploys
 behind a proxy. The callback URL is derived from the incoming request
@@ -357,6 +458,17 @@ curl -sD - -o /dev/null -H 'Host: example.com' http://localhost:3000/auth/google
 ## 7. Known gaps, if you're looking for work
 
 - No service worker — the manifest makes it installable, not offline-capable.
+- Friend requests are **polled**, not pushed: the prompt in the layout asks
+  `/api/friends/pending` on load and every two minutes. Fine for a household;
+  it is not a notification system, and there is no email.
+- Nothing tells a friend that you *changed* what you share — the door simply
+  closes. A note on their page would be kinder than a tab quietly disappearing.
+- A friend's page shows their diary a day at a time with no summary; there is no
+  way to compare two people's weeks side by side, which is the obvious next
+  thing to want from a family tracker.
+- Invite links can't be addressed to a person, so anyone who gets hold of one
+  can use it. It is single-use and expires in 30 days
+  (`INVITE_TTL_DAYS`), which is the whole mitigation.
 - 34% of foods have no `serving_grams`; the portion picker falls back to 100 g.
 - Water "undo" subtracts a preset amount rather than removing the last entry.
 - No macro trends — Trends charts calories and weight only.

@@ -106,13 +106,13 @@ function editLink(entry: DiaryEntry) {
       <div class="flex items-center gap-1 m-2 mt-1">
         <NuxtLink
           :to="`/add?meal=${meal}&d=${date}`"
-          class="btn btn-ghost btn-sm gap-2 text-primary"
+          class="btn btn-ghost btn-sm justify-start gap-2 text-primary flex-1"
         >
           <AppIcon name="plus" class="w-4 h-4" />
           Add food
         </NuxtLink>
         <button
-          class="btn btn-ghost btn-xs text-base-content/60"
+          class="btn btn-ghost btn-xs text-base-content/60 shrink-0"
           @click="showQuickAdd = true"
         >
           Quick add

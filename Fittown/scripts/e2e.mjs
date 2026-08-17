@@ -609,6 +609,132 @@ await step('a logged recipe refuses to be deleted', async () => {
   }
 })
 
+// ---------------------------------------------------------------------------
+// Friends and sharing.
+//
+// Needs a second person, so this section runs a second browser context signed
+// in as somebody else. The friend's address is unique per run: dev login
+// creates a user for any address, and a fixed one would already be friends on
+// the second run.
+//
+// What it guards: that a request reaches the other person as a prompt, that a
+// friend's recipe is readable but not editable and copies into your own, that
+// a sharing switch actually closes a door, and that a public recipe link opens
+// with no session at all.
+// ---------------------------------------------------------------------------
+
+const friendEmail = `e2e-friend-${Date.now()}@fittown.local`
+const friendContext = await browser.newContext({
+  viewport: { width: 390, height: 844 },
+  isMobile: true,
+  hasTouch: true,
+})
+const friendPage = await friendContext.newPage()
+friendPage.on('console', (m) => {
+  if (m.type() === 'error') consoleErrors.push(`friend: ${m.text().slice(0, 160)}`)
+})
+friendPage.on('pageerror', (e) => consoleErrors.push(`friend pageerror: ${e.message.slice(0, 160)}`))
+
+await step('a friend request arrives as a prompt and is accepted', async () => {
+  await friendPage.goto(`${BASE}/login`, { waitUntil: 'networkidle' })
+  await friendPage.evaluate(
+    (email) => fetch('/auth/dev', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email, name: 'E2E Friend' }),
+    }),
+    friendEmail,
+  )
+
+  await friendPage.goto(`${BASE}/friends`, { waitUntil: 'networkidle' })
+  await friendPage.getByPlaceholder('them@example.com').fill('dev@fittown.local')
+  await friendPage.getByRole('button', { name: 'Ask' }).click()
+  await friendPage.locator('main', { hasText: 'Waiting on' }).waitFor({ timeout: 10000 })
+
+  // The point of the prompt: it finds you wherever you happen to be.
+  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' })
+  const modal = page.locator('.modal-open')
+  await modal.waitFor({ timeout: 10000 })
+  await modal.getByRole('button', { name: 'Accept' }).click()
+  await page.waitForTimeout(1000)
+  if (await page.locator('.modal-open').count()) throw new Error('prompt stayed open')
+})
+
+await step('a friend’s recipe is read-only and copies into your own', async () => {
+  await friendPage.goto(`${BASE}/friends`, { waitUntil: 'networkidle' })
+  await friendPage.locator('a[href^="/friends/"]').first().click()
+  await friendPage.waitForURL(/\/friends\/\d+/, { timeout: 10000 })
+
+  await friendPage.getByRole('tab', { name: 'Recipes' }).click()
+  const renamed = `${recipeName} Renamed`
+  await friendPage.locator(`a:has-text("${renamed}")`).first().click()
+  await friendPage.waitForURL(/\/friends\/\d+\/recipes\/\d+/, { timeout: 10000 })
+  await friendPage.locator('main', { hasText: 'Ingredients' }).waitFor({ timeout: 10000 })
+
+  // Editing someone else's recipe would rewrite meals they already logged.
+  if (await friendPage.locator('main input:not([readonly])').count()) {
+    throw new Error('a friend’s recipe is editable')
+  }
+
+  await friendPage.getByRole('button', { name: 'Add recipe' }).click()
+  // Not a bare /recipes/\d+ regex: the page we're leaving is
+  // /friends/<id>/recipes/<id>, which matches it and returns immediately.
+  await friendPage.waitForURL((url) => /\/recipes\/\d+$/.test(url.pathname) && !url.pathname.startsWith('/friends/'), {
+    timeout: 15000,
+  })
+  // Waits on the editor's own field, not on the recipe name: the page being
+  // left behind shows that name too, so matching it passes before the new
+  // screen has rendered anything.
+  const nameField = friendPage.locator('label:has-text("Name") input')
+  await nameField.waitFor({ timeout: 10000 })
+  if ((await nameField.inputValue()) !== renamed) {
+    throw new Error(`copy is named ${await nameField.inputValue()}`)
+  }
+
+  // The copy is the friend's own, so unlike the original it can be edited.
+  if ((await friendPage.locator('main input:not([readonly])').count()) === 0) {
+    throw new Error('the copy is not editable')
+  }
+})
+
+await step('turning a sharing switch off closes the door', async () => {
+  await page.goto(`${BASE}/settings`, { waitUntil: 'networkidle' })
+  const toggle = page.locator('#sharing label').filter({ hasText: 'Recipes' }).locator('input')
+  await toggle.click()
+  await page.waitForTimeout(1200)
+
+  await friendPage.goto(`${BASE}/friends`, { waitUntil: 'networkidle' })
+  await friendPage.locator('a[href^="/friends/"]').first().click()
+  await friendPage.waitForURL(/\/friends\/\d+/, { timeout: 10000 })
+  await friendPage.waitForTimeout(900)
+  const tabs = (await friendPage.locator('[role="tab"]').allInnerTexts()).map((t) => t.trim())
+  if (tabs.includes('Recipes')) throw new Error(`recipes still offered: ${tabs.join('|')}`)
+
+  await toggle.click()
+  await page.waitForTimeout(900)
+})
+
+await step('a shared recipe link opens with no session at all', async () => {
+  await page.goto(recipeUrl, { waitUntil: 'networkidle' })
+  await page.getByRole('button', { name: 'Create link' }).click()
+  const field = page.locator('input[aria-label="Public link to this recipe"]')
+  await field.waitFor({ timeout: 10000 })
+  const url = await field.inputValue()
+
+  const anonymous = await browser.newContext({ viewport: { width: 390, height: 844 } })
+  const anonymousPage = await anonymous.newPage()
+  anonymousPage.on('console', (m) => {
+    if (m.type() === 'error') consoleErrors.push(`anon: ${m.text().slice(0, 160)}`)
+  })
+  await anonymousPage.goto(url, { waitUntil: 'networkidle' })
+  await anonymousPage.locator('body', { hasText: 'Sign in to save' }).waitFor({ timeout: 10000 })
+
+  const text = await anonymousPage.locator('body').innerText()
+  if (!text.includes(`${recipeName} Renamed`)) throw new Error(text.slice(0, 300))
+  // The private app shell must not follow a stranger onto this page.
+  if (await anonymousPage.locator('nav.dock').count()) throw new Error('public page shows the dock')
+})
+
 await browser.close()
 
 const unique = [...new Set(consoleErrors)].filter(

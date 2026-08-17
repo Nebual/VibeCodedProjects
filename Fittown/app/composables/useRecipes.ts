@@ -38,4 +38,6 @@ export interface RecipeDetail {
   basis_g: number
   totals: NutrientTotals
   per_serving: NutrientTotals
+  /** The live public link for this recipe, if its owner made one. */
+  share?: { token: string; created_at: string } | null
 }

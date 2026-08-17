@@ -39,6 +39,17 @@ CREATE TABLE IF NOT EXISTS user_goals (
   -- Add exercise calories back onto the day's remaining budget?
   exercise_adds_calories INTEGER NOT NULL DEFAULT 1,
 
+  -- What accepted friends may see. Accepting a friend is one decision; handing
+  -- over a diary, a weight history and a training log is five, so each is its
+  -- own switch. All default on — a friend you deliberately accepted seeing
+  -- nothing at all reads as a broken page rather than as a private one.
+  -- Enforced in server/api/friends/**, not just hidden in the UI.
+  share_recipes   INTEGER NOT NULL DEFAULT 1,
+  share_diary     INTEGER NOT NULL DEFAULT 1,
+  share_weight    INTEGER NOT NULL DEFAULT 1,
+  share_calories  INTEGER NOT NULL DEFAULT 1,
+  share_exercise  INTEGER NOT NULL DEFAULT 1,
+
   -- Body metrics, used to estimate BMR / maintenance calories. All optional:
   -- the app works without them, it just can't calculate a calorie target.
   -- 'male' | 'female' | 'unspecified' | null. Drives which Mifflin-St Jeor
@@ -345,4 +356,68 @@ CREATE TABLE IF NOT EXISTS biometric_entries (
 );
 CREATE INDEX IF NOT EXISTS idx_biometric_entries_user_date
   ON biometric_entries(user_id, date);
+
+-- ---------------------------------------------------------------------------
+-- Friends and sharing
+--
+-- The only place in the app where one user reads another's rows. Everything
+-- here is deliberately narrow: a friendship is a single row that must be
+-- \`accepted\` before it grants anything, and the two link types are bearer
+-- tokens with an explicit lifetime rather than guessable ids.
+-- ---------------------------------------------------------------------------
+
+-- One row per relationship, in either state. \`requester_id\` is who asked,
+-- which is what lets the addressee see "Alice wants to be your friend" and the
+-- requester see "waiting on Alice" from the same row.
+CREATE TABLE IF NOT EXISTS friendships (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  requester_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  addressee_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  -- 'pending' | 'accepted'. A declined request is deleted rather than stored:
+  -- keeping it would either block a later re-request or need a third state
+  -- nothing reads.
+  status       TEXT NOT NULL DEFAULT 'pending',
+  created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  responded_at TEXT,
+  CHECK (requester_id != addressee_id)
+);
+-- A friendship is unordered, so the pair is indexed unordered too: with only a
+-- UNIQUE(requester_id, addressee_id) two people who invite each other at the
+-- same time end up with two rows, one of which can be accepted while the other
+-- stays pending forever. min()/max() are deterministic, so SQLite will index
+-- the expression.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_friendships_pair
+  ON friendships(MIN(requester_id, addressee_id), MAX(requester_id, addressee_id));
+CREATE INDEX IF NOT EXISTS idx_friendships_addressee ON friendships(addressee_id, status);
+CREATE INDEX IF NOT EXISTS idx_friendships_requester ON friendships(requester_id, status);
+
+-- "Send your friend a link." Single-use and dated: whoever opens it becomes a
+-- friend, so it should stop working once it has done its job.
+CREATE TABLE IF NOT EXISTS friend_invites (
+  token       TEXT PRIMARY KEY,
+  inviter_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  -- Free-text label so the inviter can tell two outstanding links apart.
+  note        TEXT,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  expires_at  TEXT NOT NULL,
+  accepted_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  accepted_at TEXT,
+  revoked_at  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_friend_invites_inviter ON friend_invites(inviter_id);
+
+-- "Share this recipe with anyone." Independent of friendship, and readable
+-- without signing in, which is the whole point of it.
+CREATE TABLE IF NOT EXISTS recipe_shares (
+  token         TEXT PRIMARY KEY,
+  food_id       INTEGER NOT NULL REFERENCES foods(id) ON DELETE CASCADE,
+  owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  revoked_at    TEXT
+);
+-- At most one live link per recipe, so pressing Share twice hands out the same
+-- URL instead of quietly minting a second one the user can never revoke.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_recipe_shares_live
+  ON recipe_shares(food_id) WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_recipe_shares_owner ON recipe_shares(owner_user_id);
 `

@@ -70,6 +70,13 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     activity_level: 'TEXT',
     goal_weight_kg: 'REAL',
     goal_rate_kg_per_week: 'REAL',
+    // Per-category sharing with friends. Default 1 so an existing household
+    // that adds friends after upgrading behaves the same as a new one.
+    share_recipes: 'INTEGER NOT NULL DEFAULT 1',
+    share_diary: 'INTEGER NOT NULL DEFAULT 1',
+    share_weight: 'INTEGER NOT NULL DEFAULT 1',
+    share_calories: 'INTEGER NOT NULL DEFAULT 1',
+    share_exercise: 'INTEGER NOT NULL DEFAULT 1',
   },
   exercises: {
     met_light: 'REAL',

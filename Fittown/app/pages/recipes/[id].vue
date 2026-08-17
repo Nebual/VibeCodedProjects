@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { MASS_UNITS, VOLUME_UNITS, baseUnit, roundGrams } from '#shared/portions'
 import { showsGramPortions } from '#shared/recipes'
+import { sharedRecipeUrl } from '#shared/friends'
 import type { RecipeDetail, RecipeIngredient } from '~/composables/useRecipes'
 
 const route = useRoute()
@@ -152,6 +153,64 @@ const totals = computed(() =>
 )
 
 const servingGrams = computed(() => (recipe.value?.serving_grams ?? null) as number | null)
+
+// --- sharing ----------------------------------------------------------------
+
+/**
+ * A public link, independent of the Friends list: the common case for "send
+ * someone a recipe" is someone who doesn't use Fittown at all.
+ *
+ * The URL is composed in the browser from the address bar. Deriving a public
+ * URL from request headers is guesswork behind a reverse proxy — the same
+ * guesswork that broke Google sign-in once already (AGENTS.md §6).
+ */
+const origin = ref('')
+onMounted(() => {
+  origin.value = window.location.origin
+})
+
+const shareToken = computed(() => data.value?.share?.token ?? null)
+const shareLink = computed(() =>
+  shareToken.value ? sharedRecipeUrl(origin.value, shareToken.value) : '',
+)
+
+const sharing = ref(false)
+const shareCopied = ref(false)
+
+async function startSharing() {
+  sharing.value = true
+  saveError.value = null
+  try {
+    await $fetch(`/api/recipes/${id.value}/share`, { method: 'POST' })
+    await refresh()
+  } catch (err) {
+    saveError.value = (err as { statusMessage?: string }).statusMessage ?? 'Could not share'
+  } finally {
+    sharing.value = false
+  }
+}
+
+async function stopSharing() {
+  sharing.value = true
+  try {
+    await $fetch(`/api/recipes/${id.value}/share`, { method: 'DELETE' })
+    await refresh()
+  } finally {
+    sharing.value = false
+  }
+}
+
+async function copyShareLink() {
+  try {
+    await navigator.clipboard.writeText(shareLink.value)
+    shareCopied.value = true
+    setTimeout(() => (shareCopied.value = false), 2000)
+  } catch {
+    // Refused on insecure origins and in some in-app browsers; the link is on
+    // screen in a selectable field regardless.
+    saveError.value = 'Couldn’t copy automatically — select the link and copy it.'
+  }
+}
 
 // --- delete -----------------------------------------------------------------
 
@@ -350,6 +409,55 @@ const logLink = computed(
         Log this
       </NuxtLink>
     </div>
+
+    <!-- Share it ----------------------------------------------------------->
+    <section class="card bg-base-100 shadow-sm">
+      <div class="card-body p-4 gap-2">
+        <div class="flex items-center gap-2">
+          <div class="flex-1 min-w-0">
+            <h2 class="font-semibold text-sm">Share this recipe</h2>
+            <p class="text-xs text-base-content/50">
+              A link anyone can open — no Fittown account needed.
+            </p>
+          </div>
+          <button
+            v-if="!shareToken"
+            class="btn btn-outline btn-sm gap-2"
+            :disabled="sharing"
+            @click="startSharing"
+          >
+            <AppIcon name="link" class="w-4 h-4" />
+            Create link
+          </button>
+        </div>
+
+        <template v-if="shareToken">
+          <div class="flex gap-2">
+            <input
+              class="input input-bordered input-sm flex-1 min-w-0 text-xs"
+              :value="shareLink"
+              readonly
+              aria-label="Public link to this recipe"
+              @focus="($event.target as HTMLInputElement).select()"
+            >
+            <button class="btn btn-sm" @click="copyShareLink">
+              {{ shareCopied ? 'Copied' : 'Copy' }}
+            </button>
+          </div>
+          <button
+            class="btn btn-ghost btn-xs self-start text-base-content/60"
+            :disabled="sharing"
+            @click="stopSharing"
+          >
+            Stop sharing
+          </button>
+          <p class="text-xs text-base-content/50">
+            Whoever opens it sees this recipe as it is now, and can copy it into
+            their own. Stopping breaks the link; copies already taken stay theirs.
+          </p>
+        </template>
+      </div>
+    </section>
 
     <!-- What it comes to -->
     <section class="card bg-base-100 shadow-sm">

@@ -32,6 +32,12 @@ desktop; it installs to a home screen as a PWA.
   in sync
 - **Trends** — intake, training, weight and every custom measurement over
   7/14/30 days or a year
+- **Friends** — add someone by email or by sending them a link, then see the
+  trends, recipes and daily diary they choose to share, and copy their recipes
+  into your own. You decide category by category what they see of yours — see
+  [Friends and sharing](#friends-and-sharing)
+- **Recipe links** — publish a recipe as a link anyone can open, with or
+  without a Fittown account
 
 ## Requirements
 
@@ -126,6 +132,58 @@ number built from a third of the food is worse than no number.
 Re-importing the food database automatically re-totals every recipe, since the
 foods underneath them have changed. After any other bulk edit, run
 `node scripts/recompute-recipes.mjs` yourself.
+
+## Friends and sharing
+
+Two ways to add someone, because they answer different situations:
+
+- **By email** — the address they sign in with. They get a prompt the next time
+  they open Fittown, and nothing is shared until they accept it.
+- **By link** — *Friends → New link*. Send it however you like; whoever opens
+  it and signs in becomes your friend. Each link works **once**, expires after
+  30 days, and can be cancelled before it's used. Useful for someone who
+  doesn't have an account yet, since the page tells them who invited them
+  before asking them to sign in.
+
+A friend's page has up to three tabs — **Trends**, **Recipes** and **Diary** —
+and their recipes also turn up under your own when you search for a food, with
+their name against them.
+
+Everything of theirs is **read-only**. Opening one of their recipes gives you
+**Add recipe** and **Log food**, and both take a *copy* into your own recipes
+first: yours to edit, and unaffected by anything they change later. Ingredients
+that are their own custom foods are copied too, so the recipe still works if
+they later delete theirs.
+
+### Choosing what you share
+
+**Settings → Sharing** has five switches, all on to begin with:
+
+| Switch | What friends can see |
+| --- | --- |
+| Recipes | Your recipes, in their list and in their food search, and copyable |
+| Food diary | What you ate on a given day, meal by meal |
+| Weight | Your weight trend and any body measurements you track |
+| Calories | Your daily calorie intake chart |
+| Exercise | The calories and time you log from training |
+
+They save the moment you flip them and apply to friends you already have. Turn
+one off and that section stops being served, not merely hidden — the API
+refuses it. Removing a friend cuts off everything immediately; recipes either
+of you copied are your own rows and stay put.
+
+### Sharing one recipe with anyone
+
+A recipe's own page has **Share this recipe → Create link**. That link is
+readable **without signing in** — the point is sending a recipe to someone who
+doesn't use Fittown — and it is independent of the Friends list and of the
+switches above. Anyone signed in can copy it into their own recipes.
+
+**Stop sharing** kills the link (visitors get "no longer shared"). Copies people
+already took are theirs and are unaffected.
+
+Both link types are unguessable tokens, and they are bearer credentials: anyone
+you forward one to can use it.
 
 ## Tests
 
@@ -280,15 +338,19 @@ app/
   composables/     useDiary (day data + mutations), useToday (timezone),
                    usePortionOptions (the portion picker's logic)
   pages/           diary, add, food/[id], food/new, recipes, recipes/[id],
-                   fitness, trends, settings
+                   fitness, trends, settings, friends, friends/[id],
+                   invite/[token] and r/[token] (both work signed out)
   plugins/         timezone.client.ts
 server/
-  api/             REST endpoints
+  api/             REST endpoints; friends/** is the only place one person
+                   reads another's data, shared/recipes/[token] the only one
+                   that answers without a session
   db/              schema + exercise seed data
   routes/auth/     Google OAuth, dev login, logout
   utils/           db connection, auth guards, validation, search ranking,
-                   recipe roll-up
+                   recipe roll-up and copying, the trends rollup, and the
+                   friendship access gate
 shared/            nutrient catalogue, portion units, body/energy maths,
-                   recipe rules
+                   recipe rules, sharing switches, invite/link rules
 scripts/           OFF importer and maintenance tools
 ```

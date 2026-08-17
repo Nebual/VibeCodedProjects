@@ -13,6 +13,7 @@ import {
   type WeightUnit,
 } from '#shared/body'
 import type { MeasurementSystem } from '#shared/portions'
+import { SHARE_TOGGLES, sharePermissions, type ShareKey } from '#shared/sharing'
 
 useHead({ title: 'Settings · Fittown' })
 
@@ -101,6 +102,34 @@ async function save() {
 }
 
 const today = useToday()
+
+// --- Sharing --------------------------------------------------------------
+
+/**
+ * The five switches save the moment they're flipped, unlike the rest of this
+ * screen.
+ *
+ * A privacy control that needs a separate "Save settings" press is a control
+ * people believe they have already used. `form` is updated too, so the big
+ * save button later on doesn't send back the value they just turned off.
+ */
+const sharingBusy = ref<string | null>(null)
+
+/** Reads straight off the form, so a toggle reflects its own optimistic flip. */
+const sharing = computed(() => sharePermissions(form))
+
+async function setSharing(key: ShareKey, value: boolean) {
+  sharingBusy.value = key
+  const previous = form[key]
+  form[key] = value ? 1 : 0
+  try {
+    await $fetch('/api/goals', { method: 'PUT', body: { [key]: value } })
+  } catch {
+    form[key] = previous
+  } finally {
+    sharingBusy.value = null
+  }
+}
 
 // --- About you ------------------------------------------------------------
 
@@ -620,6 +649,49 @@ const goalFields = [
       <AppIcon v-else-if="saved" name="check" class="w-4 h-4" />
       {{ saved ? 'Saved' : 'Save settings' }}
     </button>
+
+    <!--
+      Sits after the save button on purpose: these five save themselves the
+      moment they're flipped, and grouping them with the fields that don't
+      would teach the wrong thing about both.
+    -->
+    <section id="sharing" class="card bg-base-100 shadow-sm scroll-mt-20">
+      <div class="card-body p-4 gap-3">
+        <div>
+          <h2 class="font-semibold">Sharing</h2>
+          <p class="text-xs text-base-content/50 mt-0.5">
+            What
+            <NuxtLink to="/friends" class="link">your friends</NuxtLink>
+            can see. Changes take effect immediately, for friends you already have.
+          </p>
+        </div>
+
+        <label
+          v-for="toggle in SHARE_TOGGLES"
+          :key="toggle.key"
+          class="flex items-start gap-3 cursor-pointer"
+        >
+          <input
+            type="checkbox"
+            class="toggle toggle-sm mt-0.5 shrink-0"
+            :checked="sharing[toggle.key]"
+            :disabled="sharingBusy === toggle.key"
+            @change="setSharing(toggle.key, ($event.target as HTMLInputElement).checked)"
+          >
+          <span class="min-w-0">
+            <span class="label-text text-sm block">{{ toggle.label }}</span>
+            <span class="text-xs text-base-content/50 block">{{ toggle.description }}</span>
+          </span>
+        </label>
+
+        <p class="text-xs text-base-content/50">
+          A recipe you share with a
+          <NuxtLink to="/recipes" class="link">public link</NuxtLink>
+          stays readable by anyone holding that link, whatever these say — cancel
+          the link on the recipe itself to stop it.
+        </p>
+      </div>
+    </section>
 
     <section class="card bg-base-100 shadow-sm">
       <div class="card-body p-4 gap-2">
