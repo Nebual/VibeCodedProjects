@@ -76,16 +76,17 @@ CREATE TABLE IF NOT EXISTS user_goals (
 -- ---------------------------------------------------------------------------
 -- Food database
 --
--- Holds both imported Open Food Facts products and user-created custom foods.
--- All nutrient values are per 100 g (or per 100 ml for liquids) so that
--- portion math is a single multiply. Nulls mean "unknown", which is
--- meaningfully different from zero and must not be coerced.
+-- Holds imported Open Food Facts and USDA Foundation Foods products, plus
+-- user-created custom foods. All nutrient values are per 100 g (or per 100 ml
+-- for liquids) so that portion math is a single multiply. Nulls mean
+-- "unknown", which is meaningfully different from zero and must not be
+-- coerced.
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS foods (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  source          TEXT NOT NULL,          -- 'off' | 'custom'
-  barcode         TEXT,                   -- OFF \`code\`; null for most custom foods
+  source          TEXT NOT NULL,          -- 'off' | 'usda_foundation' | 'custom' | 'recipe'
+  barcode         TEXT,                   -- OFF \`code\` / USDA \`fdc_id\`; null for most custom foods
   name            TEXT NOT NULL,
   brand           TEXT,
   quantity        TEXT,                   -- package size as written, e.g. "500 g"

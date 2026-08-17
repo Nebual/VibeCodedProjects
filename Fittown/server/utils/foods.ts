@@ -48,6 +48,14 @@ export function buildFtsQuery(input: string): string | null {
  *  - the user's own foods always win;
  *  - an exact or near-exact name match beats a partial one, which is what
  *    stops a novelty product called "Bananahh!" outranking plain "Banana";
+ *  - USDA Foundation Foods (lab-analysed generic ingredients) are preferred
+ *    over OFF's crowd-sourced data for the same food. FDC's names spell out
+ *    every variant ("Milk, reduced fat, fluid, 2% milkfat, with added
+ *    vitamin A and vitamin D"), which reads as a much weaker FTS match than
+ *    OFF's terse "Milk" and would otherwise lose despite being the better
+ *    data — so the bonus is calibrated to clear even that worst case against
+ *    OFF's best case (an exact-name match with this dataset's highest
+ *    popularity), not just a typical one;
  *  - scan popularity, log-damped since it spans several orders of magnitude;
  *  - a mild penalty for very long names, which in OFF are usually marketing
  *    strings rather than the thing you actually searched for.
@@ -57,6 +65,7 @@ export const SEARCH_SCORE = `
   + (foods_fts.rank * -1)
   + (CASE WHEN LOWER(f.name) = LOWER($exact) THEN 8 ELSE 0 END)
   + (CASE WHEN LOWER(f.name) LIKE LOWER($exact) || '%' THEN 3 ELSE 0 END)
+  + (CASE WHEN f.source = 'usda_foundation' THEN 20 ELSE 0 END)
   + (LOG(1 + COALESCE(f.popularity, 0)) * 0.6)
   - (LENGTH(f.name) / 60.0)
 `

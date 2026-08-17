@@ -71,6 +71,10 @@ function energyLine(food: FoodRow) {
               class="badge badge-xs badge-secondary align-middle"
             >custom</span>
             <span
+              v-else-if="food.source === 'usda_foundation'"
+              class="badge badge-xs badge-accent align-middle"
+            >USDA</span>
+            <span
               v-if="!isRecipe(food) && !food.serving_grams"
               class="badge badge-xs badge-ghost align-middle"
             >no serving size</span>

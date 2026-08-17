@@ -5,7 +5,7 @@ import type { EffortKey } from '#shared/activities'
 
 export interface FoodRow {
   id: number
-  source: 'off' | 'custom' | 'recipe'
+  source: 'off' | 'usda_foundation' | 'custom' | 'recipe'
   barcode: string | null
   name: string
   brand: string | null
