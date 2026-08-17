@@ -12,7 +12,7 @@ services:
       NAB_ROLE: api
       NAB_DATA_DIR: /data
       NAB_MODELS_DIR: /models
-      NAB_CORS_ORIGINS: '["http://localhost:3000"]'
+      NAB_CORS_ORIGINS: '["http://localhost:3012"]'
     volumes:
       - ./data:/data
       - ./models:/models:ro
@@ -56,7 +56,7 @@ services:
       NUXT_API_BASE: http://api:8000
       NAB_API_BASE: http://api:8000
     ports:
-      - "3000:3000"
+      - "3012:3000"
     depends_on:
       - api
     restart: unless-stopped

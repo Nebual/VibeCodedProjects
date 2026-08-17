@@ -25,7 +25,6 @@ export interface InviteRow {
   note: string | null
   created_at: string
   expires_at: string
-  accepted_at: string | null
   revoked_at: string | null
 }
 

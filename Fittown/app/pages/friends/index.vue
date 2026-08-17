@@ -255,7 +255,8 @@ const confirmingRemove = ref<number | null>(null)
           <div class="flex-1">
             <h2 class="font-semibold text-sm">Invite by link</h2>
             <p class="text-xs text-base-content/50">
-              For someone who hasn’t signed up yet. Each link works once.
+              For someone who hasn’t signed up yet. Anyone with the link can use it
+              until you cancel it or it expires.
             </p>
           </div>
           <button class="btn btn-outline btn-sm gap-2" :disabled="busy" @click="createInvite">

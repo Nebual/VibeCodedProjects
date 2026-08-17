@@ -72,13 +72,17 @@ export function comparableTime(value: string): string {
 
 export interface InviteState {
   expires_at: string
+  /**
+   * Legacy: rows minted before links became multi-use may still carry this.
+   * No longer written, and never checked below — a link is not spent by one
+   * visit any more, so this field can't tell you whether it's usable.
+   */
   accepted_at?: string | null
   revoked_at?: string | null
 }
 
 /** Can this invite still be accepted? */
 export function isInviteUsable(invite: InviteState, now: string): boolean {
-  if (invite.accepted_at) return false
   if (invite.revoked_at) return false
   return comparableTime(invite.expires_at) > comparableTime(now)
 }
@@ -86,7 +90,6 @@ export function isInviteUsable(invite: InviteState, now: string): boolean {
 /** Why an invite can't be used, in words a visitor can act on. */
 export function inviteProblem(invite: InviteState, now: string): string | null {
   if (invite.revoked_at) return 'This invite link was cancelled.'
-  if (invite.accepted_at) return 'This invite link has already been used.'
   if (!isInviteUsable(invite, now)) return 'This invite link has expired.'
   return null
 }

@@ -263,6 +263,38 @@ describe('requesting and answering', () => {
   })
 })
 
+describe('invite links', () => {
+  it('stays listed as live after being taken up, so a second person can still use it', async () => {
+    const db = await boot()
+    seedUsers(db)
+    const f = await friends()
+
+    db.prepare(
+      `INSERT INTO friend_invites (token, inviter_id, expires_at)
+       VALUES ('tok1', 1, datetime('now', '+30 days'))`,
+    ).run()
+
+    const liveInvites = () =>
+      db
+        .prepare(
+          `SELECT token FROM friend_invites
+           WHERE inviter_id = ? AND revoked_at IS NULL AND expires_at > datetime('now')`,
+        )
+        .all(1)
+
+    // Bob takes up the link — the row backing it is untouched, so it's still
+    // live for whoever opens it next.
+    f.establishFriendship(db, 1, 2)
+    expect(liveInvites()).toHaveLength(1)
+
+    // Carol uses the very same token and becomes a friend too.
+    f.establishFriendship(db, 1, 3)
+    expect(f.areFriends(db, 1, 2)).toBe(true)
+    expect(f.areFriends(db, 1, 3)).toBe(true)
+    expect(liveInvites()).toHaveLength(1)
+  })
+})
+
 describe('the access gate', () => {
   it('refuses a stranger with a 404 rather than confirming they exist', async () => {
     const db = await boot()

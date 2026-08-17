@@ -8,9 +8,11 @@ import { establishFriendship, findUserById } from '../../../../utils/friends'
  * signed in here pressed Accept. So this creates an *accepted* friendship
  * rather than another pending request for the inviter to answer.
  *
- * The link is single-use, and the claim is the same UPDATE that checks it is
- * still usable — two people opening the same link at once can't both get in,
- * because only one of them changes a row.
+ * The link is multi-use — it keeps working, for anyone, until the inviter
+ * cancels it or it expires — so there is nothing to claim here. Accepting it
+ * twice, whether that's the same person double-clicking or a second friend
+ * using the same link, is harmless: `establishFriendship()` only ever moves a
+ * pair to accepted, it never errors or duplicates.
  */
 export default defineEventHandler(async (event) => {
   const user = await requireUser(event)
@@ -26,8 +28,6 @@ export default defineEventHandler(async (event) => {
       | {
           inviter_id: number
           expires_at: string
-          accepted_at: string | null
-          accepted_by: number | null
           revoked_at: string | null
         }
       | undefined
@@ -40,19 +40,6 @@ export default defineEventHandler(async (event) => {
 
     const problem = inviteProblem(invite, new Date().toISOString())
     if (problem) throw createError({ statusCode: 410, statusMessage: problem })
-
-    const claimed = db
-      .prepare(
-        `UPDATE friend_invites
-         SET accepted_by = ?, accepted_at = datetime('now')
-         WHERE token = ? AND accepted_at IS NULL AND revoked_at IS NULL
-           AND expires_at > datetime('now')`,
-      )
-      .run(user.id, token)
-
-    if (claimed.changes === 0) {
-      throw createError({ statusCode: 410, statusMessage: 'This invite link has already been used.' })
-    }
 
     establishFriendship(db, invite.inviter_id, user.id)
 

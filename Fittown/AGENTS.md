@@ -494,7 +494,7 @@ termination.
 
 Friends and sharing were checked the same way, with three signed-in people and
 an anonymous visitor: request by email → prompt → accept, invite links
-(single-use, cancellable, self-accept refused, previewable signed out), a
+(multi-use, cancellable, self-accept refused, previewable signed out), a
 friend's trends / recipes / diary, each of the five switches closing its own
 door on the *server* (403) and not merely in the UI, copying by friendship and
 by public link, revocation (410, with copies already taken unaffected), and
@@ -544,8 +544,9 @@ curl -sD - -o /dev/null -H 'Host: example.com' http://localhost:3000/auth/google
   way to compare two people's weeks side by side, which is the obvious next
   thing to want from a family tracker.
 - Invite links can't be addressed to a person, so anyone who gets hold of one
-  can use it. It is single-use and expires in 30 days
-  (`INVITE_TTL_DAYS`), which is the whole mitigation.
+  can use it, and now more than one person can use the *same* link. It expires
+  in 30 days (`INVITE_TTL_DAYS`) and the inviter can cancel it, which is the
+  whole mitigation.
 - 34% of foods have no `serving_grams`; the portion picker falls back to 100 g.
 - Water "undo" subtracts a preset amount rather than removing the last entry.
 - No macro trends — Trends charts calories and weight only.

@@ -62,20 +62,23 @@ describe('invite lifetime', () => {
     expect(comparableTime('2026-08-16 12:00:00')).toBe('2026-08-16 12:00:00')
   })
 
-  it('is unusable once accepted or revoked, whatever the expiry says', () => {
+  it('is unusable once revoked, whatever the expiry says', () => {
     const now = '2026-08-16 12:00:00'
     const live = { expires_at: '2026-09-15 12:00:00' }
-    expect(isInviteUsable({ ...live, accepted_at: '2026-08-16 11:00:00' }, now)).toBe(false)
     expect(isInviteUsable({ ...live, revoked_at: '2026-08-16 11:00:00' }, now)).toBe(false)
   })
 
-  it('says which of the three it is, so the page can explain itself', () => {
+  it('ignores accepted_at — the link is multi-use, not spent by one visit', () => {
+    const now = '2026-08-16 12:00:00'
+    const live = { expires_at: '2026-09-15 12:00:00' }
+    // A legacy row may still carry an old accepted_at; it must not block reuse.
+    expect(isInviteUsable({ ...live, accepted_at: '2026-08-16 11:00:00' }, now)).toBe(true)
+  })
+
+  it('says which of the two it is, so the page can explain itself', () => {
     const now = '2026-08-16 12:00:00'
     expect(inviteProblem({ expires_at: '2026-09-15 12:00:00' }, now)).toBeNull()
     expect(inviteProblem({ expires_at: '2026-01-01 12:00:00' }, now)).toMatch(/expired/i)
-    expect(
-      inviteProblem({ expires_at: '2026-09-15 12:00:00', accepted_at: 'x' }, now),
-    ).toMatch(/already been used/i)
     expect(
       inviteProblem({ expires_at: '2026-09-15 12:00:00', revoked_at: 'x' }, now),
     ).toMatch(/cancelled/i)

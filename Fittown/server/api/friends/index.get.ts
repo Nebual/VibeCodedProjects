@@ -13,9 +13,9 @@ export default defineEventHandler(async (event) => {
 
   const invites = db
     .prepare(
-      `SELECT token, note, created_at, expires_at, accepted_at, revoked_at
+      `SELECT token, note, created_at, expires_at, revoked_at
        FROM friend_invites
-       WHERE inviter_id = ? AND revoked_at IS NULL AND accepted_at IS NULL
+       WHERE inviter_id = ? AND revoked_at IS NULL
          AND expires_at > datetime('now')
        ORDER BY created_at DESC`,
     )

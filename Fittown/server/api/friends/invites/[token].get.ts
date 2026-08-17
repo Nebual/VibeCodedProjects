@@ -20,7 +20,7 @@ export default defineEventHandler(async (event) => {
 
   const invite = useDb()
     .prepare(
-      `SELECT i.token, i.expires_at, i.accepted_at, i.revoked_at,
+      `SELECT i.token, i.expires_at, i.revoked_at,
               u.id AS inviter_id, u.name AS inviter_name, u.email AS inviter_email
        FROM friend_invites i
        JOIN users u ON u.id = i.inviter_id
@@ -29,7 +29,6 @@ export default defineEventHandler(async (event) => {
     .get(token) as
     | {
         expires_at: string
-        accepted_at: string | null
         revoked_at: string | null
         inviter_id: number
         inviter_name: string

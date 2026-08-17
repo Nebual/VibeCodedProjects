@@ -194,6 +194,15 @@ const showScanner = ref(false)
           autocomplete="off"
         >
         <span v-if="searching" class="loading loading-spinner loading-xs" />
+        <button
+          v-else-if="query"
+          type="button"
+          class="btn btn-ghost btn-xs btn-square shrink-0"
+          aria-label="Clear search"
+          @click="query = ''"
+        >
+          <AppIcon name="x" class="w-4 h-4 opacity-50" />
+        </button>
       </label>
 
       <button

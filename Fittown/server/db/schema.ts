@@ -414,8 +414,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_friendships_pair
 CREATE INDEX IF NOT EXISTS idx_friendships_addressee ON friendships(addressee_id, status);
 CREATE INDEX IF NOT EXISTS idx_friendships_requester ON friendships(requester_id, status);
 
--- "Send your friend a link." Single-use and dated: whoever opens it becomes a
--- friend, so it should stop working once it has done its job.
+-- "Send your friend a link." Multi-use and dated: anyone who opens it becomes
+-- a friend, and it keeps working — for as many people as open it — until the
+-- inviter cancels it or it expires.
 CREATE TABLE IF NOT EXISTS friend_invites (
   token       TEXT PRIMARY KEY,
   inviter_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -423,6 +424,9 @@ CREATE TABLE IF NOT EXISTS friend_invites (
   note        TEXT,
   created_at  TEXT NOT NULL DEFAULT (datetime('now')),
   expires_at  TEXT NOT NULL,
+  -- No longer written: a link isn't spent by one visit, so there's no single
+  -- acceptor to name. Kept so rows minted before links became multi-use still
+  -- read back cleanly.
   accepted_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
   accepted_at TEXT,
   revoked_at  TEXT
