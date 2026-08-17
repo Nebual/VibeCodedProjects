@@ -1,3 +1,4 @@
+import { prioritizeServingSize } from '#shared/foods'
 import { RECIPE_SOURCE } from '#shared/recipes'
 import { friendIds } from '../../utils/friends'
 import {
@@ -92,7 +93,12 @@ export default defineEventHandler(async (event) => {
     })
 
   return {
-    results,
+    // A food with no serving size is a worse hit than an equally-ranked one
+    // that has one — see shared/foods.ts. In practice this only ever reorders
+    // plain OFF/custom rows relative to each other: a recipe only lacks
+    // `serving_grams` while it has no ingredients yet, which also makes it
+    // unloggable, so there's nothing to prioritize it away from.
+    results: prioritizeServingSize(results as { serving_grams: unknown }[]),
     // Nothing to offer when we're picking an ingredient: a recipe can't be one,
     // and a friend's recipe is still a recipe.
     friend_results: pickingIngredient ? [] : searchFriendRecipes(db, user.id, match),

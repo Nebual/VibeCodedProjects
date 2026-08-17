@@ -57,6 +57,10 @@ function energyLine(food: FoodRow) {
               v-else-if="food.source === 'custom'"
               class="badge badge-xs badge-secondary align-middle"
             >custom</span>
+            <span
+              v-if="!isRecipe(food) && !food.serving_grams"
+              class="badge badge-xs badge-ghost align-middle"
+            >no serving size</span>
           </div>
           <div class="text-xs text-base-content/60 truncate">
             <span v-if="food.brand">{{ food.brand }} · </span>{{ energyLine(food) }}

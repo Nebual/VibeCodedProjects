@@ -644,16 +644,10 @@ const goalFields = [
       </div>
     </section>
 
-    <button class="btn btn-primary gap-2" :disabled="saving" @click="save">
-      <span v-if="saving" class="loading loading-spinner loading-sm" />
-      <AppIcon v-else-if="saved" name="check" class="w-4 h-4" />
-      {{ saved ? 'Saved' : 'Save settings' }}
-    </button>
-
     <!--
-      Sits after the save button on purpose: these five save themselves the
-      moment they're flipped, and grouping them with the fields that don't
-      would teach the wrong thing about both.
+      These five save themselves the moment they're flipped, unlike everything
+      above — a privacy control that needs a separate "Save settings" press is
+      a control people believe they've already used.
     -->
     <section id="sharing" class="card bg-base-100 shadow-sm scroll-mt-20">
       <div class="card-body p-4 gap-3">
@@ -692,6 +686,12 @@ const goalFields = [
         </p>
       </div>
     </section>
+
+    <button class="btn btn-primary gap-2" :disabled="saving" @click="save">
+      <span v-if="saving" class="loading loading-spinner loading-sm" />
+      <AppIcon v-else-if="saved" name="check" class="w-4 h-4" />
+      {{ saved ? 'Saved' : 'Save settings' }}
+    </button>
 
     <section class="card bg-base-100 shadow-sm">
       <div class="card-body p-4 gap-2">
