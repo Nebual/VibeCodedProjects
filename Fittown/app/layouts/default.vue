@@ -92,5 +92,7 @@ function isActive(to: string) {
       that someone who was added by email hasn't gone looking for it.
     -->
     <FriendRequestPrompt v-if="user" />
+
+    <InstallPrompt />
   </div>
 </template>
