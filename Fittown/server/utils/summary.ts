@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite'
+import { HYDRATION_ML_SQL } from './hydration'
 
 /**
  * Per-day rollups over a date range — the data behind every trends chart.
@@ -50,6 +51,23 @@ export function summarise(
        WHERE user_id = ? AND date BETWEEN ? AND ? GROUP BY date`,
     )
     .all(userId, start, end) as { date: string; total_ml: number }[]
+
+  // Drinks logged in the food diary count toward each day's total too — see
+  // server/utils/hydration.ts for which foods qualify and why.
+  const foodWater = db
+    .prepare(
+      `SELECT d.date AS date, SUM(${HYDRATION_ML_SQL}) AS ml
+       FROM diary_entries d
+       JOIN foods f ON f.id = d.food_id
+       WHERE d.user_id = ? AND d.date BETWEEN ? AND ?
+       GROUP BY d.date`,
+    )
+    .all(userId, start, end) as { date: string; ml: number }[]
+
+  const waterTotals = new Map<string, number>()
+  for (const w of water) waterTotals.set(w.date, (waterTotals.get(w.date) ?? 0) + w.total_ml)
+  for (const w of foodWater) waterTotals.set(w.date, (waterTotals.get(w.date) ?? 0) + w.ml)
+  const waterCombined = [...waterTotals.entries()].map(([date, total_ml]) => ({ date, total_ml }))
 
   const workouts = db
     .prepare(
@@ -119,7 +137,7 @@ export function summarise(
     from: start,
     to: end,
     food: byDate(food),
-    water: byDate(water),
+    water: byDate(waterCombined),
     workouts: byDate(workouts),
     weights,
     biometrics: [...bySeries.values()],

@@ -1,6 +1,7 @@
 import { scaleNutrients, sumNutrients, type NutrientTotals } from '#shared/nutrients'
 import { friendPermissions, requireSharedSection } from '../../../utils/friends'
 import { foodCols } from '../../../utils/foods'
+import { HYDRATION_ML_SQL } from '../../../utils/hydration'
 
 /**
  * What a friend ate on one day.
@@ -65,6 +66,17 @@ export default defineEventHandler(async (event) => {
     )
     .get(id, day) as { total_ml: number }
 
+  // Drinks logged in the food diary count toward the total too — see
+  // server/utils/hydration.ts for which foods qualify and why.
+  const foodWater = db
+    .prepare(
+      `SELECT COALESCE(SUM(${HYDRATION_ML_SQL}), 0) AS ml
+       FROM diary_entries d
+       JOIN foods f ON f.id = d.food_id
+       WHERE d.user_id = ? AND d.date = ?`,
+    )
+    .get(id, day) as { ml: number }
+
   const workouts = permissions.share_exercise
     ? db
         .prepare(
@@ -82,7 +94,7 @@ export default defineEventHandler(async (event) => {
     date: day,
     meals: byMeal,
     totals: sumNutrients(vectors),
-    water_ml: Number(water.total_ml),
+    water_ml: Number(water.total_ml) + Number(foodWater.ml),
     workouts,
   }
 })

@@ -99,7 +99,12 @@ export interface DiaryDay {
   date: string
   meals: Record<string, DiaryEntry[]>
   totals: NutrientTotals
-  water: { entries: { id: number; amount_ml: number }[]; total_ml: number }
+  water: {
+    entries: { id: number; amount_ml: number }[]
+    /** Auto-credited from drinks logged in the food diary — see server/utils/hydration.ts. */
+    from_food_ml: number
+    total_ml: number
+  }
   workouts: { entries: WorkoutRow[]; total_calories: number; total_minutes: number }
   goals: Goals
   weight_kg: number | null

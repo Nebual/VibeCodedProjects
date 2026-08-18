@@ -1,5 +1,6 @@
 import { scaleNutrients, sumNutrients, type NutrientTotals } from '#shared/nutrients'
 import { foodCols } from '../../utils/foods'
+import { HYDRATION_ML_SQL } from '../../utils/hydration'
 
 /**
  * Everything needed to render one day: food entries by meal, water, workouts,
@@ -59,6 +60,17 @@ export default defineEventHandler(async (event) => {
     )
     .all(user.id, day) as { amount_ml: number }[]
 
+  // Drinks logged in the food diary count toward the goal automatically —
+  // see server/utils/hydration.ts for which foods qualify and why.
+  const foodWater = db
+    .prepare(
+      `SELECT COALESCE(SUM(${HYDRATION_ML_SQL}), 0) AS ml
+       FROM diary_entries d
+       JOIN foods f ON f.id = d.food_id
+       WHERE d.user_id = ? AND d.date = ?`,
+    )
+    .get(user.id, day) as { ml: number }
+
   const workouts = db
     .prepare(
       `SELECT w.id, w.duration_min, w.calories, w.effort, w.sets, w.reps, w.weight_kg,
@@ -105,7 +117,8 @@ export default defineEventHandler(async (event) => {
     totals: sumNutrients(vectors),
     water: {
       entries: water,
-      total_ml: water.reduce((sum, w) => sum + w.amount_ml, 0),
+      from_food_ml: foodWater.ml,
+      total_ml: water.reduce((sum, w) => sum + w.amount_ml, 0) + foodWater.ml,
     },
     workouts: {
       entries: workouts,
