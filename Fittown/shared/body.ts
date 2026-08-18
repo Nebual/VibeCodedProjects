@@ -317,3 +317,44 @@ export function waterGoalMl(weightKg: number, activity: ActivityKey | null | und
   const factor = WATER_ML_PER_KG[activity ?? 'sedentary'] ?? WATER_ML_PER_KG.sedentary
   return weightKg * factor
 }
+
+// ---------------------------------------------------------------------------
+// BMI
+// ---------------------------------------------------------------------------
+
+export interface BmiCategory {
+  key: 'underweight' | 'healthy' | 'overweight' | 'obese'
+  label: string
+  /** Inclusive lower bound; null means no lower bound. */
+  min: number | null
+  /** Exclusive upper bound; null means no upper bound. */
+  max: number | null
+}
+
+/**
+ * The WHO adult BMI bands, used worldwide. Fitted to population averages, so
+ * it reads muscle as weight the same as fat — a heavily-trained person can
+ * land in "overweight" with a low body-fat percentage. A starting signal, not
+ * a diagnosis, which is why the UI shows the whole table rather than just a
+ * single verdict.
+ */
+export const BMI_CATEGORIES: BmiCategory[] = [
+  { key: 'underweight', label: 'Underweight', min: null, max: 18.5 },
+  { key: 'healthy', label: 'Healthy weight', min: 18.5, max: 25 },
+  { key: 'overweight', label: 'Overweight', min: 25, max: 30 },
+  { key: 'obese', label: 'Obese', min: 30, max: null },
+]
+
+export function bmi(weightKg: number, heightCm: number): number {
+  const heightM = heightCm / 100
+  return weightKg / (heightM * heightM)
+}
+
+/** The bands are contiguous and unbounded at both ends, so this always matches. */
+export function bmiCategory(value: number): BmiCategory {
+  return (
+    BMI_CATEGORIES.find(
+      (c) => (c.min === null || value >= c.min) && (c.max === null || value < c.max),
+    ) ?? BMI_CATEGORIES[BMI_CATEGORIES.length - 1]!
+  )
+}

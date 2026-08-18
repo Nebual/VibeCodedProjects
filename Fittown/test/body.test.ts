@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  BMI_CATEGORIES,
   CM_PER_IN,
   DEFAULT_RATE_KG_PER_WEEK,
   KCAL_PER_KG,
@@ -7,6 +8,8 @@ import {
   MAX_SAFE_RATE_KG,
   ACTIVITY_LEVELS,
   activityLevel,
+  bmi,
+  bmiCategory,
   bmr,
   calorieFloor,
   cmToFtIn,
@@ -202,6 +205,37 @@ describe('goal projection', () => {
 
   it('refuses to project at maintenance', () => {
     expect(daysToGoal(80, 75, 0)).toBeNull()
+  })
+})
+
+describe('BMI', () => {
+  it('matches the standard formula', () => {
+    // 72.5 / 1.68^2 = 25.69...
+    expect(bmi(PROFILE.weightKg, PROFILE.heightCm)).toBeCloseTo(25.69, 2)
+  })
+
+  it('covers every value with no gaps or overlaps', () => {
+    for (const value of [10, 18.49, 18.5, 24.99, 25, 29.99, 30, 30.01, 60]) {
+      expect(bmiCategory(value)).toBeDefined()
+    }
+    // Boundaries belong to the band starting there, not the one below.
+    expect(bmiCategory(18.5).key).toBe('healthy')
+    expect(bmiCategory(25).key).toBe('overweight')
+    expect(bmiCategory(30).key).toBe('obese')
+  })
+
+  it('sorts categories from lightest to heaviest', () => {
+    expect(BMI_CATEGORIES.map((c) => c.key)).toEqual([
+      'underweight',
+      'healthy',
+      'overweight',
+      'obese',
+    ])
+  })
+
+  it('categorizes a known profile', () => {
+    // 25.69 falls just past the healthy/overweight boundary at 25.
+    expect(bmiCategory(bmi(PROFILE.weightKg, PROFILE.heightCm)).key).toBe('overweight')
   })
 })
 

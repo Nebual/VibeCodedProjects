@@ -4,6 +4,8 @@ import {
   ACTIVITY_LEVELS,
   DEFAULT_CALORIE_GOAL,
   activityLevel,
+  bmi,
+  bmiCategory,
   cmToFtIn,
   formatWeight,
   ftInToCm,
@@ -201,6 +203,18 @@ const inches = computed<number | null>({
 })
 
 const selectedActivity = computed(() => activityLevel(form.activity_level))
+
+/** Null until both height and a weight (typed or last logged) are known. */
+const bmiValue = computed(() => {
+  if (!form.height_cm || currentWeightKg.value === null) return null
+  return bmi(currentWeightKg.value, form.height_cm)
+})
+
+const bmiLabel = computed(() =>
+  bmiValue.value === null ? null : bmiCategory(bmiValue.value).label,
+)
+
+const bmiOpen = ref(false)
 
 /**
  * Activity multipliers already include the exercise a typical week contains.
@@ -448,6 +462,22 @@ const goalFields = [
               @click="heightUnit = u[0]"
             >{{ u[1] }}</button>
           </div>
+        </div>
+
+        <div class="flex items-center justify-between gap-2 rounded-box bg-base-200 p-3">
+          <div class="text-xs">
+            <div class="text-base-content/60">Body mass index</div>
+            <div v-if="bmiValue !== null" class="font-medium">
+              {{ bmiValue.toFixed(1) }} · {{ bmiLabel }}
+            </div>
+            <div v-else class="text-base-content/50">
+              Add your height and a weight below to see it.
+            </div>
+          </div>
+          <button class="btn btn-ghost btn-xs gap-1" @click="bmiOpen = true">
+            <AppIcon name="ruler" class="w-4 h-4" />
+            Categories
+          </button>
         </div>
 
         <label class="form-control">
@@ -776,5 +806,7 @@ const goalFields = [
       @close="calculatorOpen = false"
       @apply="applyPlan"
     />
+
+    <BmiDialog :open="bmiOpen" :value="bmiValue" @close="bmiOpen = false" />
   </div>
 </template>
