@@ -1,3 +1,4 @@
+import { barcodeCandidates } from '../../../utils/barcode'
 import { foodCols } from '../../../utils/foods'
 
 /**
@@ -19,15 +20,10 @@ export default defineEventHandler(async (event) => {
   const db = useDb()
 
   // Barcodes are stored as written in OFF, which zero-pads to varying widths
-  // (EAN-13 vs UPC-A for the same product). Try the scanned form, then the
-  // 13-digit padded form, then unpadded.
-  const candidates = [
-    code,
-    code.padStart(13, '0'),
-    code.replace(/^0+/, ''),
-  ]
-
-  for (const candidate of new Set(candidates)) {
+  // (EAN-13 vs UPC-A for the same product) and sometimes keeps small-package
+  // barcodes in their compressed UPC-E form rather than the UPC-A/EAN-13 a
+  // scanner's Barcode Detection API expands them to. Try every equivalent form.
+  for (const candidate of barcodeCandidates(code)) {
     const food = db
       .prepare(
         `SELECT ${foodCols()} FROM foods f
