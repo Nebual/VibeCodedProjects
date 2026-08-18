@@ -9,6 +9,8 @@ import {
   recipeServingLabel,
   rollUpRecipe,
   showsGramPortions,
+  isRecipeLog,
+  RECIPE_LOG_SOURCE,
 } from '#shared/recipes'
 
 /**
@@ -199,5 +201,24 @@ describe('when gram portions may be shown', () => {
   it('knows a recipe when it sees one', () => {
     expect(isRecipe({ source: RECIPE_SOURCE })).toBe(true)
     expect(isRecipe({ source: 'custom' })).toBe(false)
+  })
+
+  /**
+   * A meal logged from a recipe is frozen into its own food row, and every
+   * display rule has to keep treating it as a recipe. Written as its own block
+   * because the failure is invisible: an equality test against RECIPE_SOURCE
+   * still passes every case above, and only the diary — the screen read most
+   * often — starts quoting a weight for a stew nobody put on the scales.
+   */
+  it('treats a frozen meal as the recipe it came from', () => {
+    expect(isRecipe({ source: RECIPE_LOG_SOURCE })).toBe(true)
+    expect(isRecipeLog({ source: RECIPE_LOG_SOURCE })).toBe(true)
+    expect(isRecipeLog({ source: RECIPE_SOURCE })).toBe(false)
+
+    expect(showsGramPortions({ source: RECIPE_LOG_SOURCE })).toBe(false)
+    expect(showsGramPortions({ source: RECIPE_LOG_SOURCE, recipe_final_weight_g: null }))
+      .toBe(false)
+    expect(showsGramPortions({ source: RECIPE_LOG_SOURCE, recipe_final_weight_g: 900 }))
+      .toBe(true)
   })
 })

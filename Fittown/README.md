@@ -126,6 +126,29 @@ There is also an **Instructions** box for the method — free text, just for you
 to read while cooking. Nothing in it affects the nutrition, and it travels with
 the recipe when you share or copy one.
 
+### Editing a recipe never changes a meal you already logged
+
+Logging a recipe takes a copy of it as it is at that moment, and the diary entry
+holds onto the copy. So you can add butter to the porridge today without last
+Tuesday's bowl quietly gaining 90 calories. The recipe you edit is the one you
+log from tomorrow.
+
+That also means a recipe you have eaten can be deleted whenever you like — the
+meals stay exactly as they were.
+
+### A recipe can contain another recipe
+
+Make a salad dressing in bulk — six servings, say — and then put **1 serving of
+it** into your salad. Pick it from the ingredient search like any other food.
+
+The share stays a share: add more oil to the dressing later and every recipe
+holding "1 serving" of it re-totals itself, because one serving of a bigger
+batch is a different amount. An ingredient you entered as a *weight* stays that
+weight, because you measured it.
+
+Recipes nest three deep, and one can't end up inside itself — the ingredient
+search leaves out anything that would do it.
+
 ### Importing a recipe
 
 **Recipes → Import from a list or a link** builds a recipe two ways.

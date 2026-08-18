@@ -5,7 +5,8 @@ import type { EffortKey } from '#shared/activities'
 
 export interface FoodRow {
   id: number
-  source: 'off' | 'usda_foundation' | 'custom' | 'recipe'
+  /** 'recipe_log' is a recipe frozen at the moment it was logged. */
+  source: 'off' | 'usda_foundation' | 'custom' | 'recipe' | 'recipe_log'
   barcode: string | null
   name: string
   brand: string | null
@@ -17,6 +18,12 @@ export interface FoodRow {
   owner_user_id: number | null
   nutriscore: string | null
   kcal: number | null
+  /** On a frozen meal: the live recipe it came from, if still there. */
+  logged_from_food_id?: number | null
+  /** On a frozen meal: what was changed for that one meal, in words. */
+  recipe_log_note?: string | null
+  /** Variants of one recipe share this. Null on a frozen meal. */
+  recipe_family_id?: number | null
   /** Recipes only: how many servings it makes. Null on every other food. */
   recipe_servings: number | null
   /**

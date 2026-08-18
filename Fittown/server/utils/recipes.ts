@@ -2,8 +2,12 @@ import type { DatabaseSync } from 'node:sqlite'
 import { NUTRIENT_KEYS, scaleNutrients } from '#shared/nutrients'
 import { uniqueCopyName } from '#shared/friends'
 import {
+  MAX_RECIPE_DEPTH,
+  RECIPE_LOG_SOURCE,
   RECIPE_SOURCE,
+  RECIPE_SOURCES,
   needsWholeRecipeOption,
+  nestedPortionGrams,
   recipeServingGrams,
   recipeServingLabel,
   rollUpRecipe,
@@ -139,11 +143,15 @@ export function listIngredients(db: DatabaseSync, recipeFoodId: number): Ingredi
  * Returns the roll-up so a route can hand the numbers straight back.
  */
 export function recomputeRecipe(db: DatabaseSync, recipeFoodId: number): RecipeRollUp {
+  // Both sources: a snapshot is rolled up exactly once, at the moment it is
+  // minted, by this same function. Nothing may recompute one afterwards — see
+  // the guard in recomputeRecipeAndDependents().
   const recipe = db
     .prepare(
-      'SELECT id, recipe_servings, recipe_final_weight_g FROM foods WHERE id = ? AND source = ?',
+      `SELECT id, recipe_servings, recipe_final_weight_g FROM foods
+       WHERE id = ? AND source IN (${RECIPE_SOURCES.map(() => '?').join(', ')})`,
     )
-    .get(recipeFoodId, RECIPE_SOURCE) as
+    .get(recipeFoodId, ...RECIPE_SOURCES) as
     | { recipe_servings: number | null; recipe_final_weight_g: number | null }
     | undefined
 
@@ -152,6 +160,13 @@ export function recomputeRecipe(db: DatabaseSync, recipeFoodId: number): RecipeR
   const servings = recipe.recipe_servings && recipe.recipe_servings > 0
     ? recipe.recipe_servings
     : 1
+
+  // Before anything is summed: "1 serving of the dressing" has to still mean
+  // one serving of the dressing as it is now, not the gram figure it came to
+  // when it was added. The only write a recompute makes to recipe_ingredients,
+  // and it is re-resolving the user's stated intent rather than overriding it.
+  resolveNestedPortions(db, recipeFoodId)
+
   const ingredients = listIngredients(db, recipeFoodId)
   const rollUp = rollUpRecipe(ingredients, recipe.recipe_final_weight_g)
 
@@ -184,6 +199,208 @@ export function recomputeRecipe(db: DatabaseSync, recipeFoodId: number): RecipeR
   }
 
   return rollUp
+}
+
+/**
+ * Re-derive the grams of every nested recipe measured in the child's own units.
+ *
+ * Amounts entered in grams are left alone: someone weighed that, and a weight
+ * is not a proportion. Only "1 serving" and "1 whole recipe" move, because only
+ * those are claims about a share of something that can change underneath them.
+ */
+function resolveNestedPortions(db: DatabaseSync, recipeFoodId: number): void {
+  const rows = db
+    .prepare(
+      `SELECT ri.id, ri.grams, ri.serving_label, ri.serving_count,
+              child.serving_grams, child.recipe_servings
+       FROM recipe_ingredients ri
+       JOIN foods child ON child.id = ri.food_id
+       WHERE ri.recipe_food_id = ? AND child.source = ?
+         AND ri.serving_label IS NOT NULL AND ri.serving_count IS NOT NULL`,
+    )
+    .all(recipeFoodId, RECIPE_SOURCE) as {
+      id: number
+      grams: number
+      serving_label: string
+      serving_count: number
+      serving_grams: number | null
+      recipe_servings: number | null
+    }[]
+
+  if (rows.length === 0) return
+
+  const update = db.prepare('UPDATE recipe_ingredients SET grams = ? WHERE id = ?')
+  for (const row of rows) {
+    const grams = nestedPortionGrams(row.serving_label, row.serving_count, row)
+    // Unchanged rows are skipped rather than rewritten: this runs on every
+    // recompute of every recipe, and most of them have nothing nested at all.
+    if (grams === null || Math.abs(grams - row.grams) < 0.0001) continue
+    update.run(grams, row.id)
+  }
+}
+
+/**
+ * How many levels of recipe sit *below* this one, counting itself.
+ *
+ * A recipe with nothing nested in it is 1. A salad holding a dressing is 2.
+ *
+ * `UNION ALL` with an explicit depth guard rather than `UNION`: the same child
+ * legitimately appears twice (a dressing used in two components), and the guard
+ * is what stops a cycle — which should be impossible, and is exactly the sort
+ * of impossible that hangs a request — from recursing for ever.
+ */
+export function recipeDepthBelow(db: DatabaseSync, id: number): number {
+  const row = db
+    .prepare(
+      `WITH RECURSIVE below(id, depth) AS (
+         SELECT ?, 1
+         UNION ALL
+         SELECT ri.food_id, below.depth + 1
+         FROM recipe_ingredients ri
+         JOIN below ON ri.recipe_food_id = below.id
+         JOIN foods f ON f.id = ri.food_id
+         WHERE f.source = ? AND below.depth < ?
+       )
+       SELECT MAX(depth) AS depth FROM below`,
+    )
+    .get(id, RECIPE_SOURCE, MAX_RECIPE_DEPTH + 2) as { depth: number | null }
+
+  return Number(row.depth ?? 1)
+}
+
+/**
+ * Every live recipe that contains this one, however indirectly, with how far
+ * above it each sits. The row for `id` itself is included, at depth 0.
+ *
+ * Frozen meals are **not** walked: `f.source = RECIPE_SOURCE` on the parent
+ * side keeps a `recipe_log` out of every answer this returns. That single
+ * condition is what stops a recompute cascade reaching a meal already eaten.
+ */
+function ancestorsWithDepth(db: DatabaseSync, id: number): { id: number; depth: number }[] {
+  return db
+    .prepare(
+      `WITH RECURSIVE above(id, depth) AS (
+         SELECT ?, 0
+         UNION ALL
+         SELECT ri.recipe_food_id, above.depth + 1
+         FROM recipe_ingredients ri
+         JOIN above ON ri.food_id = above.id
+         JOIN foods f ON f.id = ri.recipe_food_id
+         WHERE f.source = ? AND above.depth < ?
+       )
+       SELECT id, MAX(depth) AS depth FROM above GROUP BY id ORDER BY depth`,
+    )
+    .all(id, RECIPE_SOURCE, MAX_RECIPE_DEPTH + 2) as { id: number; depth: number }[]
+}
+
+/**
+ * Every live recipe, children before the recipes that contain them.
+ *
+ * For the maintenance scripts, which re-roll the whole library after a bulk
+ * change to `foods`. They used to walk `ORDER BY id`, which was fine until
+ * recipes could nest: a salad created before the dressing it holds would be
+ * rolled up from the dressing's stale numbers and stay wrong until the next
+ * run. Sorting by how deep each one's own subtree goes puts every child ahead
+ * of its parents in a single pass.
+ */
+export function recipesInDependencyOrder(
+  db: DatabaseSync,
+): { id: number; name: string }[] {
+  const recipes = db
+    .prepare('SELECT id, name FROM foods WHERE source = ? ORDER BY id')
+    .all(RECIPE_SOURCE) as { id: number; name: string }[]
+
+  return recipes
+    .map((recipe) => ({ ...recipe, depth: recipeDepthBelow(db, Number(recipe.id)) }))
+    .sort((a, b) => a.depth - b.depth)
+    .map(({ id, name }) => ({ id: Number(id), name }))
+}
+
+/** Recipes that contain this one, transitively. Excludes the recipe itself. */
+export function ancestorIds(db: DatabaseSync, id: number): number[] {
+  return ancestorsWithDepth(db, id)
+    .filter((row) => row.depth > 0)
+    .map((row) => Number(row.id))
+}
+
+/**
+ * Recompute a recipe and everything built on top of it.
+ *
+ * Every mutation route ends here rather than in `recomputeRecipe()`: a parent
+ * caches the sum of its children, so editing the dressing leaves the salad
+ * wrong until the salad is re-rolled too.
+ *
+ * Order is by **longest** distance from the recipe that changed, not
+ * depth-first. Given a diamond — A holds B and C, B holds C — a depth-first
+ * walk up from C can reach A before B, roll A up from a stale B, and then skip
+ * A on the way back because it has already been visited. Taking the maximum
+ * depth per node and recomputing in that order gets it right in one pass.
+ */
+export function recomputeRecipeAndDependents(db: DatabaseSync, id: number): RecipeRollUp {
+  const chain = ancestorsWithDepth(db, id)
+  let first: RecipeRollUp | undefined
+
+  for (const node of chain) {
+    const rollUp = recomputeRecipe(db, Number(node.id))
+    if (node.depth === 0) first = rollUp
+  }
+
+  // A recipe with nothing above it still has to be recomputed, and a frozen
+  // meal never appears in the chain at all — both arrive here.
+  return first ?? recomputeRecipe(db, id)
+}
+
+/**
+ * May `childId` go into `parentId`?
+ *
+ * Two ways it may not: the child already contains the parent (which would make
+ * a recipe that contains itself, and a rollup that never terminates), or the
+ * resulting stack would be deeper than `MAX_RECIPE_DEPTH`.
+ *
+ * Returns null when it is fine, or the reason it isn't — phrased for the user,
+ * because "invalid ingredient" tells somebody nothing about what to do next.
+ */
+export function nestingRefusal(
+  db: DatabaseSync,
+  parentId: number,
+  childId: number,
+): string | null {
+  if (parentId === childId) return 'A recipe can’t contain itself.'
+
+  const contained = db
+    .prepare(
+      `WITH RECURSIVE below(id, depth) AS (
+         SELECT ?, 0
+         UNION ALL
+         SELECT ri.food_id, below.depth + 1
+         FROM recipe_ingredients ri
+         JOIN below ON ri.recipe_food_id = below.id
+         JOIN foods f ON f.id = ri.food_id
+         WHERE f.source = ? AND below.depth < ?
+       )
+       SELECT 1 AS found FROM below WHERE id = ? LIMIT 1`,
+    )
+    .get(childId, RECIPE_SOURCE, MAX_RECIPE_DEPTH + 2, parentId) as { found: number } | undefined
+
+  if (contained) {
+    const child = db.prepare('SELECT name FROM foods WHERE id = ?').get(childId) as
+      | { name: string }
+      | undefined
+    const parent = db.prepare('SELECT name FROM foods WHERE id = ?').get(parentId) as
+      | { name: string }
+      | undefined
+    return `${child?.name ?? 'That recipe'} already contains ${parent?.name ?? 'this one'}.`
+  }
+
+  // Checked from both sides: a two-level child dropped into a two-level parent
+  // is too deep even though neither half is.
+  const above = ancestorsWithDepth(db, parentId).reduce((max, row) => Math.max(max, row.depth), 0)
+  const below = recipeDepthBelow(db, childId)
+  if (above + 1 + below > MAX_RECIPE_DEPTH) {
+    return `Recipes can only be nested ${MAX_RECIPE_DEPTH} deep.`
+  }
+
+  return null
 }
 
 /**
@@ -220,22 +437,62 @@ export function unindexFood(
   ).run(id, previous.name, previous.brand)
 }
 
-/** Create an empty recipe and index it. Returns the new food id. */
+export interface NewRecipeOptions {
+  /** `RECIPE_SOURCE` by default; `RECIPE_LOG_SOURCE` for a frozen meal. */
+  source?: string
+  /**
+   * Which family this recipe belongs to. Omitted means "its own", set after
+   * the insert because the id isn't known until then. Pass `null` for a
+   * snapshot: a frozen meal is not a member of anybody's collection.
+   */
+  familyId?: number | null
+  /** The live recipe a snapshot was frozen from. */
+  loggedFrom?: number | null
+  /** What was changed for that one meal, in words. */
+  logNote?: string | null
+}
+
+/**
+ * Create an empty recipe. Returns the new food id.
+ *
+ * Indexed in `foods_fts` unless it is a snapshot — a frozen meal must never be
+ * findable in search, and never being indexed is a stronger guarantee than
+ * filtering it out of every query that reads the index.
+ */
 export function createRecipeFood(
   db: DatabaseSync,
   userId: number,
   name: string,
   servings = 1,
+  options: NewRecipeOptions = {},
 ): number {
+  const source = options.source ?? RECIPE_SOURCE
   const info = db
     .prepare(
-      `INSERT INTO foods (source, owner_user_id, name, is_liquid, recipe_servings)
-       VALUES (?, ?, ?, 0, ?)`,
+      `INSERT INTO foods
+         (source, owner_user_id, name, is_liquid, recipe_servings,
+          logged_from_food_id, recipe_log_note)
+       VALUES (?, ?, ?, 0, ?, ?, ?)`,
     )
-    .run(RECIPE_SOURCE, userId, name, servings)
+    .run(
+      source,
+      userId,
+      name,
+      servings,
+      options.loggedFrom ?? null,
+      options.logNote ?? null,
+    )
 
   const id = Number(info.lastInsertRowid)
-  db.prepare('INSERT INTO foods_fts(rowid, name, brand) VALUES (?, ?, NULL)').run(id, name)
+
+  if (source !== RECIPE_LOG_SOURCE) {
+    // A recipe with no family is its own founder. Done here rather than with a
+    // DEFAULT because the id doesn't exist until the row does.
+    const familyId = options.familyId === undefined ? id : options.familyId
+    db.prepare('UPDATE foods SET recipe_family_id = ? WHERE id = ?').run(familyId, id)
+    db.prepare('INSERT INTO foods_fts(rowid, name, brand) VALUES (?, ?, NULL)').run(id, name)
+  }
+
   return id
 }
 
@@ -360,26 +617,61 @@ export function recipeDetail(db: DatabaseSync, id: number, ownerId: number) {
   }
 }
 
+/** One ingredient row, as `cloneRecipe()` reads it off the source recipe. */
+interface SourceIngredient {
+  food_id: number | null
+  grams: number
+  serving_label: string | null
+  serving_count: number | null
+  raw_text: string | null
+  note: string | null
+  sort_order: number
+  owner_user_id: number | null
+  /** The ingredient food's own source — 'recipe' means copy it recursively. */
+  source: string | null
+}
+
+export interface CloneOptions {
+  /** Defaults to the source recipe's name, verbatim. */
+  name?: string
+  /**
+   * Which family the clone joins. Omitted means "found its own"; `null` means
+   * none at all, which is what a snapshot gets.
+   */
+  familyId?: number | null
+  /** `RECIPE_SOURCE`, or `RECIPE_LOG_SOURCE` for a frozen meal. */
+  source?: string
+  loggedFrom?: number | null
+  logNote?: string | null
+  /**
+   * Duplicate ingredient foods belonging to somebody else into `userId`'s own
+   * foods. True when copying across users, false within one account — where
+   * every ingredient is already yours and copying would just litter search.
+   */
+  localiseForeignFoods?: boolean
+  /**
+   * Foreign food id → the copy made of it, shared across a recursive copy so
+   * one dressing used twice is duplicated once.
+   */
+  localised?: Map<number, number>
+}
+
 /**
- * Copy someone else's recipe into `userId`'s own recipes.
+ * Duplicate a recipe — the food row and its ingredients — into `userId`'s.
  *
- * Used by both sharing routes — a friend's recipe and a public share link —
- * because "add this to my recipes" has to mean the same thing either way.
- *
- * The copy is **self-contained**. Ingredients that are Open Food Facts products
- * are shared rows and get referenced as they are, but an ingredient that is
- * somebody's *custom* food is copied too: pointing at a row you can't see would
- * give you a recipe that changes when they edit it, that vanishes from search,
- * and that pins their food row in place forever (`recipe_ingredients.food_id`
- * is ON DELETE RESTRICT). Copying is the only version of this that leaves both
- * people able to edit and delete their own things.
+ * Three callers with three different reasons, one body: copying a friend's
+ * recipe, saving a variant of your own, and freezing one at the moment it is
+ * logged. They differ only in what they pass, and keeping them on one
+ * implementation is what stops "a copy" and "a snapshot" drifting into
+ * carrying different subsets of the recipe.
  *
  * Returns the new recipe's food id.
  */
-export function copyRecipeInto(
+export function cloneRecipe(
   db: DatabaseSync,
   sourceRecipeId: number,
   userId: number,
+  options: CloneOptions = {},
 ): number {
   const source = db
     .prepare(
@@ -390,15 +682,13 @@ export function copyRecipeInto(
 
   if (!source) throw new Error(`No recipe with id ${sourceRecipeId}`)
 
-  const taken = (
-    db
-      .prepare('SELECT name FROM foods WHERE owner_user_id = ? AND source = ?')
-      .all(userId, RECIPE_SOURCE) as { name: string }[]
-  ).map((row) => row.name)
-
-  const name = uniqueCopyName(String(source.name), taken)
   const servings = Number(source.recipe_servings ?? 1) || 1
-  const newId = createRecipeFood(db, userId, name, servings)
+  const newId = createRecipeFood(db, userId, options.name ?? String(source.name), servings, {
+    source: options.source,
+    familyId: options.familyId,
+    loggedFrom: options.loggedFrom,
+    logNote: options.logNote,
+  })
 
   db.prepare(
     `UPDATE foods
@@ -420,25 +710,18 @@ export function copyRecipeInto(
     .prepare(
       `SELECT ri.food_id, ri.grams, ri.serving_label, ri.serving_count,
               ri.raw_text, ri.note, ri.sort_order,
-              f.owner_user_id
+              f.owner_user_id, f.source
        FROM recipe_ingredients ri
        LEFT JOIN foods f ON f.id = ri.food_id
        WHERE ri.recipe_food_id = ?
        ORDER BY ri.sort_order, ri.id`,
     )
-    .all(sourceRecipeId) as {
-      food_id: number | null
-      grams: number
-      serving_label: string | null
-      serving_count: number | null
-      raw_text: string | null
-      note: string | null
-      sort_order: number
-      owner_user_id: number | null
-    }[]
+    .all(sourceRecipeId) as SourceIngredient[]
 
-  // One copy per distinct foreign food, however many times the recipe uses it.
-  const localised = new Map<number, number>()
+  // One copy per distinct foreign food, however many times the recipe uses it —
+  // and shared with the recursion below, so a dressing used by two components
+  // of the same recipe is copied once, not twice.
+  const localised = options.localised ?? new Map<number, number>()
 
   const insert = db.prepare(
     `INSERT INTO recipe_ingredients
@@ -451,13 +734,23 @@ export function copyRecipeInto(
     let foodId = ingredient.food_id
     // Unmatched rows have nothing to localise — they are already just text.
     if (
-      foodId !== null
+      options.localiseForeignFoods
+      && foodId !== null
       && ingredient.owner_user_id !== null
       && ingredient.owner_user_id !== userId
     ) {
       let copy = localised.get(foodId)
       if (copy === undefined) {
-        copy = copyCustomFoodInto(db, foodId, userId)
+        // A nested recipe is copied *as a recipe*, recursively. Sending it
+        // through copyCustomFoodInto() would flatten it into a plain food with
+        // the right numbers, no ingredient list, and no way to tell it was ever
+        // a recipe — and it would then stop tracking the dressing entirely.
+        copy = ingredient.source === RECIPE_SOURCE
+          ? cloneRecipe(db, foodId, userId, {
+            localiseForeignFoods: true,
+            localised,
+          })
+          : copyCustomFoodInto(db, foodId, userId)
         localised.set(foodId, copy)
       }
       foodId = copy
@@ -478,8 +771,104 @@ export function copyRecipeInto(
     )
   }
 
+  // The children were cloned above, so they are already rolled up by the time
+  // this runs — which is what makes one pass enough here.
   recomputeRecipe(db, newId)
   return newId
+}
+
+/**
+ * Copy someone else's recipe into `userId`'s own recipes.
+ *
+ * Used by both sharing routes — a friend's recipe and a public share link —
+ * because "add this to my recipes" has to mean the same thing either way.
+ *
+ * The copy is **self-contained**. Ingredients that are Open Food Facts products
+ * are shared rows and get referenced as they are, but an ingredient that is
+ * somebody's *custom* food is copied too: pointing at a row you can't see would
+ * give you a recipe that changes when they edit it, that vanishes from search,
+ * and that pins their food row in place forever (`recipe_ingredients.food_id`
+ * is ON DELETE RESTRICT). Copying is the only version of this that leaves both
+ * people able to edit and delete their own things.
+ *
+ * The copy founds its **own** family. Whatever variants the original has are
+ * the other person's collection, not yours; you copied one recipe.
+ *
+ * Returns the new recipe's food id.
+ */
+export function copyRecipeInto(
+  db: DatabaseSync,
+  sourceRecipeId: number,
+  userId: number,
+): number {
+  const source = db
+    .prepare('SELECT name FROM foods WHERE id = ? AND source = ?')
+    .get(sourceRecipeId, RECIPE_SOURCE) as { name: string } | undefined
+
+  if (!source) throw new Error(`No recipe with id ${sourceRecipeId}`)
+
+  const taken = (
+    db
+      .prepare('SELECT name FROM foods WHERE owner_user_id = ? AND source = ?')
+      .all(userId, RECIPE_SOURCE) as { name: string }[]
+  ).map((row) => row.name)
+
+  return cloneRecipe(db, sourceRecipeId, userId, {
+    name: uniqueCopyName(String(source.name), taken),
+    localiseForeignFoods: true,
+  })
+}
+
+/**
+ * Freeze a recipe at the moment it is logged, and return the frozen food id.
+ *
+ * The diary entry points at this, not at the recipe, which is what makes
+ * "adding butter today changes what last Tuesday's bowl reports" stop being
+ * true. The clone carries the recipe's name verbatim so the diary reads the
+ * same as it always did; it is never indexed for search, never listed among
+ * the user's recipes, and never recomputed again.
+ *
+ * Ownership is checked here rather than trusted from the caller: this mints a
+ * row, and a recipe id guessed from another account must find nothing.
+ */
+export function snapshotRecipeForLog(
+  db: DatabaseSync,
+  recipeId: number,
+  userId: number,
+  logNote: string | null = null,
+): { id: number; servingGrams: number | null } {
+  const recipe = findRecipe(db, recipeId, userId)
+  if (!recipe) throw new Error(`No recipe with id ${recipeId} for user ${userId}`)
+
+  const id = cloneRecipe(db, recipeId, userId, {
+    source: RECIPE_LOG_SOURCE,
+    familyId: null,
+    loggedFrom: recipeId,
+    logNote,
+  })
+
+  const row = db.prepare('SELECT serving_grams FROM foods WHERE id = ?').get(id) as
+    | { serving_grams: number | null }
+    | undefined
+
+  return { id, servingGrams: row?.serving_grams ?? null }
+}
+
+/**
+ * Delete the frozen copy behind a diary entry.
+ *
+ * **Call this after the entry is gone, never before.** `diary_entries.food_id`
+ * is ON DELETE RESTRICT, so the other order fails the whole transaction.
+ *
+ * Ingredient rows and `food_servings` follow by cascade, and there is no FTS
+ * row to remove because a snapshot was never indexed. Scoped to the owner and
+ * to the frozen source, so this can be handed any food id and will refuse to
+ * touch a real recipe.
+ */
+export function deleteRecipeLog(db: DatabaseSync, foodId: number, userId: number): void {
+  db.prepare(
+    'DELETE FROM foods WHERE id = ? AND owner_user_id = ? AND source = ?',
+  ).run(foodId, userId, RECIPE_LOG_SOURCE)
 }
 
 /** Columns worth carrying onto a copied custom food. */

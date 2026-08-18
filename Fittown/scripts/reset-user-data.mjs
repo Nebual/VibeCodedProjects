@@ -42,13 +42,13 @@ db.exec('DELETE FROM diary_entries')
 // go with their recipe: recipe_food_id is ON DELETE CASCADE and foreign keys
 // are on above.
 const userFoodIds = db
-  .prepare("SELECT id FROM foods WHERE source IN ('custom', 'recipe')")
+  .prepare("SELECT id FROM foods WHERE source IN ('custom', 'recipe', 'recipe_log')")
   .all()
   .map((r) => r.id)
 const delFts = db.prepare('DELETE FROM foods_fts WHERE rowid = ?')
 for (const id of userFoodIds) delFts.run(id)
 
-db.exec("DELETE FROM foods WHERE source IN ('custom', 'recipe')")
+db.exec("DELETE FROM foods WHERE source IN ('custom', 'recipe', 'recipe_log')")
 db.exec('DELETE FROM water_entries')
 db.exec('DELETE FROM workout_entries')
 db.exec('DELETE FROM weight_entries')

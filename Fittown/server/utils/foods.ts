@@ -1,4 +1,6 @@
+import type { DatabaseSync } from 'node:sqlite'
 import { NUTRIENT_KEYS } from '#shared/nutrients'
+import { RECIPE_LOG_SOURCE } from '#shared/recipes'
 
 const FOOD_FIELDS = [
   'id', 'source', 'barcode', 'name', 'brand', 'quantity', 'categories',
@@ -8,6 +10,10 @@ const FOOD_FIELDS = [
   // the portion picker can all apply the "no yield, no gram portions" rule
   // without a second query. Null for everything that isn't a recipe.
   'recipe_servings', 'recipe_final_weight_g',
+  // A frozen meal carries where it came from and what was changed, so the
+  // diary can link back to the recipe and say "3 × egg instead of 4" without
+  // a second query. Null on everything else, which is almost every row.
+  'logged_from_food_id', 'recipe_log_note', 'recipe_family_id',
   ...NUTRIENT_KEYS,
 ]
 
@@ -83,4 +89,63 @@ export const SEARCH_SCAN_LIMIT = 600
 /** Unqualified column list, for selecting back out of a CTE. */
 export function foodColsBare(): string {
   return FOOD_FIELDS.join(', ')
+}
+
+/**
+ * Foods this user logs most, newest-first among equals.
+ *
+ * Lives here rather than in the route because of the join below, which is the
+ * one place in the app that has to see through a frozen meal to the recipe it
+ * came from — worth a test of its own, and a route handler can't be called
+ * from one.
+ *
+ * `logged` is the row the diary entry points at; `f` is what the user thinks
+ * they ate. For a plain food they are the same row. For a logged recipe they
+ * are not: thirty dinners are thirty snapshots, and grouping by the snapshot
+ * would offer thirty "eaten once" omelettes instead of one recipe eaten thirty
+ * times. Offering `f` back also means tapping it logs a *fresh* snapshot of the
+ * recipe as it stands today, rather than re-using a frozen one.
+ */
+export function listFrequentFoods(
+  db: DatabaseSync,
+  userId: number,
+  meal?: string | null,
+  limit = 40,
+  /**
+   * Food ids this screen may not offer — when picking an ingredient, the recipe
+   * itself and anything that already contains it. Frequent is the one list that
+   * would otherwise hand back a cycle, since it is built from what you eat
+   * rather than from what you searched for.
+   */
+  exclude: number[] = [],
+) {
+  const mealFilter = meal ? 'AND d.meal = ?' : ''
+  // Interpolated rather than bound: the list is ids this function derived, and
+  // node:sqlite has no array binding. Coerced to integers on the way in.
+  const excludeFilter = exclude.length
+    ? `AND f.id NOT IN (${exclude.map((id) => Number(id) || 0).join(',')})`
+    : ''
+  const params: unknown[] = [userId, RECIPE_LOG_SOURCE]
+  if (meal) params.push(meal)
+
+  return db
+    .prepare(
+      `SELECT ${foodCols()},
+              COUNT(*) AS times_logged,
+              MAX(d.created_at) AS last_logged,
+              d.grams AS last_grams,
+              d.serving_label AS last_serving_label,
+              d.serving_count AS last_serving_count
+       FROM diary_entries d
+       JOIN foods logged ON logged.id = d.food_id
+       JOIN foods f ON f.id = COALESCE(logged.logged_from_food_id, logged.id)
+       -- Only reachable once the recipe behind a snapshot has been deleted (the
+       -- pointer is ON DELETE SET NULL). There is nothing to offer then, so the
+       -- row drops out rather than resurfacing a meal that can't be logged.
+       WHERE d.user_id = ? AND f.source != ? ${mealFilter} ${excludeFilter}
+       GROUP BY f.id
+       ORDER BY times_logged DESC, last_logged DESC
+       LIMIT ${Number(limit) || 40}`,
+    )
+    .all(...params)
 }

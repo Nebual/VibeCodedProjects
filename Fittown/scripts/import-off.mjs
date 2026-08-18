@@ -214,9 +214,13 @@ db.exec('PRAGMA cache_size = -200000') // ~200 MB page cache
 
 // Ensure the schema exists when importing into a fresh database (i.e. before
 // the app has ever booted). Mirrors server/db/schema.ts.
-const { SCHEMA_SQL } = await import('../server/db/schema.ts').catch(() => ({}))
-if (SCHEMA_SQL) {
-  db.exec(SCHEMA_SQL)
+// Not just SCHEMA_SQL: that is all `CREATE TABLE IF NOT EXISTS`, so on a
+// database that already has the tables it adds nothing, and the recipe
+// re-roll at the end of this import reads columns a later release added.
+// `ensureSchema()` is what the app runs on boot — create *and* catch up.
+const { ensureSchema } = await import('../server/utils/db.ts').catch(() => ({}))
+if (ensureSchema) {
+  ensureSchema(db)
 } else {
   const hasFoods = db
     .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='foods'")
@@ -410,8 +414,10 @@ db.exec("INSERT INTO foods_fts(foods_fts) VALUES('rebuild')")
 // refreshed the nutrition of every food underneath them. Re-roll them now, or
 // last week's chili keeps last week's numbers.
 console.log('Recomputing recipes...')
-const { recomputeRecipe } = await import('../server/utils/recipes.ts')
-const recipeRows = db.prepare("SELECT id FROM foods WHERE source = 'recipe'").all()
+const { recomputeRecipe, recipesInDependencyOrder } = await import('../server/utils/recipes.ts')
+// Children before parents — a recipe can hold another recipe. Frozen meals
+// are not in this list, and must never be re-rolled.
+const recipeRows = recipesInDependencyOrder(db)
 db.exec('BEGIN')
 for (const recipe of recipeRows) recomputeRecipe(db, recipe.id)
 db.exec('COMMIT')

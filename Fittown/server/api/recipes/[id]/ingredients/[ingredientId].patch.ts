@@ -1,5 +1,9 @@
-import { RECIPE_SOURCE } from '#shared/recipes'
-import { findRecipe, recomputeRecipe } from '../../../../utils/recipes'
+import { RECIPE_LOG_SOURCE, RECIPE_SOURCE } from '#shared/recipes'
+import {
+  findRecipe,
+  nestingRefusal,
+  recomputeRecipeAndDependents,
+} from '../../../../utils/recipes'
 
 /**
  * Change how much of an ingredient the recipe uses — or, for a line the
@@ -59,12 +63,16 @@ export default defineEventHandler(async (event) => {
         .get(foodId, user.id) as { id: number; source: string } | undefined
 
       if (!food) throw createError({ statusCode: 404, statusMessage: 'Food not found' })
-      // Same rule as adding one: see the comment in ingredients.post.ts.
-      if (food.source === RECIPE_SOURCE) {
+      // Same rules as adding one: see the comments in ingredients.post.ts.
+      if (food.source === RECIPE_LOG_SOURCE) {
         throw createError({
           statusCode: 400,
-          statusMessage: 'A recipe can’t be an ingredient in another recipe yet',
+          statusMessage: 'That is a record of a meal already logged, not a recipe.',
         })
+      }
+      if (food.source === RECIPE_SOURCE) {
+        const refusal = nestingRefusal(db, recipeId, foodId)
+        if (refusal) throw createError({ statusCode: 400, statusMessage: refusal })
       }
 
       sets.push('food_id = ?')
@@ -82,7 +90,7 @@ export default defineEventHandler(async (event) => {
       throw createError({ statusCode: 404, statusMessage: 'Ingredient not found' })
     }
 
-    recomputeRecipe(db, recipeId)
+    recomputeRecipeAndDependents(db, recipeId)
     return { ok: true }
   })
 })

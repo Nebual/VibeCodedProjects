@@ -1,6 +1,6 @@
-import { findRecipe, recomputeRecipe } from '../../../../utils/recipes'
+import { findRecipe, recomputeRecipeAndDependents } from '../../../../utils/recipes'
 
-/** Take an ingredient out. The recipe re-totals immediately. */
+/** Take an ingredient out. The recipe — and anything built on it — re-totals. */
 export default defineEventHandler(async (event) => {
   const user = await requireUser(event)
   const recipeId = assertId(getRouterParam(event, 'id'), 'recipe id')
@@ -19,7 +19,7 @@ export default defineEventHandler(async (event) => {
       throw createError({ statusCode: 404, statusMessage: 'Ingredient not found' })
     }
 
-    recomputeRecipe(db, recipeId)
+    recomputeRecipeAndDependents(db, recipeId)
     return { ok: true }
   })
 })

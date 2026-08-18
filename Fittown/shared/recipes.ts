@@ -18,6 +18,30 @@ import { NUTRIENT_KEYS } from './nutrients.ts'
 export const RECIPE_SOURCE = 'recipe'
 
 /**
+ * `source` value for a recipe frozen at the moment it was logged.
+ *
+ * A logged recipe is cloned — the food row and its ingredients — and the diary
+ * entry points at the clone, so editing the live recipe afterwards cannot move
+ * a meal that has already been eaten. The clone is never indexed in `foods_fts`
+ * and never appears in the recipe list, which is why it needs its own `source`
+ * rather than a flag: every existing `source = 'recipe'` filter then excludes
+ * it without being touched.
+ *
+ * Nothing may recompute one. `recomputeRecipe()` writes its nutrition exactly
+ * once, when it is minted; after that it is a record, not a derivation.
+ */
+export const RECIPE_LOG_SOURCE = 'recipe_log'
+
+/**
+ * Both kinds of recipe row.
+ *
+ * Anything asking "does this behave like a recipe on screen?" — portion units,
+ * the gram rule, the editor link — means this set, not `RECIPE_SOURCE` alone.
+ * A frozen stew is still a stew nobody weighed.
+ */
+export const RECIPE_SOURCES: readonly string[] = [RECIPE_SOURCE, RECIPE_LOG_SOURCE]
+
+/**
  * Ceiling on a recipe's ingredient list.
  *
  * A runaway guard, not a rule — no mixture is worth a hundred lines. Lives here
@@ -26,6 +50,16 @@ export const RECIPE_SOURCE = 'recipe'
  * discovering it forty rows in.
  */
 export const MAX_INGREDIENTS = 100
+
+/**
+ * How deeply recipes may nest.
+ *
+ * A dressing inside a salad is two levels; that salad inside a meal-prep bowl
+ * is three. A runaway guard rather than a rule, like `MAX_INGREDIENTS` — it is
+ * what keeps the recompute cascade bounded and a recipe comprehensible on a
+ * phone screen.
+ */
+export const MAX_RECIPE_DEPTH = 3
 
 /**
  * Ceiling on the instructions text.
@@ -189,12 +223,58 @@ export function showsGramPortions(food: {
   source?: unknown
   recipe_final_weight_g?: unknown
 }): boolean {
-  if (food.source !== RECIPE_SOURCE) return true
+  if (!isRecipe(food)) return true
   const weight = food.recipe_final_weight_g
   return typeof weight === 'number' && Number.isFinite(weight) && weight > 0
 }
 
-/** Is this `foods` row a recipe? */
+/**
+ * How much of a nested recipe "1 serving" comes to, in grams.
+ *
+ * A nested ingredient stores resolved grams like every other, but those grams
+ * are a *proportion* of the child, not a weight anybody measured: add 20 g of
+ * oil to the dressing and "1 serving of dressing" is no longer 37 g. So the
+ * amount is re-resolved from the child's current row every time the parent is
+ * recomputed — see `recomputeRecipe()`.
+ *
+ * The two labels below are the only ones a recipe can offer: `recipeServingLabel()`
+ * picks between them, and `food_servings` carries the whole-recipe row. Any
+ * other label belongs to something else and is left exactly as it was, as is an
+ * amount that was entered in grams — a weight is not a proportion.
+ */
+export function nestedPortionGrams(
+  servingLabel: string | null,
+  servingCount: number | null,
+  child: { serving_grams?: unknown; recipe_servings?: unknown },
+): number | null {
+  if (!servingLabel || !servingCount || !(servingCount > 0)) return null
+
+  const serving = child.serving_grams
+  if (typeof serving !== 'number' || !Number.isFinite(serving) || serving <= 0) return null
+
+  if (servingLabel === SERVING_LABEL) return serving * servingCount
+
+  if (servingLabel === WHOLE_RECIPE_LABEL) {
+    const servings = child.recipe_servings
+    const count = typeof servings === 'number' && servings > 0 ? servings : 1
+    return serving * count * servingCount
+  }
+
+  return null
+}
+
+/**
+ * Is this `foods` row a recipe — live or frozen?
+ *
+ * Membership, not equality. A `recipe_log` row that failed this test would be
+ * treated as an ordinary food, and the diary would start quoting gram weights
+ * for a logged stew nobody ever weighed.
+ */
 export function isRecipe(food: { source?: unknown }): boolean {
-  return food.source === RECIPE_SOURCE
+  return typeof food.source === 'string' && RECIPE_SOURCES.includes(food.source)
+}
+
+/** Is this the frozen record of a meal, rather than a recipe you can edit? */
+export function isRecipeLog(food: { source?: unknown }): boolean {
+  return food.source === RECIPE_LOG_SOURCE
 }

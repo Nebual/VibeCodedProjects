@@ -3,11 +3,15 @@ import { countDiaryUses, countRecipeUses, findRecipe, unindexFood } from '../../
 /**
  * Delete a recipe.
  *
- * A logged recipe can't go: `diary_entries.food_id` is ON DELETE RESTRICT, and
- * that restriction is the app's integrity mechanism — there is no nutrient
- * snapshot on a diary entry, so removing the food would leave meals pointing at
- * nothing. Check first and say so plainly rather than surfacing a constraint
- * error the user can't act on.
+ * Logging a recipe now points the diary entry at a frozen copy, so a recipe you
+ * have eaten a hundred times has nothing referencing it and deletes cleanly —
+ * the meals survive, each holding the version it was logged with, and their
+ * `logged_from_food_id` goes null.
+ *
+ * The 409 below still stands, for entries logged *before* that change: those
+ * point straight at this row, `diary_entries.food_id` is ON DELETE RESTRICT,
+ * and there is no snapshot under them to survive on. Check first and say so
+ * plainly rather than surfacing a constraint error the user can't act on.
  */
 export default defineEventHandler(async (event) => {
   const user = await requireUser(event)

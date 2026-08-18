@@ -1,38 +1,29 @@
-import { foodCols } from '../../utils/foods'
+import { listFrequentFoods } from '../../utils/foods'
+import { ancestorIds } from '../../utils/recipes'
 
 /**
  * Foods the user logs most, newest-first among equals.
  *
  * This is the highest-value screen in a tracker: most people eat the same
  * thirty things, so surfacing them turns logging into two taps.
+ *
+ * The query lives in `server/utils/foods.ts` — it has to see through a frozen
+ * meal to the recipe it was logged from, which is worth a test.
  */
 export default defineEventHandler(async (event) => {
   const user = await requireUser(event)
-  const { meal } = getQuery(event)
+  const { meal, for_recipe: forRecipe } = getQuery(event)
+  const db = useDb()
 
   // When adding to a specific meal, bias towards what they usually eat then.
-  const mealFilter = typeof meal === 'string' && MEALS.includes(meal as Meal)
-    ? 'AND d.meal = ?'
-    : ''
-  const params: unknown[] = [user.id]
-  if (mealFilter) params.push(meal)
+  const forMeal = typeof meal === 'string' && MEALS.includes(meal as Meal) ? meal : null
 
-  const results = useDb()
-    .prepare(
-      `SELECT ${foodCols()},
-              COUNT(*) AS times_logged,
-              MAX(d.created_at) AS last_logged,
-              d.grams AS last_grams,
-              d.serving_label AS last_serving_label,
-              d.serving_count AS last_serving_count
-       FROM diary_entries d
-       JOIN foods f ON f.id = d.food_id
-       WHERE d.user_id = ? ${mealFilter}
-       GROUP BY f.id
-       ORDER BY times_logged DESC, last_logged DESC
-       LIMIT 40`,
-    )
-    .all(...params)
+  // Picking an ingredient: leave out the recipe itself and anything that
+  // already contains it, exactly as the search and the Recipes tab do.
+  const recipeId = Number(forRecipe)
+  const exclude = Number.isInteger(recipeId) && recipeId > 0
+    ? [recipeId, ...ancestorIds(db, recipeId)]
+    : []
 
-  return { results }
+  return { results: listFrequentFoods(db, user.id, forMeal, 40, exclude) }
 })

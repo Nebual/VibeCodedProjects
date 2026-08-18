@@ -384,9 +384,13 @@ const db = new DatabaseSync(dbFile)
 db.exec('PRAGMA journal_mode = WAL')
 db.exec('PRAGMA busy_timeout = 30000')
 
-const { SCHEMA_SQL } = await import('../server/db/schema.ts').catch(() => ({}))
-if (SCHEMA_SQL) {
-  db.exec(SCHEMA_SQL)
+// Not just SCHEMA_SQL: that is all `CREATE TABLE IF NOT EXISTS`, so on a
+// database that already has the tables it adds nothing, and the recipe
+// re-roll at the end of this import reads columns a later release added.
+// `ensureSchema()` is what the app runs on boot — create *and* catch up.
+const { ensureSchema } = await import('../server/utils/db.ts').catch(() => ({}))
+if (ensureSchema) {
+  ensureSchema(db)
 } else {
   const hasFoods = db
     .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='foods'")
@@ -489,8 +493,10 @@ console.log('Rebuilding full-text search index...')
 db.exec("INSERT INTO foods_fts(foods_fts) VALUES('rebuild')")
 
 console.log('Recomputing recipes...')
-const { recomputeRecipe } = await import('../server/utils/recipes.ts')
-const recipeRows = db.prepare("SELECT id FROM foods WHERE source = 'recipe'").all()
+const { recomputeRecipe, recipesInDependencyOrder } = await import('../server/utils/recipes.ts')
+// Children before parents — a recipe can hold another recipe. Frozen meals
+// are not in this list, and must never be re-rolled.
+const recipeRows = recipesInDependencyOrder(db)
 db.exec('BEGIN')
 for (const recipe of recipeRows) recomputeRecipe(db, recipe.id)
 db.exec('COMMIT')

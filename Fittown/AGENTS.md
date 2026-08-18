@@ -282,6 +282,120 @@ Three consequences worth knowing before you touch this code:
   `raw_text`, `note` and `recipe_instructions` across. A deep copy that dropped
   them hands someone a vinaigrette with no salt and nothing on screen to say so.
 
+**A logged recipe is frozen, and the frozen copy is a `foods` row too.**
+`POST /api/diary/entries` clones the recipe and its ingredients into a row with
+`source = 'recipe_log'` (`snapshotRecipeForLog()`), and the entry points at the
+clone — which is what stops adding butter today changing what last Tuesday's
+bowl reports. The clone is minted and rolled up exactly once; after that it is a
+record, not a derivation. Five rules hold it together, and four of them fail
+*silently*:
+
+- **`isRecipe()` and `showsGramPortions()` test membership of `RECIPE_SOURCES`,
+  never equality with `RECIPE_SOURCE`.** A frozen stew that fails those tests is
+  treated as an ordinary food, and the diary starts quoting a gram weight for a
+  dish nobody weighed — in the screen people read most often.
+- **A snapshot is never written to `foods_fts`** (`createRecipeFood()` skips the
+  index for it) and is refused as a direct log target. Never being indexed is a
+  stronger guarantee than filtering it out of the queries that read the index —
+  and note that `SELECT ... FROM foods_fts WHERE rowid = ?` answers yes for
+  every food whether indexed or not, because the table is external-content. Ask
+  with `MATCH`.
+- **`/api/foods/recent` groups through `logged_from_food_id`**
+  (`listFrequentFoods()` in `server/utils/foods.ts`). Grouping by `d.food_id`
+  fills Frequent with thirty "eaten once" omelettes and loses the recipe.
+- **Delete the diary entry *before* its snapshot.** `diary_entries.food_id` is
+  ON DELETE RESTRICT, so the other order fails the whole transaction.
+  `deleteRecipeLog()` is scoped to the owner and to `recipe_log`, so it refuses
+  anything else it is handed.
+- **`recompute-recipes.mjs` and `import-off.mjs` select `source = 'recipe'`
+  exactly.** Broadening either to `RECIPE_SOURCES` in a tidy-up would recompute
+  every frozen meal against today's food library, which is the one thing all of
+  this exists to prevent.
+
+Because nothing in the diary references the live recipe any more, **a recipe you
+have eaten can now be deleted** — the meals survive and their
+`logged_from_food_id` goes null. The 409 in `recipes/[id].delete.ts` still
+stands for entries logged *before* this change, which point straight at the
+recipe with no snapshot under them.
+
+**A maintenance script must call `ensureSchema()` before it reads anything.**
+The app applies `ADDED_COLUMNS` *lazily*, on the first request that touches the
+database, so a file that has not been served since the last release is missing
+whatever that release added — and a script that opens it directly dies partway
+through with a bare "no such column" (`f.logged_from_food_id`, from
+`foodCols()`, is how this was found). `ensureSchema()` in `server/utils/db.ts` is
+the same catch-up `useDb()` runs, factored out for exactly this: idempotent, a
+no-op on a current database, and it must be called **before**
+`PRAGMA foreign_keys = ON` because part of it rebuilds a table.
+`snapshot-diary-recipes.mjs`, `recompute-recipes.mjs` and both importers all go
+through it. `test/scripts-smoke.test.ts` runs the first two as real child
+processes against a deliberately old fixture, which is the only way to catch
+either this or the rule below.
+
+**An import reachable from `scripts/` needs its `.ts` extension — including
+transitively.** §5 says this about the scripts themselves; the trap is that it
+applies to every module they reach. `server/utils/db.ts` imported
+`'../db/schema'`, which Nuxt, Vite and Vitest all resolve happily and plain
+`node` does not, so the whole thing failed with ERR_MODULE_NOT_FOUND the first
+time a script imported it — while every test still passed. If you add an import
+to anything under `server/utils/`, give it the extension.
+
+**A new index over a newly-added column cannot go in `SCHEMA_SQL`.**
+`db.exec(SCHEMA_SQL)` runs *before* `migrate()`, so on a database that predates
+the column `CREATE INDEX ... ON foods(recipe_family_id)` fails with "no such
+column" — `IF NOT EXISTS` suppresses the index-already-exists error and nothing
+else — and takes the boot down for every existing user. `POST_MIGRATION_SQL` in
+`server/db/schema.ts` runs immediately after `migrate()` instead. `migrate()`
+now returns the set of columns it added, which is what lets a one-time backfill
+(`recipe_family_id = id`) run exactly once rather than re-scanning 200k rows on
+every boot.
+
+**A recipe may contain another recipe, and three rules keep that from going
+wrong.** The ingredient's `food_id` points at a `foods` row with
+`source = 'recipe'`; the arithmetic needs nothing new, because a recipe already
+carries real per-100 g values.
+
+- **Every mutation route ends in `recomputeRecipeAndDependents()`, never
+  `recomputeRecipe()`.** A parent caches the sum of its children, so editing the
+  dressing leaves the salad wrong until the salad is re-rolled. The order is by
+  **longest** distance from the recipe that changed: with a diamond (A holds B
+  and C, B holds C) a depth-first walk up from C can reach A before B, roll A up
+  from a stale B, and then skip A because it has been visited. **The walk stops
+  at `recipe_log`** — reaching a frozen meal would rewrite the history the
+  snapshot exists to protect.
+- **`recomputeRecipe()` re-resolves a nested recipe's *named* portions**
+  (`resolveNestedPortions()` + `nestedPortionGrams()`). "1 serving of the
+  dressing" is a claim about a share of something that can change underneath it,
+  so the grams are re-derived from the child's current row every time. An amount
+  entered *in grams* is left exactly as entered — somebody weighed that, and a
+  weight is not a proportion. This is the only write a recompute makes to
+  `recipe_ingredients`, and it is deliberate.
+- **`nestingRefusal()` is checked before an ingredient is stored, and again in
+  every picker.** It refuses a recipe that already contains the parent (walking
+  down with a recursive CTE, `UNION ALL` plus a depth guard so a cycle that
+  somehow exists answers instead of hanging) and a stack deeper than
+  `MAX_RECIPE_DEPTH`, measured **from both sides** — a two-level child dropped
+  into a two-level parent is too deep although neither half is. `for_recipe=<id>`
+  on `/api/foods/search`, `/api/foods/recent` and `/api/recipes` leaves the
+  recipe and its ancestors out of what is offered; Frequent is the one list that
+  would otherwise hand back a cycle, since it is built from what you ate rather
+  than what you searched for.
+
+Two consequences elsewhere. **The maintenance scripts must walk recipes
+children-first** — `recipesInDependencyOrder()`, used by `recompute-recipes.mjs`
+and both importers; `ORDER BY id` rolls a salad up from a stale dressing if the
+salad happens to have the lower id. And **`copyRecipeInto()` recurses**: a
+nested child sent through `copyCustomFoodInto()` would arrive as a flat
+`source = 'custom'` food with the right calories, no ingredient list, and no way
+to tell it had ever been a recipe. The `localised` map is shared through the
+recursion so one dressing used twice is copied once.
+
+**"No yield, no grams" now applies to ingredient rows too.** `portionText()`
+drops the gram gloss beside "1 × serving" of a recipe nobody weighed — the
+weight behind it is what went *into* the batch. It keeps the figure when there
+is no named portion to show instead, because then it is the only amount on the
+row.
+
 **Never guess which food a written ingredient is.** `matchIngredient()` in
 `server/utils/ingredientMatch.ts` is a set of conditions a candidate has to
 clear, not "best search result wins". A wrong match produces a
@@ -462,7 +576,8 @@ shared/          nutrients.ts  — nutrient catalogue used by both sides
 scripts/         import-off, fix-liquid-flags, reset-user-data,
                  recompute-recipes, e2e, screenshots
 test/            Vitest unit tests (pure logic + schema migration + the
-                 friendship gate, recipe copy and recipe import against a temp
+                 friendship gate, recipe copy, recipe import and the
+                 frozen-meal snapshot against a temp
                  database); test/fixtures/ holds a saved real recipe page
 ```
 
@@ -565,14 +680,20 @@ curl -sD - -o /dev/null -H 'Host: example.com' http://localhost:3000/auth/google
 - The URL importer has no JavaScript engine, so a recipe rendered client-side
   is invisible to it. The paste tab is the fallback, but nothing tells the user
   that in so many words.
-- Recipes can't contain other recipes (the ingredient's `source` must be `off`
-  or `custom`). The arithmetic would work; the missing part is recomputing
-  every recipe that depends on one you just edited, and detecting cycles.
-- Editing a recipe rewrites history — a diary entry holds no nutrient snapshot,
-  so adding butter today changes what last Tuesday's bowl reports. The editor
-  says so; snapshot columns are the fix if it ever bites.
-- A recipe that has been logged can't be deleted (409). Archiving would be
-  kinder, and would help custom foods too.
+- A nested recipe is re-totalled through its ancestors on every edit, which is
+  fine at household scale and is a full walk per mutation. If someone builds a
+  hundred-recipe web it wants a dirty flag instead.
+- A frozen meal keeps the name it was logged under, so renaming a recipe to fix
+  a typo leaves the old spelling in the diary. Defensible — it is a record —
+  but propagating a rename to that recipe's snapshots is a one-liner if it
+  grates.
+- A logged recipe's *breakdown* still reads its ingredient foods live, so
+  editing a custom food changes what a past meal is shown to have been made of.
+  The meal's own calorie figure is frozen and does not move. Same trade the app
+  has always made for a plain custom food.
+- A custom food that has been logged still can't be deleted (409). Archiving
+  would be kinder. Recipes no longer have this problem — they are frozen when
+  logged.
 - `data/` is gitignored — the 79 MB database does not travel via git. A fresh
   clone must run `node scripts/import-off.mjs` (~2 min).
 - `scripts/reset-user-data.mjs` strips personal data while keeping the food

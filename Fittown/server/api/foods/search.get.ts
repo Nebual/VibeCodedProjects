@@ -1,6 +1,7 @@
 import { prioritizeServingSize } from '#shared/foods'
-import { RECIPE_SOURCE } from '#shared/recipes'
+import { RECIPE_LOG_SOURCE, RECIPE_SOURCE } from '#shared/recipes'
 import { friendIds } from '../../utils/friends'
+import { ancestorIds } from '../../utils/recipes'
 import {
   buildFtsQuery,
   foodCols,
@@ -12,16 +13,10 @@ import {
 /** A friend's recipes are a courtesy, not the point of the screen. */
 const FRIEND_RESULT_LIMIT = 12
 
-/**
- * Query flags arrive as strings, and `'0'` is truthy in JavaScript.
- *
- * A caller passing `exclude_recipes=0` to mean "no, include them" would
- * otherwise get the opposite of what it asked for — the kind of bug that only
- * shows up as a section mysteriously never appearing.
- */
-function isTrue(value: unknown): boolean {
-  return value !== undefined && value !== null
-    && value !== '' && value !== '0' && value !== 'false' && value !== false
+/** The recipe this search is picking an ingredient for, if it is. */
+function forRecipeId(value: unknown): number | null {
+  const id = Number(value)
+  return Number.isInteger(id) && id > 0 ? id : null
 }
 
 /**
@@ -39,7 +34,7 @@ function isTrue(value: unknown): boolean {
  */
 export default defineEventHandler(async (event) => {
   const user = await requireUser(event)
-  const { q, limit, exclude_recipes: excludeRecipes } = getQuery(event)
+  const { q, limit, for_recipe: forRecipe } = getQuery(event)
 
   const text = typeof q === 'string' ? q.trim() : ''
   if (text.length < 2) return { results: [], friend_results: [] }
@@ -50,9 +45,14 @@ export default defineEventHandler(async (event) => {
   const want = Math.min(Number(limit) || 30, 60)
   const db = useDb()
 
-  // `exclude_recipes` means "I am picking an ingredient", which is the one
-  // context where neither your recipes nor a friend's can be the answer.
-  const pickingIngredient = isTrue(excludeRecipes)
+  // `for_recipe` means "I am picking an ingredient for this recipe". Recipes
+  // are legitimate ingredients now, so what has to come out of the results is
+  // narrower than it was: the recipe itself, and anything that already contains
+  // it — the two ways a pick would make a recipe that contains itself. Refusing
+  // here as well as at save time is the friendlier half of the same rule.
+  const recipeId = forRecipeId(forRecipe)
+  const pickingIngredient = recipeId !== null
+  const forbidden = recipeId === null ? [] : [recipeId, ...ancestorIds(db, recipeId)]
 
   const results = db
     .prepare(
@@ -62,7 +62,8 @@ export default defineEventHandler(async (event) => {
          JOIN foods f ON f.id = foods_fts.rowid
          WHERE foods_fts MATCH $match
            AND (f.owner_user_id IS NULL OR f.owner_user_id = $userId)
-           AND ($includeRecipes = 1 OR f.source != $recipeSource)
+           AND f.source != $logSource
+           ${forbidden.length ? `AND f.id NOT IN (${forbidden.join(',')})` : ''}
          ORDER BY score DESC
          LIMIT $scan
        ),
@@ -86,10 +87,9 @@ export default defineEventHandler(async (event) => {
       exact: text,
       scan: SEARCH_SCAN_LIMIT,
       limit: want,
-      // Recipes are ordinary foods everywhere except when picking an
-      // *ingredient*, where one recipe can't yet be nested inside another.
-      includeRecipes: pickingIngredient ? 0 : 1,
-      recipeSource: RECIPE_SOURCE,
+      // Belt and braces: a frozen meal is never indexed, so it cannot reach
+      // this query anyway — but it must never be offered as anything.
+      logSource: RECIPE_LOG_SOURCE,
     })
 
   return {
@@ -99,8 +99,9 @@ export default defineEventHandler(async (event) => {
     // `serving_grams` while it has no ingredients yet, which also makes it
     // unloggable, so there's nothing to prioritize it away from.
     results: prioritizeServingSize(results as { serving_grams: unknown }[]),
-    // Nothing to offer when we're picking an ingredient: a recipe can't be one,
-    // and a friend's recipe is still a recipe.
+    // Nothing to offer when we're picking an ingredient. A friend's recipe is
+    // not yours to nest — tapping one offers to copy it, and a copy is what you
+    // would have to put in your salad anyway.
     friend_results: pickingIngredient ? [] : searchFriendRecipes(db, user.id, match),
   }
 })

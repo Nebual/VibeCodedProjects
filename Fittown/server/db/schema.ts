@@ -112,6 +112,23 @@ CREATE TABLE IF NOT EXISTS foods (
   -- derives anything from it — it is prose for a human to read while cooking.
   recipe_instructions   TEXT,
 
+  -- Logging a recipe freezes it: the food row and its ingredients are cloned
+  -- with source = 'recipe_log', and the diary entry points at the clone. This
+  -- is the live recipe it was frozen from, kept so the diary can offer "open
+  -- the recipe" and so Frequent can group a month of dinners back into one.
+  -- ON DELETE SET NULL: deleting the recipe must leave the meals you ate,
+  -- merely unattributed.
+  logged_from_food_id   INTEGER REFERENCES foods(id) ON DELETE SET NULL,
+  -- What was changed for that one meal, in words — "3 × egg instead of 4".
+  -- Null when the recipe was logged as written.
+  recipe_log_note       TEXT,
+  -- Variants of one recipe share a family id, which is the id of whichever of
+  -- them was created first. A group key rather than a parent pointer: deleting
+  -- the original of three variants must not orphan the other two, and
+  -- \`WHERE recipe_family_id = ?\` needs no recursion. Null on a snapshot —
+  -- a frozen meal is not a member of anybody's collection.
+  recipe_family_id      INTEGER,
+
   -- Is this measured per 100ml rather than per 100g?
   is_liquid       INTEGER NOT NULL DEFAULT 0,
 
@@ -447,4 +464,25 @@ CREATE TABLE IF NOT EXISTS recipe_shares (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_recipe_shares_live
   ON recipe_shares(food_id) WHERE revoked_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_recipe_shares_owner ON recipe_shares(owner_user_id);
+`
+
+/**
+ * Indexes over columns that `ADDED_COLUMNS` may only just have created.
+ *
+ * These cannot live in SCHEMA_SQL. `db.exec(SCHEMA_SQL)` runs *before*
+ * `migrate()`, so on a database that predates the column,
+ * `CREATE INDEX ... ON foods(recipe_family_id)` fails with "no such column" —
+ * `IF NOT EXISTS` suppresses the index-already-exists error and nothing else —
+ * and takes the whole boot down with it. Run after `migrate()` instead; a
+ * fresh database reaches this by the same path, so there is still one source
+ * of truth for the shape.
+ */
+export const POST_MIGRATION_SQL = `
+-- Siblings of a recipe, for the variants strip.
+CREATE INDEX IF NOT EXISTS idx_foods_recipe_family
+  ON foods(recipe_family_id) WHERE recipe_family_id IS NOT NULL;
+-- Frequent groups a month of logged dinners back onto the recipe they came
+-- from, and deleting a recipe has to find its snapshots to null them out.
+CREATE INDEX IF NOT EXISTS idx_foods_logged_from
+  ON foods(logged_from_food_id) WHERE logged_from_food_id IS NOT NULL;
 `

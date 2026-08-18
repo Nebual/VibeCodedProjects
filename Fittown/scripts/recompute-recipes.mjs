@@ -16,18 +16,27 @@
  */
 import { DatabaseSync } from 'node:sqlite'
 import { resolve } from 'node:path'
-import { RECIPE_SOURCE } from '#shared/recipes'
-import { recomputeRecipe } from '../server/utils/recipes.ts'
+import { ensureSchema } from '../server/utils/db.ts'
+import { recipesInDependencyOrder, recomputeRecipe } from '../server/utils/recipes.ts'
 
 const dbFile = resolve(process.argv[2] || process.env.FITTOWN_DB_PATH || 'data/fittown.db')
 
 const db = new DatabaseSync(dbFile)
 db.exec('PRAGMA busy_timeout = 15000')
+
+// The app adds new columns lazily, on its first request, so a database that
+// hasn't been served since a schema change lacks them — and every query built
+// from `foodCols()` would fail with a bare "no such column". Same code path the
+// app uses, idempotent, and necessarily before foreign keys go on (part of it
+// rebuilds a table).
+ensureSchema(db)
 db.exec('PRAGMA foreign_keys = ON')
 
-const recipes = db
-  .prepare('SELECT id, name FROM foods WHERE source = ? ORDER BY id')
-  .all(RECIPE_SOURCE)
+// Children before parents: a recipe can hold another recipe, and rolling a
+// salad up before its dressing would cache the dressing's stale numbers.
+// Frozen meals (source = 'recipe_log') are deliberately not in this list —
+// re-rolling one would rewrite a meal somebody already ate.
+const recipes = recipesInDependencyOrder(db)
 
 if (recipes.length === 0) {
   console.log('No recipes to recompute.')

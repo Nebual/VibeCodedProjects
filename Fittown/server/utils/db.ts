@@ -1,7 +1,10 @@
 import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
-import { SCHEMA_SQL } from '../db/schema'
+// Explicit extension: the maintenance scripts in `scripts/` import this module
+// under plain `node`, which resolves ESM specifiers literally. Same reason
+// `server/utils/recipes.ts` writes `./foods.ts`.
+import { POST_MIGRATION_SQL, SCHEMA_SQL } from '../db/schema.ts'
 import { ACTIVITIES, metColumns } from '#shared/activities'
 
 let db: DatabaseSync | null = null
@@ -40,18 +43,51 @@ export function useDb(): DatabaseSync {
   db.exec('PRAGMA busy_timeout = 10000')
   db.exec('PRAGMA synchronous = NORMAL')
 
-  db.exec(SCHEMA_SQL)
-  // Deliberately before `PRAGMA foreign_keys = ON`: this one rebuilds a table,
-  // and the pragma cannot be changed inside a transaction. SQLite's default is
-  // off, and neither SCHEMA_SQL nor migrate() relies on enforcement, so the
-  // window is inert for everything except the rebuild itself.
-  rebuildRecipeIngredients(db)
-  migrate(db)
+  // Deliberately before `PRAGMA foreign_keys = ON`: this brings the schema up to
+  // date, and one part of that rebuilds a table — the pragma cannot be changed
+  // inside a transaction. SQLite's default is off, and nothing in here relies on
+  // enforcement, so the window is inert for everything except the rebuild.
+  ensureSchema(db)
   db.exec('PRAGMA foreign_keys = ON')
 
   syncExerciseLibrary(db)
 
   return db
+}
+
+/**
+ * Bring a database's shape up to date. Idempotent, and safe on a fresh file.
+ *
+ * Split out of `useDb()` so the maintenance scripts in `scripts/` can apply the
+ * same migration to a database they opened themselves. They can't call
+ * `useDb()` — it owns a singleton connection pointed at `FITTOWN_DB_PATH`, and
+ * a script takes its path as an argument — but they must not skip this either:
+ * a script that reads a column `ADDED_COLUMNS` hasn't added yet fails halfway
+ * through with a bare "no such column".
+ *
+ * **Call before `PRAGMA foreign_keys = ON`.** `rebuildRecipeIngredients()`
+ * cannot run with enforcement on.
+ *
+ * Returns the columns it added, for callers that want to say what changed.
+ */
+export function ensureSchema(conn: DatabaseSync): Set<string> {
+  conn.exec(SCHEMA_SQL)
+  rebuildRecipeIngredients(conn)
+  const added = migrate(conn)
+  // Indexes over columns migrate() may only just have added — see the comment
+  // on POST_MIGRATION_SQL. Running these inside SCHEMA_SQL would fail the boot
+  // of every database that predates the column.
+  conn.exec(POST_MIGRATION_SQL)
+
+  // Only when the column is new. Scoped to recipes, but an unconditional
+  // version would still scan 200k+ food rows on every boot to find nothing.
+  if (added.has('foods.recipe_family_id')) {
+    conn.prepare(
+      "UPDATE foods SET recipe_family_id = id WHERE source = 'recipe' AND recipe_family_id IS NULL",
+    ).run()
+  }
+
+  return added
 }
 
 /**
@@ -101,6 +137,12 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     recipe_final_weight_g: 'REAL',
     recipe_instructions: 'TEXT',
     sugar_alcohols_g: 'REAL',
+    // Frozen copies of a recipe, made when it is logged. A foreign key is
+    // legal on ADD COLUMN as long as the default is NULL, which it is.
+    logged_from_food_id: 'INTEGER REFERENCES foods(id) ON DELETE SET NULL',
+    recipe_log_note: 'TEXT',
+    // Backfilled to the row's own id for existing recipes in useDb(), once.
+    recipe_family_id: 'INTEGER',
   },
   // Also created by rebuildRecipeIngredients() below, which ships the whole new
   // shape at once. Listed here anyway: the rebuild is guarded on food_id's
@@ -187,7 +229,15 @@ function rebuildRecipeIngredients(conn: DatabaseSync) {
   }
 }
 
-function migrate(conn: DatabaseSync) {
+/**
+ * Add any missing columns, and report which ones were actually added.
+ *
+ * The return value is what lets a one-time backfill run exactly once: a caller
+ * can ask "was this column new this boot?" instead of re-scanning the table
+ * every time the app starts to discover there is nothing to do.
+ */
+function migrate(conn: DatabaseSync): Set<string> {
+  const added = new Set<string>()
   for (const [table, columns] of Object.entries(ADDED_COLUMNS)) {
     const existing = new Set(
       (conn.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[])
@@ -196,8 +246,10 @@ function migrate(conn: DatabaseSync) {
     for (const [name, declaration] of Object.entries(columns)) {
       if (existing.has(name)) continue
       conn.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${declaration}`)
+      added.add(`${table}.${name}`)
     }
   }
+  return added
 }
 
 /**

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { scaleNutrients } from '#shared/nutrients'
-import { isRecipe } from '#shared/recipes'
+import { isRecipe, isRecipeLog } from '#shared/recipes'
 import type { FoodRow, Goals, MealName } from '~/composables/useDiary'
 import { MEAL_LABELS, MEAL_ORDER } from '~/composables/useDiary'
 import type { FoodServing, PortionSelection } from '~/composables/usePortionOptions'
@@ -72,7 +72,20 @@ const preview = computed(() =>
   food.value ? scaleNutrients(food.value as Record<string, unknown>, picker.grams) : {},
 )
 
-const editingRecipe = computed(() => isRecipe(food.value ?? {}))
+/**
+ * Where "edit this recipe" goes, or null when there is nowhere to send them.
+ *
+ * A frozen meal is a recipe by every display rule but is not editable, and
+ * `/recipes/{id}` would 404 on it. Its own source recipe is the useful
+ * destination — unless that has since been deleted, in which case the frozen
+ * copy is all that is left of it and there is nothing to offer.
+ */
+const recipeLink = computed(() => {
+  const value = food.value
+  if (!value || !isRecipe(value) || recipeId.value) return null
+  if (!isRecipeLog(value)) return `/recipes/${value.id}`
+  return value.logged_from_food_id ? `/recipes/${value.logged_from_food_id}` : null
+})
 
 const saving = ref(false)
 const saveError = ref<string | null>(null)
@@ -186,8 +199,8 @@ const canRemove = computed(() => !!entryId.value || !!ingredientId.value)
     </section>
 
     <NuxtLink
-      v-if="editingRecipe && !recipeId"
-      :to="`/recipes/${food.id}`"
+      v-if="recipeLink"
+      :to="recipeLink"
       class="btn btn-ghost btn-sm gap-2 self-start"
     >
       <AppIcon name="pencil" class="w-4 h-4" />

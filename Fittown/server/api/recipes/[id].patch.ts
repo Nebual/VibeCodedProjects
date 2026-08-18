@@ -1,5 +1,5 @@
 import { MAX_INSTRUCTIONS_CHARS } from '#shared/recipes'
-import { findRecipe, recomputeRecipe, reindexFood } from '../../utils/recipes'
+import { findRecipe, recomputeRecipeAndDependents, reindexFood } from '../../utils/recipes'
 
 /**
  * Rename a recipe, change how many servings it makes, record its yield, or
@@ -72,7 +72,7 @@ export default defineEventHandler(async (event) => {
       )
     }
 
-    recomputeRecipe(db, id)
+    recomputeRecipeAndDependents(db, id)
     return { ok: true }
   })
 })

@@ -6,6 +6,7 @@ import {
   ingredientDetail,
   ingredientName,
   ingredientSearchTerm,
+  isNestedRecipe,
   isResolved,
 } from '~/utils/ingredients'
 import type { RecipeDetail, RecipeIngredient } from '~/composables/useRecipes'
@@ -383,13 +384,22 @@ const logLink = computed(
             class="flex items-center gap-3 px-4 py-2.5"
           >
             <div class="flex-1 min-w-0">
-              <NuxtLink
-                :to="editLink(ingredient)"
-                class="block truncate font-medium text-sm hover:underline"
-                :class="{ 'text-base-content/60 italic': !isResolved(ingredient) }"
-              >
-                {{ ingredientName(ingredient) }}
-              </NuxtLink>
+              <!-- The badge sits outside the truncating link on purpose:
+                   inside it, a long recipe name clips the badge away entirely,
+                   which is exactly when it is most needed. -->
+              <div class="flex items-center gap-1.5 min-w-0">
+                <NuxtLink
+                  :to="editLink(ingredient)"
+                  class="truncate font-medium text-sm hover:underline"
+                  :class="{ 'text-base-content/60 italic': !isResolved(ingredient) }"
+                >
+                  {{ ingredientName(ingredient) }}
+                </NuxtLink>
+                <span
+                  v-if="isNestedRecipe(ingredient)"
+                  class="badge badge-xs badge-primary shrink-0"
+                >recipe</span>
+              </div>
               <div class="text-xs truncate tabular" :class="isResolved(ingredient) ? 'text-base-content/60' : 'text-warning'">
                 <template v-if="isResolved(ingredient)">
                   {{ ingredientDetail(ingredient) || 'no amount given' }}
@@ -408,6 +418,18 @@ const logLink = computed(
             >
               {{ isResolved(ingredient) ? Math.round(ingredient.nutrients.kcal ?? 0) : '—' }}
             </div>
+
+            <!-- A nested recipe is a place you can go, not just an amount to
+                 change: half of what is in this dish is in there. -->
+            <NuxtLink
+              v-if="isNestedRecipe(ingredient)"
+              :to="`/recipes/${ingredient.food!.id}`"
+              class="btn btn-ghost btn-xs btn-square text-base-content/40 hover:text-primary"
+              :aria-label="`Open ${ingredientName(ingredient)}`"
+              title="Open this recipe"
+            >
+              <AppIcon name="chevronRight" class="w-4 h-4" />
+            </NuxtLink>
 
             <!-- Only for rows that already have a food. An unmatched row's own
                  name is the link to the same search, so a second one beside it
@@ -573,7 +595,8 @@ const logLink = computed(
         <NutrientBreakdown :totals="totals" />
 
         <p class="text-xs text-base-content/50">
-          Changes apply to meals already logged.
+          Meals you have already logged keep the version you logged them with —
+          editing this recipe only changes what you log from here on.
         </p>
       </div>
     </section>

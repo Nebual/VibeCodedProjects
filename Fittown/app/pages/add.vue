@@ -13,8 +13,9 @@ const date = computed(() => (route.query.d as string) || today.value)
 
 /**
  * Set when this screen is picking an *ingredient* for a recipe rather than
- * something to eat now. Same search, same scanner, only the destination and
- * the recipe list (a recipe can't yet contain another) differ.
+ * something to eat now. Same search, same scanner; only the destination differs,
+ * and the fact that this recipe and anything already containing it are left out
+ * of every list — the two picks that would make a recipe contain itself.
  */
 const recipeId = computed(() => (route.query.recipe ? Number(route.query.recipe) : null))
 
@@ -71,10 +72,11 @@ const { data: searchData, pending: searching } = await useFetch<{
   results: FoodRow[]
   friend_results: FriendRecipeResult[]
 }>('/api/foods/search', {
-  // `exclude_recipes` means "I'm picking an ingredient", which is the one case
-  // where a recipe — yours or a friend's — can't be the answer. Otherwise
-  // recipes come back and the sections below de-duplicate them by id.
-  query: { q: debounced, exclude_recipes: computed(() => (recipeId.value ? 1 : 0)) },
+  // `for_recipe` says "I'm picking an ingredient for this one", which lets the
+  // server leave out the recipe itself and anything that already contains it —
+  // the two picks that would make a recipe contain itself. Everything else,
+  // recipes included, is a legitimate ingredient.
+  query: { q: debounced, for_recipe: computed(() => recipeId.value ?? '') },
   watch: [debounced],
   // Normally nothing to search for until the user types. Arriving with a term
   // already in the box is the exception, and the watcher won't fire for a value
@@ -84,19 +86,22 @@ const { data: searchData, pending: searching } = await useFetch<{
 })
 
 const { data: mealRecentData } = await useFetch<{ results: FoodRow[] }>('/api/foods/recent', {
-  query: { meal },
+  query: { meal, for_recipe: computed(() => recipeId.value ?? '') },
   default: () => ({ results: [] }),
 })
 
 /** Everything recently logged, any meal — used to fill out "Frequent" below the meal-specific rows. */
 const { data: allRecentData } = await useFetch<{ results: FoodRow[] }>('/api/foods/recent', {
+  query: { for_recipe: computed(() => recipeId.value ?? '') },
   default: () => ({ results: [] }),
 })
 
 const { data: recipeData } = await useFetch<{ recipes: RecipeSummary[] }>('/api/recipes', {
   default: () => ({ recipes: [] }),
-  // Nothing to browse here when we're already inside a recipe.
-  immediate: !recipeId.value,
+  // Offered while picking an ingredient too — a dressing made in bulk is a
+  // perfectly good thing to put in a salad. The server leaves out the ones that
+  // would make a cycle.
+  query: { for_recipe: computed(() => recipeId.value ?? '') },
 })
 
 /** Case-insensitive match against name/brand; an empty query matches everything. */
@@ -240,7 +245,7 @@ function handleBack() {
         />
       </template>
 
-      <template v-if="!recipeId && recipes.length">
+      <template v-if="recipes.length">
         <header
           class="px-3 pt-2.5 pb-1 text-xs font-semibold text-base-content/50 uppercase tracking-wide"
           :class="{ 'border-t border-base-200 mt-1': frequent.length }"
@@ -251,6 +256,9 @@ function handleBack() {
           :foods="(recipes as unknown as FoodRow[])"
           :meal="meal"
           :date="date"
+          :recipe="recipeId"
+          :ingredient="ingredientId"
+          :extra="carriedPortion"
         />
       </template>
 

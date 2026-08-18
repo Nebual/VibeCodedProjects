@@ -3,6 +3,7 @@ import {
   ingredientDetail,
   ingredientName,
   ingredientSearchTerm,
+  isNestedRecipe,
   isResolved,
   portionText,
 } from '../app/utils/ingredients'
@@ -65,6 +66,40 @@ describe('the amount line', () => {
     expect(portionText(line)).toBe('0.25 × cup · 59 g')
   })
 
+  /**
+   * "No yield, no grams" reaches ingredient rows too, now that an ingredient
+   * can be another recipe. One serving of a dressing is exact; the weight
+   * behind it is what went into the batch, not what came out of it.
+   */
+  it('does not quote a weight for a nested recipe nobody weighed', () => {
+    const nested = make({
+      grams: 50,
+      serving_label: 'serving',
+      serving_count: 1,
+      food: food({ name: 'Salad Dressing', source: 'recipe', recipe_final_weight_g: null }),
+    })
+    expect(portionText(nested)).toBe('1 × serving')
+
+    // Weigh the finished batch and the weight becomes quotable again.
+    const weighed = make({
+      grams: 50,
+      serving_label: 'serving',
+      serving_count: 1,
+      food: food({ name: 'Salad Dressing', source: 'recipe', recipe_final_weight_g: 300 }),
+    })
+    expect(portionText(weighed)).toBe('1 × serving · 50 g')
+  })
+
+  it('still shows the weight when that is all there is to show', () => {
+    // Entered in grams against an unweighed recipe: the user typed 40 g, and
+    // printing nothing would lose the only amount on the row.
+    const grams = make({
+      grams: 40,
+      food: food({ name: 'Salad Dressing', source: 'recipe', recipe_final_weight_g: null }),
+    })
+    expect(portionText(grams)).toBe('40 g')
+  })
+
   it('says nothing at all for an ingredient with no amount', () => {
     // Not "0 g". The amount is unknown, not zero, and printing a measurement
     // nobody took is the same lie as `?? 0` on a nutrient.
@@ -107,5 +142,17 @@ describe('the search term for changing an ingredient', () => {
 
   it('returns something searchable for a descriptor-only line', () => {
     expect(ingredientSearchTerm(make({ raw_text: 'a lot of oregano' }))).toBe('oregano')
+  })
+})
+
+describe('spotting a recipe inside a recipe', () => {
+  it('knows one when the ingredient is a recipe', () => {
+    expect(isNestedRecipe(make({ food: food({ source: 'recipe' }) }))).toBe(true)
+    expect(isNestedRecipe(make({ food: food({ source: 'off' }) }))).toBe(false)
+    expect(isNestedRecipe(make({ food: food({ source: 'custom' }) }))).toBe(false)
+  })
+
+  it('is false for a line with no food at all', () => {
+    expect(isNestedRecipe(make({ raw_text: 'a lot of oregano' }))).toBe(false)
   })
 })

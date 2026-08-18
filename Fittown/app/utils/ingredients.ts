@@ -1,5 +1,6 @@
 import { parseIngredientLine } from '#shared/ingredientText'
 import { roundGrams } from '#shared/portions'
+import { isRecipe, showsGramPortions } from '#shared/recipes'
 import type { RecipeIngredient } from '~/composables/useRecipes'
 
 /**
@@ -16,6 +17,18 @@ export function ingredientName(ingredient: RecipeIngredient): string {
   return ingredient.food?.name ?? ingredient.raw_text ?? 'Unnamed ingredient'
 }
 
+/**
+ * Is this ingredient another recipe?
+ *
+ * Worth saying on screen: "1 × serving" of a recipe means a share of something
+ * that can change, where the same words against a jar of mustard mean a fixed
+ * amount. The badge is also the only clue that tapping through leads to another
+ * recipe rather than to a food.
+ */
+export function isNestedRecipe(ingredient: RecipeIngredient): boolean {
+  return ingredient.food !== null && isRecipe(ingredient.food)
+}
+
 /** Has this line been matched to a food we can get nutrition from? */
 export function isResolved(ingredient: RecipeIngredient): boolean {
   return ingredient.food !== null
@@ -27,15 +40,24 @@ export function isResolved(ingredient: RecipeIngredient): boolean {
  * A 0 g ingredient deliberately returns an empty string rather than "0 g": the
  * amount is unknown, not zero, and printing a measurement nobody took is the
  * same lie as `?? 0` on a nutrient.
+ *
+ * The gram gloss is dropped for a nested recipe nobody weighed — "1 × serving"
+ * of a dressing is exact, and the weight behind it is what went *into* the
+ * batch, not what came out of it. Same rule the portion picker and the diary
+ * follow (`showsGramPortions`); this is the third place it applies. It is only
+ * dropped when there is a named portion to show instead: with nothing else to
+ * print, the amount the user actually typed beats saying nothing.
  */
 export function portionText(ingredient: RecipeIngredient): string {
   const unit = ingredient.food?.is_liquid ? 'ml' : 'g'
   const amount = ingredient.grams > 0 ? `${roundGrams(ingredient.grams)} ${unit}` : ''
+  const named = ingredient.serving_label && ingredient.serving_count
 
-  if (ingredient.serving_label && ingredient.serving_count) {
-    const count = Number(ingredient.serving_count.toFixed(2))
+  if (named) {
+    const count = Number(ingredient.serving_count!.toFixed(2))
     const portion = `${count} × ${ingredient.serving_label}`
-    return amount ? `${portion} · ${amount}` : portion
+    const mayQuoteWeight = !ingredient.food || showsGramPortions(ingredient.food)
+    return amount && mayQuoteWeight ? `${portion} · ${amount}` : portion
   }
   return amount
 }

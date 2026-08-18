@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { baseUnit, roundGrams } from '#shared/portions'
 import { showsGramPortions } from '#shared/recipes'
-import { ingredientDetail, ingredientName, isResolved } from '~/utils/ingredients'
+import { ingredientDetail, ingredientName, isNestedRecipe, isResolved } from '~/utils/ingredients'
 import type { RecipeDetail } from '~/composables/useRecipes'
 
 /**
@@ -62,11 +62,20 @@ const view = ref<'serving' | 'whole'>('serving')
             class="flex items-center gap-3 px-4 py-2.5"
           >
             <div class="flex-1 min-w-0">
-              <div
-                class="truncate font-medium text-sm"
-                :class="{ 'text-base-content/60 italic': !isResolved(ingredient) }"
-              >
-                {{ ingredientName(ingredient) }}
+              <div class="flex items-center gap-1.5 min-w-0">
+                <div
+                  class="truncate font-medium text-sm"
+                  :class="{ 'text-base-content/60 italic': !isResolved(ingredient) }"
+                >
+                  {{ ingredientName(ingredient) }}
+                </div>
+                <!-- Outside the truncation, or a long name clips it. No link:
+                     the reader doesn't own the recipe inside it either, and
+                     there is nothing at that address for them. -->
+                <span
+                  v-if="isNestedRecipe(ingredient)"
+                  class="badge badge-xs badge-primary shrink-0"
+                >recipe</span>
               </div>
               <div class="text-xs text-base-content/60 truncate tabular">
                 {{ ingredientDetail(ingredient) || 'amount not given' }}

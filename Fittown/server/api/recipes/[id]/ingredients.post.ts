@@ -1,5 +1,10 @@
-import { MAX_INGREDIENTS, RECIPE_SOURCE } from '#shared/recipes'
-import { findRecipe, nextIngredientOrder, recomputeRecipe } from '../../../utils/recipes'
+import { MAX_INGREDIENTS, RECIPE_LOG_SOURCE, RECIPE_SOURCE } from '#shared/recipes'
+import {
+  findRecipe,
+  nestingRefusal,
+  nextIngredientOrder,
+  recomputeRecipeAndDependents,
+} from '../../../utils/recipes'
 
 /**
  * Add an ingredient.
@@ -51,15 +56,21 @@ export default defineEventHandler(async (event) => {
 
       if (!food) throw createError({ statusCode: 404, statusMessage: 'Food not found' })
 
-      // Recipes inside recipes are blocked for now. The arithmetic would work —
-      // a recipe carries real per-100g values — but editing an inner recipe would
-      // silently stale every recipe built on it, which needs a dependency walk
-      // and cycle detection this app doesn't have yet.
-      if (food.source === RECIPE_SOURCE) {
+      // A frozen meal is a record of something eaten, not a component.
+      if (food.source === RECIPE_LOG_SOURCE) {
         throw createError({
           statusCode: 400,
-          statusMessage: 'A recipe can’t be an ingredient in another recipe yet',
+          statusMessage: 'That is a record of a meal already logged, not a recipe.',
         })
+      }
+
+      // A recipe inside a recipe is allowed, within two limits: it must not
+      // already contain this one, and the stack must not get too deep. Both are
+      // checked here rather than left to the rollup, which would recurse for
+      // ever on a cycle instead of refusing one.
+      if (food.source === RECIPE_SOURCE) {
+        const refusal = nestingRefusal(db, recipeId, foodId)
+        if (refusal) throw createError({ statusCode: 400, statusMessage: refusal })
       }
     }
 
@@ -91,7 +102,7 @@ export default defineEventHandler(async (event) => {
         nextIngredientOrder(db, recipeId),
       )
 
-    recomputeRecipe(db, recipeId)
+    recomputeRecipeAndDependents(db, recipeId)
     return { id: Number(info.lastInsertRowid) }
   })
 })

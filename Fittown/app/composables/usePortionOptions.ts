@@ -4,6 +4,7 @@ import {
   defaultUnitKey,
   portionUnits,
   roundGrams,
+  VOLUME_UNITS,
   type MeasurementSystem,
 } from '#shared/portions'
 import { showsGramPortions } from '#shared/recipes'
@@ -46,6 +47,19 @@ export interface PortionSelection {
  * does — "5.3 ONZ (150 g)" — and appending our own would give "(150 g) (150 g)".
  */
 const STATES_SIZE = /\d\s*(g|ml|kg|l)\b/i
+
+/** Does a serving already on the list state its own cup size, e.g. "1 cup" or "0.5 cup chopped"? */
+const STATES_CUP = /\bcups?\b/i
+
+/**
+ * A solid food has no cup of its own — a cup of flour and a cup of rice aren't
+ * the same weight — but a cup is still how most people measure by hand, and
+ * making everyone reach for a scale instead is worse than an estimate. Falls
+ * back to the same 1 g-per-ml assumption the recipe-line parser uses for a
+ * volume with no stated density (`RECIPE_UNITS` in `shared/portions.ts`), and
+ * only when the food doesn't already define a cup-sized serving of its own.
+ */
+const FALLBACK_CUP = VOLUME_UNITS.find((u) => u.key === 'cup')!
 
 export function usePortionOptions(
   food: Ref<FoodRow | undefined | null>,
@@ -94,6 +108,11 @@ export function usePortionOptions(
           size: u.size,
           kind: u.size === 1 ? 'base' : 'unit',
         })
+      }
+      // Liquids already got a cup above, from VOLUME_UNITS. Solids don't — add
+      // the estimate, unless a serving already on the list states its own.
+      if (!isLiquid.value && !list.some((o) => o.kind === 'serving' && STATES_CUP.test(o.label))) {
+        list.push({ key: 'u:cup', label: FALLBACK_CUP.label, size: FALLBACK_CUP.size, kind: 'unit' })
       }
     }
     return list

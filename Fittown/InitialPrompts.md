@@ -66,3 +66,16 @@ Lets add a 12oz / 350ml button to the add Water options.
 
 Is there a better reference for default recommended water intake? Should it be based on gender/weight/activity level? Lets research it and then add it to the Calculate Calories button in settings, and also make that button Primary if the amount of calories are still set at the initial.
 
+Add 'x' button to clear the food search bar.
+A user made a recipe containing several items, one clearly had carbs, but the overall recipe shows 'Carbs: not recorded'. How might that happen? Was that because of a null in one of the ingredients?
+Barcode scan isn't working in mobile firefox either - lets move to a camera (which'll probably need to ask permission)
+
+I have a qwen3-VL model running in llama-server at 192.168.0.162:8191 (relative to this dev machine) that I use for OCR, can we use that to scan Recipes? It can probably feed into the existing recipe import flow. In production, it'll be at localhost:8191
+
+Plan recipe improvements:
+- changing a recipe should not affect previously logged uses of it
+- it needs to be easier to make quick adjustments of recipes, for example a (4 eggs, 35g cheddar, 10g butter) omelette swapping to 3 eggs. I think it should be possible to make that adjustment as a one-off for just today, or to offer a button to Save it as a variant.
+- variants of a recipe are linked together, so when viewing 1 you can navigate to another
+- a recipe can have 'optional' ingredients, like suggesting 50g of bacon on top. It should be easy to toggle optionals in the recipe, where if off, it doesn't appear in the logged use in the diary. Choosing to skip an ingredient once in this way, is separate from removing it from the recipe permanently.
+- allow reordering ingredients, so we can put Almond Flour next to regular Flour as an optional substitution
+- Lets also allow recipes to include other recipes, so if I make a Salad Dressing recipe in bulk (6 servings) I can add 1 serving of it to my Salad recipe.

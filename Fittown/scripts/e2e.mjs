@@ -593,19 +593,230 @@ await step('renaming a recipe re-indexes it for search', async () => {
   }
 })
 
-await step('a logged recipe refuses to be deleted', async () => {
-  // The refusal is the point, and the browser logs the 409 as a console error.
-  expectedConsoleErrors.push(/409/)
+/** A named entry in one of today's meals, and the calorie figure on it. */
+async function loggedRow(mealLabel, name) {
+  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' })
+  await page.waitForTimeout(900)
+  const row = page.locator(`section:has(h2:text("${mealLabel}")) li`, { hasText: name })
+  if ((await row.count()) === 0) {
+    throw new Error(
+      `"${name}" missing from ${mealLabel}: ${await page.locator(`section:has(h2:text("${mealLabel}"))`).innerText()}`,
+    )
+  }
+  const kcal = Number((await row.first().locator('div.tabular').first().innerText()).trim())
+  if (!Number.isFinite(kcal) || kcal <= 0) {
+    throw new Error(`could not read the entry's calories: ${await row.first().innerText()}`)
+  }
+  return kcal
+}
 
-  await page.goto(recipeUrl, { waitUntil: 'networkidle' })
+/** Set the recipe's stated yield and wait for the save to land. */
+async function setFinalWeight(url, grams) {
+  await page.goto(url, { waitUntil: 'networkidle' })
+  await page.waitForTimeout(700)
+  await page.locator('label:has-text("Final weight") input[type="number"]').fill(String(grams))
+  await page.locator('label:has-text("Final weight") input[type="number"]').blur()
+  await page.waitForTimeout(1400)
+}
+
+await step('editing a recipe leaves meals already logged alone', async () => {
+  // Matched on the name it was logged under. The recipe was renamed a step ago
+  // and the frozen copy behind the entry deliberately keeps the old name — the
+  // diary is a record of the meal, not a live view of the recipe.
+  const before = await loggedRow('Dinner', recipeName)
+
+  // Doubling the stated yield halves the recipe's per-100 g figures, which is
+  // the most direct way to move what a serving contains. Before logged meals
+  // were frozen this halved the diary entry too — retroactively, silently, and
+  // for every meal ever logged from the recipe.
+  await setFinalWeight(recipeUrl, 800)
+  const doubled = await loggedRow('Dinner', recipeName)
+  if (doubled !== before) {
+    throw new Error(`editing the recipe moved a meal already logged: ${before} kcal became ${doubled}`)
+  }
+
+  // Put it back, so the steps after this one find the recipe as they expect —
+  // and so the entry is proved unmoved by an edit in either direction.
+  await setFinalWeight(recipeUrl, 400)
+  const restored = await loggedRow('Dinner', recipeName)
+  if (restored !== before) {
+    throw new Error(`restoring the yield moved the logged meal: ${before} kcal became ${restored}`)
+  }
+})
+
+await step('a recipe that has been eaten can be deleted, and the meal survives', async () => {
+  // Its own recipe, not the one the later sharing steps rely on: this step ends
+  // by deleting it, and a suite that quietly removes a fixture other steps need
+  // fails somewhere far away from the cause.
+  const name = `E2E Deletable ${Date.now()}`
+  await page.goto(`${BASE}/recipes`, { waitUntil: 'networkidle' })
+  await page.getByPlaceholder('Grandma').fill(name)
+  await page.getByRole('button', { name: /^Create$/ }).click()
+  await page.waitForURL(/\/recipes\/\d+/, { timeout: 15000 })
+  await page.waitForTimeout(600)
+  const url = page.url()
+
+  await page.getByRole('link', { name: /Add ingredient/i }).click()
+  await page.waitForLoadState('networkidle')
+  await page.getByPlaceholder('Search foods').fill('chicken breast')
+  await page.waitForTimeout(1200)
+  await page.locator('a[href^="/food/"]').first().click()
+  await page.waitForLoadState('networkidle')
+  await page.waitForTimeout(600)
+  await page.locator('label:has-text("Portion") select').selectOption({ label: 'g' })
+  await page.locator('label:has-text("Amount") input').fill('150')
+  await page.getByRole('button', { name: /Add to recipe/i }).click()
+  await page.waitForURL(/\/recipes\/\d+/, { timeout: 15000 })
+  await page.waitForTimeout(800)
+
+  await page.goto(`${url.replace('/recipes/', '/food/')}?meal=lunch`, { waitUntil: 'networkidle' })
+  await page.waitForTimeout(700)
+  await page.getByRole('button', { name: /Add to Lunch/i }).click()
+  await page.waitForURL(/\/\?d=/, { timeout: 15000 })
+  const before = await loggedRow('Lunch', name)
+
+  await page.goto(url, { waitUntil: 'networkidle' })
   await page.waitForTimeout(600)
   await page.locator('button[aria-label="Delete recipe"]').click()
   await page.getByRole('button', { name: /Delete for good/i }).click()
+  await page.waitForURL(/\/recipes\/?$/, { timeout: 15000 })
+  await page.waitForTimeout(800)
+
+  const list = await page.locator('main').innerText()
+  if (list.includes(name)) {
+    throw new Error(`the recipe is still in the list after deleting it: ${list.slice(0, 400)}`)
+  }
+
+  // The meal is still there, still worth what it was worth. Nothing pointed at
+  // the recipe — the frozen copy behind the entry is the whole record.
+  const after = await loggedRow('Lunch', name)
+  if (after !== before) {
+    throw new Error(`deleting the recipe changed the meal: ${before} kcal became ${after}`)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Recipes inside recipes.
+//
+// The arithmetic is covered exhaustively by test/recipe-nesting-db.test.ts.
+// What only a running app can show is that a recipe is *offered* as an
+// ingredient, that picking one lands on its own servings rather than a weight
+// nobody measured, and that the picker refuses to offer a choice that would
+// make a recipe contain itself.
+// ---------------------------------------------------------------------------
+
+const dressingName = `E2E Dressing ${Date.now()}`
+const saladName = `E2E Salad ${Date.now()}`
+let dressingUrl = null
+let saladUrl = null
+
+/** Create a recipe through the UI and return its URL. */
+async function createRecipe(name) {
+  await page.goto(`${BASE}/recipes`, { waitUntil: 'networkidle' })
+  await page.getByPlaceholder('Grandma').fill(name)
+  await page.getByRole('button', { name: /^Create$/ }).click()
+  await page.waitForURL(/\/recipes\/\d+/, { timeout: 15000 })
+  await page.waitForTimeout(600)
+  return page.url()
+}
+
+/** Add `query`'s first search hit to the open recipe, in grams. */
+async function addIngredientGrams(recipeUrlToUse, query, grams) {
+  await page.goto(`${recipeUrlToUse.replace('/recipes/', '/add?recipe=')}`, {
+    waitUntil: 'networkidle',
+  })
+  await page.getByPlaceholder('Search foods').fill(query)
+  await page.waitForTimeout(1400)
+  await page.locator('a[href^="/food/"]').first().click()
+  await page.waitForLoadState('networkidle')
+  await page.waitForTimeout(600)
+  await page.locator('label:has-text("Portion") select').selectOption({ label: 'g' })
+  await page.locator('label:has-text("Amount") input').fill(String(grams))
+  await page.getByRole('button', { name: /Add to recipe/i }).click()
+  await page.waitForURL(/\/recipes\/\d+/, { timeout: 15000 })
+  await page.waitForTimeout(800)
+}
+
+await step('a recipe made in bulk becomes an ingredient of another', async () => {
+  dressingUrl = await createRecipe(dressingName)
+  await page.goto(dressingUrl, { waitUntil: 'networkidle' })
+  await page.locator('label:has-text("Servings") input').fill('6')
+  await page.locator('label:has-text("Servings") input').blur()
   await page.waitForTimeout(1200)
+  await addIngredientGrams(dressingUrl, 'olive oil', 150)
+
+  saladUrl = await createRecipe(saladName)
+  await addIngredientGrams(saladUrl, 'lettuce', 300)
+
+  // The whole point: a recipe turns up in the ingredient picker now.
+  await page.goto(`${saladUrl.replace('/recipes/', '/add?recipe=')}`, { waitUntil: 'networkidle' })
+  await page.getByPlaceholder('Search foods').fill(dressingName)
+  await page.waitForTimeout(1400)
+  const hit = page.locator(`a[href^="/food/"]:has-text("${dressingName}")`).first()
+  if ((await hit.count()) === 0) {
+    throw new Error(
+      `the dressing was not offered as an ingredient: ${(await page.locator('main').innerText()).slice(0, 500)}`,
+    )
+  }
+  await hit.click()
+  await page.waitForLoadState('networkidle')
+  await page.waitForTimeout(700)
+
+  // Measured in its own servings: nobody weighed the finished dressing, so
+  // grams are not on offer for it here any more than they are in the diary.
+  const options = await page.locator('label:has-text("Portion") select option').allInnerTexts()
+  if (options.some((o) => /^g$/.test(o.trim()))) {
+    throw new Error(`grams offered for an unweighed recipe: ${options}`)
+  }
+  await page.getByRole('button', { name: /Add to recipe/i }).click()
+  await page.waitForURL(/\/recipes\/\d+/, { timeout: 15000 })
+  await page.waitForTimeout(900)
 
   const text = await page.locator('main').innerText()
-  if (!/Logged 1 time/.test(text)) {
-    throw new Error(`expected a refusal naming the diary entries: ${text.slice(0, 400)}`)
+  if (!text.includes(dressingName)) {
+    throw new Error(`the dressing is not on the salad: ${text.slice(0, 500)}`)
+  }
+  if (!/1 × serving/.test(text)) {
+    throw new Error(`the nested amount should read as one serving: ${text.slice(0, 500)}`)
+  }
+})
+
+await step('editing the inner recipe re-totals the outer one', async () => {
+  const saladKcal = async () => {
+    await page.goto(saladUrl, { waitUntil: 'networkidle' })
+    await page.waitForTimeout(900)
+    const heading = await page.locator('section:has(h2:text("Nutrition"))').innerText()
+    const kcal = Number(heading.match(/(\d[\d,]*)\s*kcal/)?.[1]?.replace(/,/g, ''))
+    if (!Number.isFinite(kcal)) throw new Error(`could not read the salad's calories: ${heading}`)
+    return kcal
+  }
+
+  const before = await saladKcal()
+
+  // Twice the oil in the dressing. The salad caches the dressing's numbers, so
+  // without the dependency cascade it keeps the old ones and looks fine.
+  await addIngredientGrams(dressingUrl, 'olive oil', 150)
+
+  const after = await saladKcal()
+  if (after <= before) {
+    throw new Error(`the salad did not follow the dressing: ${before} kcal then ${after}`)
+  }
+})
+
+await step('the picker won’t offer a choice that makes a recipe contain itself', async () => {
+  await page.goto(`${dressingUrl.replace('/recipes/', '/add?recipe=')}`, {
+    waitUntil: 'networkidle',
+  })
+  await page.getByPlaceholder('Search foods').fill(saladName)
+  await page.waitForTimeout(1400)
+
+  // The salad already holds this dressing, so it can't be put inside it.
+  if ((await page.locator(`a[href^="/food/"]:has-text("${saladName}")`).count()) > 0) {
+    throw new Error('the picker offered a recipe that already contains this one')
+  }
+  // And the recipe itself is never on its own ingredient list.
+  if ((await page.locator(`a[href^="/food/"]:has-text("${dressingName}")`).count()) > 0) {
+    throw new Error('the picker offered the recipe as an ingredient of itself')
   }
 })
 
@@ -783,9 +994,15 @@ await step('a matched ingredient can be swapped for a different food', async () 
 
   // The amount came along. Swapping the food is a correction to *what* it is,
   // and making the user retype 200 g would say the amount was wrong too.
-  const carried = await page.locator('label:has-text("Amount") input').inputValue()
-  if (Number(carried) !== 200) {
-    throw new Error(`the existing amount was not carried over: ${JSON.stringify(carried)}`)
+  //
+  // Asserted on the resolved weight rather than the number in the Amount box:
+  // the picker re-expresses a carried weight in the new food's own serving
+  // where it has one ("4.348 × 1 portion (46 g)"), so the box legitimately
+  // reads something other than 200 while the portion is still 200 g.
+  const logging = await page.locator('p:has-text("Logging")').first().innerText()
+  const carried = Number(logging.match(/Logging\s+([\d.]+)/)?.[1])
+  if (Math.round(carried) !== 200) {
+    throw new Error(`the existing amount was not carried over: ${JSON.stringify(logging)}`)
   }
 
   await page.getByRole('button', { name: /Save ingredient/i }).click()
