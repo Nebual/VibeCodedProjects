@@ -12,6 +12,10 @@ const newName = ref('')
 const creating = ref(false)
 const error = ref<string | null>(null)
 
+/** Set server-side from NUXT_RECIPE_OCR_BASE_URL; empty hides the Scan button entirely. */
+const { public: publicConfig } = useRuntimeConfig()
+const photoImportEnabled = computed(() => Boolean(publicConfig.recipeOcrEnabled))
+
 /**
  * Create the recipe before the editor opens, rather than holding a draft in the
  * client: adding an ingredient means a round trip through the food search, and
@@ -43,7 +47,28 @@ async function create() {
     </header>
 
     <section class="card bg-base-100 shadow-sm">
-      <div class="card-body p-4 gap-2">
+      <div class="card-body p-4 gap-3">
+        <div class="flex gap-2">
+          <NuxtLink
+            v-if="photoImportEnabled"
+            to="/recipes/import?tab=photo"
+            class="btn btn-outline btn-sm flex-1 gap-1.5"
+          >
+            <AppIcon name="camera" class="w-4 h-4" />
+            Scan
+          </NuxtLink>
+          <NuxtLink to="/recipes/import?tab=url" class="btn btn-outline btn-sm flex-1 gap-1.5">
+            <AppIcon name="link" class="w-4 h-4" />
+            Link
+          </NuxtLink>
+          <NuxtLink to="/recipes/import?tab=paste" class="btn btn-outline btn-sm flex-1 gap-1.5">
+            <AppIcon name="clipboard" class="w-4 h-4" />
+            Paste
+          </NuxtLink>
+        </div>
+
+        <div class="divider -mt-1 -mb-3 text-xs text-base-content/40">or start from scratch</div>
+
         <label class="form-control">
           <span class="label-text text-xs mb-1">New recipe</span>
           <div class="flex gap-2">
@@ -66,11 +91,6 @@ async function create() {
           </div>
         </label>
         <p v-if="error" class="text-xs text-error">{{ error }}</p>
-
-        <NuxtLink to="/recipes/import" class="btn btn-ghost btn-sm justify-start gap-2 -mx-1 text-primary">
-          <AppIcon name="link" class="w-4 h-4" />
-          Import from a list or a link
-        </NuxtLink>
       </div>
     </section>
 

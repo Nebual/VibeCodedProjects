@@ -27,7 +27,7 @@ const sizePresets = computed(() =>
 /** A can/bottle — common enough to offer in both units at once, rather than
  * switching with the metric/imperial toggle like the sizes above. Sits
  * between the first two sizes, closest to where its own volume falls. */
-const CAN_PRESET = { label: '12oz / 350ml', ml: 350 }
+const CAN_PRESET = { label: '350ml', ml: 350 }
 
 const presets = computed(() => {
   const [first, ...rest] = sizePresets.value
@@ -78,7 +78,7 @@ const glasses = computed(() => {
         <button
           v-for="p in presets"
           :key="p.label"
-          class="btn btn-sm btn-outline btn-info flex-1"
+          class="btn btn-sm btn-outline btn-info flex-1 px-1"
           @click="emit('add', p.ml)"
         >
           +{{ p.label }}

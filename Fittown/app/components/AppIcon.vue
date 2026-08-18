@@ -46,6 +46,7 @@ const paths: Record<string, string> = {
   home: 'M3 10.5 12 3l9 7.5M5.5 9.2V21h13V9.2M10 21v-6h4v6',
   briefcase: 'M3 8.5h18V20H3zM8.5 8.5V5.5a1 1 0 0 1 1-1h5a1 1 0 0 1 1 1v3M3 13h18',
   camera: 'M4 8h3l1.5-2.5h7L17 8h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1ZM12 18a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z',
+  clipboard: 'M9 4h6a1 1 0 0 1 1 1v1h1a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h1V5a1 1 0 0 1 1-1ZM9 9h6M8.5 12.5h7M8.5 16h7',
 }
 
 const d = computed(() => paths[props.name] ?? paths.plus!)

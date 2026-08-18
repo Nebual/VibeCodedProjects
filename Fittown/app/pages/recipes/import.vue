@@ -17,14 +17,24 @@ import { MAX_INGREDIENTS } from '#shared/recipes'
 useHead({ title: 'Import a recipe · Fittown' })
 
 const router = useRouter()
+const route = useRoute()
 
-const tab = ref<'paste' | 'url' | 'photo'>('paste')
 const busy = ref(false)
 const error = ref<string | null>(null)
 
 /** Set server-side from NUXT_RECIPE_OCR_BASE_URL; empty hides the photo tab entirely. */
 const { public: publicConfig } = useRuntimeConfig()
 const photoImportEnabled = computed(() => Boolean(publicConfig.recipeOcrEnabled))
+
+/** The Scan/Link/Paste buttons on the recipes list send us here with `?tab=` already picked. */
+const requestedTab = route.query.tab
+const tab = ref<'paste' | 'url' | 'photo'>(
+  requestedTab === 'photo' && photoImportEnabled.value
+    ? 'photo'
+    : requestedTab === 'url'
+      ? 'url'
+      : 'paste',
+)
 
 // --- paste -------------------------------------------------------------------
 
@@ -314,9 +324,13 @@ async function importPhoto() {
               type="file"
               accept="image/*"
               capture="environment"
-              class="file-input file-input-bordered w-full"
+              class="hidden"
               @change="onPhotoSelected"
             >
+            <button type="button" class="btn btn-outline gap-2 w-full" @click="photoFileInput?.click()">
+              <AppIcon name="camera" class="w-4 h-4" />
+              Camera
+            </button>
           </label>
 
           <div v-if="photoPreviewUrl" class="relative w-fit">

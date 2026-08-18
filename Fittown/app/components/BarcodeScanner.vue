@@ -16,13 +16,26 @@ const props = withDefaults(
     date: string | null
     /** Set when scanning an ingredient into a recipe rather than a meal. */
     recipe?: number | null
+    /** Set when replacing an existing ingredient rather than adding one. */
+    ingredient?: number | null
+    /**
+     * Extra query parameters to carry to the portion picker — the amount an
+     * ingredient already has, so swapping its food doesn't reset it.
+     */
+    extra?: Record<string, string>
   }>(),
-  { recipe: null },
+  { recipe: null, ingredient: null, extra: () => ({}) },
 )
 
 /** Where a scanned food goes — a meal, or the recipe we came from. */
 const target = computed(() =>
-  foodLinkQuery({ meal: props.meal, date: props.date, recipe: props.recipe }),
+  foodLinkQuery({
+    meal: props.meal,
+    date: props.date,
+    recipe: props.recipe,
+    ingredient: props.ingredient,
+    extra: props.extra,
+  }),
 )
 const emit = defineEmits<{ close: [] }>()
 

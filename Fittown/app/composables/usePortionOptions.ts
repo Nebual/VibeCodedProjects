@@ -117,6 +117,19 @@ export function usePortionOptions(
         amount.value = previous.serving_count
         return
       }
+
+      // Swapping to a food whose own serving size doesn't match the old
+      // label (a different product, or one that had none) — re-express the
+      // carried weight as however many of *its* servings that comes to,
+      // rather than dropping into a raw gram figure that reads like the
+      // amount was reset.
+      const stated = options.value.find((o) => o.kind === 'serving')
+      if (stated && previous.grams) {
+        selectedKey.value = stated.key
+        amount.value = Math.round((previous.grams / stated.size) * 1000) / 1000
+        return
+      }
+
       const base = options.value.find((o) => o.kind === 'base')
       if (base) {
         selectedKey.value = base.key

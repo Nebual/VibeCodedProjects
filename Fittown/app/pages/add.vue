@@ -172,12 +172,23 @@ const newFoodLink = computed(
 )
 
 const showScanner = ref(false)
+
+const router = useRouter()
+
+/** Back clears an active search first, since it's the reason someone hit Back mid-flow. */
+function handleBack() {
+  if (query.value) {
+    query.value = ''
+    return
+  }
+  router.back()
+}
 </script>
 
 <template>
   <div class="flex flex-col gap-3">
     <header class="flex items-center gap-2">
-      <button class="btn btn-ghost btn-sm btn-square" aria-label="Back" @click="$router.back()">
+      <button class="btn btn-ghost btn-sm btn-square" aria-label="Back" @click="handleBack">
         <AppIcon name="chevronLeft" class="w-5 h-5" />
       </button>
       <h1 class="font-semibold flex-1">{{ heading }}</h1>
@@ -312,6 +323,8 @@ const showScanner = ref(false)
       :meal="meal"
       :date="date"
       :recipe="recipeId"
+      :ingredient="ingredientId"
+      :extra="carriedPortion"
       @close="showScanner = false"
     />
   </div>
