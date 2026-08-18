@@ -136,6 +136,42 @@ log from tomorrow.
 That also means a recipe you have eaten can be deleted whenever you like — the
 meals stay exactly as they were.
 
+### Optional ingredients
+
+Some things in a recipe are suggestions — 50 g of bacon on top, or almond flour
+as a stand-in for plain flour. Mark one **Optional** when you add it and it sits
+in the recipe without counting towards the total; a checkbox beside it switches
+it on when you do want it.
+
+Switching one off is not the same as deleting it: the suggestion stays, and so
+does the amount, ready for next time.
+
+You can also drag ingredients into whatever order suits — which is how almond
+flour ends up sitting next to the flour it replaces.
+
+### Changing a recipe for one meal
+
+Logging a recipe? Open **Adjust for this meal** and change what you like: fewer
+eggs, no cheese, a bit of butter that isn't in the recipe at all, or one
+ingredient swapped for another. The diary entry records what you actually ate and
+says so underneath it — *"150 g Chicken instead of 200 g"* — and the recipe is
+completely untouched.
+
+If it turns out that's how you make it now, **Save as a variant** keeps the
+changes as a recipe of its own, alongside the one it came from.
+
+### Variants
+
+A recipe can have several versions — the weekday one and the weekend one, the
+version with meat and the version without. **Save as a variant** on any recipe
+makes another one linked to it, and every variant shows the rest of the family as
+chips along the top, so you can move between them in a tap. The list says how
+many each one has.
+
+They are ordinary recipes: edit, log, share or delete any of them without
+touching the others. Deleting the first one doesn't break the link between the
+rest.
+
 ### A recipe can contain another recipe
 
 Make a salad dressing in bulk — six servings, say — and then put **1 serving of

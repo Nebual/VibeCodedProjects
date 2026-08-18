@@ -9,23 +9,20 @@ async function signOut() {
 }
 
 /**
- * The phone dock. Five is the most that stays tappable at 390px; recipes are
- * reached from the Recipes tab on the add screen, which is where you are when
- * you want one.
+ * The phone dock.
  */
 const navItems = [
   { to: '/', label: 'Diary', icon: 'book' },
+  { to: '/recipes', label: 'Recipes', icon: 'scale' },
   { to: '/fitness', label: 'Fitness', icon: 'activity' },
   { to: '/trends', label: 'Trends', icon: 'chart' },
   { to: '/friends', label: 'Friends', icon: 'friends' },
   { to: '/settings', label: 'Settings', icon: 'cog' },
 ]
 
-/** The desktop header has room for one more. */
+/** The desktop header */
 const headerItems = [
-  navItems[0]!,
-  { to: '/recipes', label: 'Recipes', icon: 'book' },
-  ...navItems.slice(1),
+  ...navItems,
 ]
 
 // The dock highlights the section, so '/food/123' still lights up Diary.

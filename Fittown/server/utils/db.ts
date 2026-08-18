@@ -151,6 +151,10 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
   recipe_ingredients: {
     raw_text: 'TEXT',
     note: 'TEXT',
+    // Optional ingredients. Defaults reproduce the old behaviour exactly, so
+    // every existing row keeps counting the way it always did.
+    is_optional: 'INTEGER NOT NULL DEFAULT 0',
+    is_included: 'INTEGER NOT NULL DEFAULT 1',
   },
 }
 

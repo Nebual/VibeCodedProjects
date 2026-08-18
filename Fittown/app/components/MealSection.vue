@@ -76,6 +76,15 @@ function editLink(entry: DiaryEntry) {
             <div class="text-xs text-base-content/60 truncate">
               <span v-if="entry.food.brand">{{ entry.food.brand }} · </span>{{ portion(entry) }}
             </div>
+            <!-- What was different about this one: "3 × egg instead of 4 · no
+                 bacon". Only ever set on a meal logged from a recipe with
+                 changes, so it costs nothing on every other row. -->
+            <div
+              v-if="entry.food.recipe_log_note"
+              class="text-xs text-base-content/50 truncate italic"
+            >
+              {{ entry.food.recipe_log_note }}
+            </div>
           </div>
 
           <div class="text-right shrink-0">

@@ -89,6 +89,28 @@ export interface RecipeIngredient {
    * when an import could not match the line to a food with confidence.
    */
   food: Record<string, unknown> | null
+  /**
+   * Is this ingredient currently part of the recipe? `0`/`false` means the user
+   * has switched an optional one off; it then contributes nothing at all.
+   *
+   * **Absent means included.** Every caller that predates optional ingredients
+   * — and every test fixture — leaves it undefined, and must keep behaving
+   * exactly as it did.
+   */
+  is_included?: number | boolean
+  /** Does the UI offer a switch for this one? Never affects the arithmetic. */
+  is_optional?: number | boolean
+}
+
+/**
+ * Does this ingredient count towards the recipe?
+ *
+ * Absent is included, for the reason on `is_included` above.
+ */
+export function ingredientIsIncluded(ingredient: RecipeIngredient): boolean {
+  return ingredient.is_included === undefined || ingredient.is_included === null
+    ? true
+    : Boolean(ingredient.is_included)
 }
 
 export interface RecipeRollUp {
@@ -124,6 +146,171 @@ export function recipeBasisGrams(rawG: number, finalWeightG?: number | null): nu
 }
 
 /**
+ * A change to one recipe for one meal.
+ *
+ * Sent by the log screen, applied by the server, and the reason a diary entry
+ * can say "3 eggs, no bacon" about a recipe that says four eggs and bacon. The
+ * recipe is never touched — the change lands on the frozen copy the entry points
+ * at, which is where a one-off belongs.
+ *
+ * `set` addresses a row that already exists; `add` puts in something the recipe
+ * never had, which is why a frozen meal stores its own ingredient rows rather
+ * than a diff against the recipe.
+ */
+export type RecipeAdjustment =
+  | {
+    op: 'set'
+    ingredient_id: number
+    /** New amount, in grams/ml. */
+    grams?: number
+    /** False skips it for this meal only. */
+    included?: boolean
+    /** A different food, for this meal only. */
+    food_id?: number
+    serving_label?: string | null
+    serving_count?: number | null
+  }
+  | {
+    op: 'add'
+    food_id: number
+    grams: number
+    serving_label?: string | null
+    serving_count?: number | null
+  }
+
+/** The shape `applyAdjustments()` needs to work on, beyond the roll-up's own. */
+export interface AdjustableIngredient extends RecipeIngredient {
+  id: number
+  serving_label?: string | null
+  serving_count?: number | null
+}
+
+/**
+ * Apply a meal's adjustments to a recipe's ingredient list.
+ *
+ * Pure, and the single authority for "what is actually in this bowl": the log
+ * screen calls it to draw the preview and to size the portion, and the server
+ * calls it again to build the frozen copy. Two implementations would eventually
+ * disagree, and the one nobody was looking at would be the one in the diary.
+ *
+ * `add` rows come out with `id: 0` — they have no ingredient row yet. Nothing
+ * downstream addresses them by id, and giving them a fake one would invite it.
+ */
+export function applyAdjustments<T extends AdjustableIngredient>(
+  ingredients: T[],
+  adjustments: RecipeAdjustment[],
+  /** Looks up a food row for an `add` or a swap. Missing foods are dropped. */
+  lookupFood: (foodId: number) => Record<string, unknown> | null = () => null,
+): AdjustableIngredient[] {
+  const sets = new Map<number, Extract<RecipeAdjustment, { op: 'set' }>>()
+  const adds: Extract<RecipeAdjustment, { op: 'add' }>[] = []
+
+  for (const adjustment of adjustments) {
+    if (adjustment.op === 'add') adds.push(adjustment)
+    // Last one wins, so a client that sends two edits for one row is coherent
+    // rather than order-dependent.
+    else sets.set(adjustment.ingredient_id, adjustment)
+  }
+
+  const adjusted: AdjustableIngredient[] = ingredients.map((ingredient) => {
+    const change = sets.get(ingredient.id)
+    if (!change) return ingredient
+
+    const swapped = change.food_id === undefined ? ingredient.food : lookupFood(change.food_id)
+
+    return {
+      ...ingredient,
+      food: swapped,
+      grams: change.grams === undefined ? ingredient.grams : change.grams,
+      // A skipped ingredient stays in the list, marked, rather than being
+      // filtered out: the frozen copy is a record of the meal, and "no bacon"
+      // is part of what happened.
+      is_included: change.included === undefined
+        ? ingredient.is_included
+        : (change.included ? 1 : 0),
+      serving_label: change.serving_label === undefined
+        ? ingredient.serving_label
+        : change.serving_label,
+      serving_count: change.serving_count === undefined
+        ? ingredient.serving_count
+        : change.serving_count,
+    }
+  })
+
+  for (const addition of adds) {
+    const food = lookupFood(addition.food_id)
+    if (!food) continue
+    adjusted.push({
+      id: 0,
+      grams: addition.grams,
+      food,
+      is_included: 1,
+      is_optional: 0,
+      serving_label: addition.serving_label ?? null,
+      serving_count: addition.serving_count ?? null,
+    })
+  }
+
+  return adjusted
+}
+
+/**
+ * A food's name, short enough to read at a glance in a diary line.
+ *
+ * Lab-analysed and crowd-sourced names are long and front-load the useful part:
+ * "Chicken, broiler or fryers, breast, skinless, boneless, meat only, cooked,
+ * braised". Left whole, a note about it truncates before the words that say what
+ * changed — "100 g Chicken, broiler or fryers, breast, sk…" — which is the half
+ * a person is reading the line for.
+ *
+ * The first comma is where these names stop being specific and start being
+ * qualifiers, so that is the cut. A name with no comma is clamped instead.
+ */
+export function shortFoodName(name: string, max = 24): string {
+  const head = name.split(',')[0]!.trim()
+  const base = head.length >= 3 ? head : name.trim()
+  return base.length <= max ? base : `${base.slice(0, max - 1).trimEnd()}…`
+}
+
+/** One line of "what was different about this meal". */
+export type AdjustmentNote =
+  | { kind: 'amount'; name: string; from: string; to: string }
+  | { kind: 'skipped'; name: string }
+  | { kind: 'added'; name: string; amount: string }
+  | { kind: 'swapped'; name: string; to: string }
+
+/**
+ * "150 g Egg instead of 200 g · no Bacon" — what the diary row says underneath.
+ *
+ * Kept to three changes plus a count. The line sits under a meal in a list of
+ * meals, and a paragraph there is worse than "+2 more" for anybody scanning
+ * their day; the frozen copy holds the full detail for whoever opens it.
+ */
+export function describeAdjustments(notes: AdjustmentNote[], max = 3): string | null {
+  if (notes.length === 0) return null
+
+  const phrase = (note: AdjustmentNote) => {
+    switch (note.kind) {
+      case 'amount':
+        // A row measured in its own units already names the thing — "3 × egg" —
+        // and repeating it gives "3 × egg Egg instead of 4 × egg". A row
+        // measured in grams doesn't, so "150 g Egg instead of 200 g" needs it.
+        return note.to.toLowerCase().includes(note.name.toLowerCase())
+          ? `${note.to} instead of ${note.from}`
+          : `${note.to} ${note.name} instead of ${note.from}`
+      case 'skipped': return `no ${note.name}`
+      case 'added': return `plus ${note.amount} ${note.name}`
+      case 'swapped': return `${note.to} instead of ${note.name}`
+    }
+  }
+
+  const shown = notes.slice(0, max).map(phrase)
+  const hidden = notes.length - shown.length
+  if (hidden > 0) shown.push(`+${hidden} more`)
+  return shown.join(' · ')
+}
+
+/**
  * Roll a list of ingredients up into one nutrient vector.
  *
  * Note that `finalWeightG` never changes `totals` — only how they're spread
@@ -133,11 +320,15 @@ export function rollUpRecipe(
   ingredients: RecipeIngredient[],
   finalWeightG?: number | null,
 ): RecipeRollUp {
-  // `i.food` and `i.grams > 0` are both tested here and again in the nutrient
-  // loop below, and both tests have to agree: a 0 g pinch of salt or an
-  // unmatched "garlic powder" contributes no weight to the mixture, so it
-  // must not count toward `rawG` either.
-  const counts = (i: RecipeIngredient) => i.food !== null && i.grams > 0
+  // `i.food`, `i.grams > 0` and inclusion are all tested here and again in the
+  // nutrient loop below, and every test has to agree: a 0 g pinch of salt, an
+  // unmatched "garlic powder" and a switched-off 200 g of bacon all contribute
+  // no weight to the mixture, so none of them may count toward `rawG` — or
+  // toward a nutrient's coverage, which would blank the whole recipe's vitamin
+  // K on the strength of weight that isn't there. One predicate, used
+  // everywhere it matters.
+  const counts = (i: RecipeIngredient) =>
+    i.food !== null && i.grams > 0 && ingredientIsIncluded(i)
   const rawG = ingredients.reduce((sum, i) => sum + (counts(i) ? i.grams : 0), 0)
   const basisG = recipeBasisGrams(rawG, finalWeightG)
 

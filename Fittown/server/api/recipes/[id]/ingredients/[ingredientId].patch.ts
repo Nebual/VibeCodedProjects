@@ -40,6 +40,26 @@ export default defineEventHandler(async (event) => {
     params.push(optionalText(body.note, 200))
   }
 
+  // Switching one off, or on, for the recipe as a whole — as distinct from
+  // skipping it once when logging a meal, which never touches the recipe.
+  if (body.is_included !== undefined) {
+    sets.push('is_included = ?')
+    params.push(body.is_included ? 1 : 0)
+  }
+
+  // The constraint the schema can't carry (no CHECK without a table rebuild):
+  // a required ingredient is always counted, so clearing `is_optional` has to
+  // switch it back on — otherwise the recipe keeps a permanently missing
+  // ingredient with no control on screen to bring it back.
+  if (body.is_optional !== undefined) {
+    sets.push('is_optional = ?')
+    params.push(body.is_optional ? 1 : 0)
+    if (!body.is_optional) {
+      sets.push('is_included = ?')
+      params.push(1)
+    }
+  }
+
   // Resolved separately from the loop above: unlike the rest, this one has to
   // check that the food exists and is visible to this user before it is stored.
   const foodId = body.food_id === undefined ? null : assertId(body.food_id, 'food_id')

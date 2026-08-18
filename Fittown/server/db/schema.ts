@@ -254,6 +254,19 @@ CREATE TABLE IF NOT EXISTS recipe_ingredients (
   -- "1 to 2 tbsp". Shown to the user to interpret; never parsed again.
   note           TEXT,
   sort_order     INTEGER NOT NULL DEFAULT 0,
+
+  -- Optional ingredients: "50 g bacon on top", "almond flour instead of flour".
+  -- Two flags because "you can leave this out" and "it is currently left out"
+  -- are different facts, and only the second one changes the arithmetic.
+  --   is_optional = 1  -> the UI shows a switch for it
+  --   is_included = 0  -> it contributes nothing: not to the weight, not to a
+  --                      nutrient's coverage, and not to a meal logged from it
+  -- \`is_optional = 0\` implies \`is_included = 1\`, which wants a CHECK and
+  -- cannot have one: SQLite can't add a constraint to an existing table without
+  -- the whole rebuild dance. The two ingredient routes enforce it instead.
+  is_optional    INTEGER NOT NULL DEFAULT 0,
+  is_included    INTEGER NOT NULL DEFAULT 1,
+
   created_at     TEXT NOT NULL DEFAULT (datetime('now')),
   -- A row with neither a food nor any text is not an ingredient, it's a bug.
   CHECK (food_id IS NOT NULL OR raw_text IS NOT NULL)

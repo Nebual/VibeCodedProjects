@@ -20,6 +20,8 @@ const paths: Record<string, string> = {
   trash: 'M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m3 0v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6',
   chevronLeft: 'm15 18-6-6 6-6',
   chevronRight: 'm9 18 6-6-6-6',
+  chevronUp: 'm18 15-6-6-6 6',
+  chevronDown: 'm6 9 6 6 6-6',
   droplet: 'M12 2.7 6.3 8.4a8 8 0 1 0 11.4 0L12 2.7Z',
   calendar: 'M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z',
   x: 'M18 6 6 18M6 6l12 12',
@@ -31,6 +33,7 @@ const paths: Record<string, string> = {
   // pair of equal heads reads as a blur, an offset pair reads as company.
   friends: 'M15 20v-1.5a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4V20M8.5 10.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7M22 20v-1.5a4 4 0 0 0-3-3.87M16 3.7a4 4 0 0 1 0 7.5',
   link: 'M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7',
+  grip: 'M9 5h.01M9 12h.01M9 19h.01M15 5h.01M15 12h.01M15 19h.01',
   swap: 'm16 3 4 4-4 4M20 7H4M8 21l-4-4 4-4M4 17h16',
 
   // Activity categories. Deliberately simple single-stroke shapes — they sit

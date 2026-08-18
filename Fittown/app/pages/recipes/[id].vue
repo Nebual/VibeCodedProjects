@@ -174,8 +174,72 @@ function editLink(ingredient: RecipeIngredient) {
   })
   if (ingredient.serving_label) params.set('sl', ingredient.serving_label)
   if (ingredient.serving_count) params.set('sc', String(ingredient.serving_count))
+  // So the Optional switch over there opens in the state it is in over here.
+  if (ingredient.is_optional) params.set('opt', '1')
   return `/food/${ingredient.food.id}?${params}`
 }
+
+/**
+ * Switch an optional ingredient on or off for the recipe itself.
+ *
+ * A different act from skipping it once while logging a meal, which leaves the
+ * recipe alone — and from deleting it, which forgets the suggestion entirely.
+ */
+async function setIncluded(ingredientId: number, included: boolean) {
+  saving.value = true
+  saveError.value = null
+  try {
+    await $fetch(`/api/recipes/${id.value}/ingredients/${ingredientId}`, {
+      method: 'PATCH',
+      body: { is_included: included },
+    })
+    await refresh()
+  } catch (err) {
+    saveError.value = (err as { statusMessage?: string }).statusMessage ?? 'Could not save'
+  } finally {
+    saving.value = false
+  }
+}
+
+// --- order ------------------------------------------------------------------
+
+/**
+ * A local, reorderable copy of the ingredient list.
+ *
+ * The drag has to move rows *now*, under the finger, so the list it reorders
+ * can't be the fetch result. Re-seeded from the server whenever that changes,
+ * which is also how a rejected reorder puts itself back.
+ */
+const rows = ref<RecipeIngredient[]>([])
+watch(
+  () => data.value?.ingredients,
+  (list) => { rows.value = [...(list ?? [])] },
+  { immediate: true },
+)
+
+async function saveOrder(ordered: RecipeIngredient[]) {
+  saving.value = true
+  saveError.value = null
+  try {
+    await $fetch(`/api/recipes/${id.value}/ingredient-order`, {
+      method: 'PATCH',
+      // The whole list every time: the route refuses a partial one rather than
+      // scrambling the rows it wasn't told about.
+      body: { ids: ordered.map((row) => row.id) },
+    })
+    await refresh()
+  } catch (err) {
+    saveError.value = (err as { statusMessage?: string }).statusMessage ?? 'Could not reorder'
+    await refresh()
+  } finally {
+    saving.value = false
+  }
+}
+
+const { dragging, container, onPointerDown, nudge } = useDragSort(rows, saveOrder)
+
+/** Nothing to reorder with one ingredient, so no handle to explain. */
+const canReorder = computed(() => rows.value.length > 1)
 
 async function removeIngredient(ingredientId: number) {
   saving.value = true
@@ -184,6 +248,49 @@ async function removeIngredient(ingredientId: number) {
     await refresh()
   } finally {
     saving.value = false
+  }
+}
+
+// --- variants ---------------------------------------------------------------
+
+/**
+ * The other ways this recipe gets made.
+ *
+ * A flat family, so every variant can reach every other one — which is the point
+ * of them being linked at all. The one you're on is shown alongside, unlinked, so
+ * the strip reads as "here is where you are among these".
+ */
+const variants = computed(() => data.value?.variants ?? [])
+
+const namingVariant = ref(false)
+const variantName = ref('')
+const savingVariant = ref(false)
+
+function startVariant() {
+  namingVariant.value = true
+  variantName.value = ''
+}
+
+/**
+ * Copy this recipe into its own family and open the copy.
+ *
+ * No adjustments: from here a variant starts as a duplicate you then edit. The
+ * log screen has the other version of this button, where the changes you just
+ * made for one meal are what gets kept.
+ */
+async function saveVariant() {
+  if (savingVariant.value) return
+  savingVariant.value = true
+  saveError.value = null
+  try {
+    const { id: newId } = await $fetch<{ id: number }>(`/api/recipes/${id.value}/variants`, {
+      method: 'POST',
+      body: { name: variantName.value.trim() || undefined },
+    })
+    await router.push(`/recipes/${newId}`)
+  } catch (err) {
+    saveError.value = (err as { statusMessage?: string }).statusMessage ?? 'Could not save'
+    savingVariant.value = false
   }
 }
 
@@ -290,6 +397,51 @@ const logLink = computed(
       <span v-if="saving" class="loading loading-spinner loading-sm" />
     </header>
 
+    <!-- The family. Always present, because "make another way of doing this" is
+         as much a part of a recipe as its ingredients — and when there are
+         siblings, this is the only way to walk between them. -->
+    <section class="flex flex-wrap items-center gap-1.5">
+      <template v-if="variants.length">
+        <span class="badge badge-sm badge-neutral">{{ recipe.name }}</span>
+        <NuxtLink
+          v-for="variant in variants"
+          :key="variant.id"
+          :to="`/recipes/${variant.id}`"
+          class="badge badge-sm badge-outline hover:badge-neutral transition-colors"
+          :title="variant.kcal_per_serving !== null
+            ? `${Math.round(variant.kcal_per_serving)} kcal per serving`
+            : 'Nothing in it yet'"
+        >
+          {{ variant.name }}
+        </NuxtLink>
+      </template>
+
+      <button
+        v-if="!namingVariant"
+        class="btn btn-ghost btn-xs gap-1 text-primary"
+        @click="startVariant"
+      >
+        <AppIcon name="plus" class="w-3.5 h-3.5" />
+        {{ variants.length ? 'Another variant' : 'Save as a variant' }}
+      </button>
+
+      <div v-else class="flex gap-2 w-full">
+        <input
+          v-model="variantName"
+          type="text"
+          class="input input-bordered input-sm flex-1 min-w-0"
+          :placeholder="`${recipe.name} (my way)`"
+          aria-label="Name for the variant"
+          @keyup.enter="saveVariant"
+        >
+        <button class="btn btn-sm gap-2" :disabled="savingVariant" @click="saveVariant">
+          <span v-if="savingVariant" class="loading loading-spinner loading-xs" />
+          Create
+        </button>
+        <button class="btn btn-ghost btn-sm" @click="namingVariant = false">Cancel</button>
+      </div>
+    </section>
+
     <!-- What it is -->
     <section class="card bg-base-100 shadow-sm">
       <div class="card-body p-4 gap-3">
@@ -377,13 +529,43 @@ const logLink = computed(
           </span>
         </header>
 
-        <ul v-if="data?.ingredients.length" class="divide-y divide-base-200">
+        <ul v-if="rows.length" ref="container" class="divide-y divide-base-200">
           <li
-            v-for="ingredient in data.ingredients"
+            v-for="(ingredient, index) in rows"
             :key="ingredient.id"
-            class="flex items-center gap-3 px-4 py-2.5"
+            data-sort-row
+            class="flex items-center gap-2 px-4 py-2.5 transition-colors"
+            :class="{ 'bg-base-200': dragging === index }"
           >
-            <div class="flex-1 min-w-0">
+            <!-- `touch-action: none` is on the handle and nowhere else: on the
+                 row or the list it would kill the page scroll. Focusable and
+                 arrow-key operable, so this isn't drag-only.
+                 Only `pointerdown` is bound here — the rest of the drag is
+                 listened for on the window, because a release that misses this
+                 button used to leave the row stuck to the pointer. -->
+            <button
+              v-if="canReorder"
+              class="btn btn-ghost btn-xs btn-square text-base-content/30 hover:text-base-content/60 shrink-0 touch-none cursor-grab"
+              :aria-label="`Reorder ${ingredientName(ingredient)}`"
+              title="Drag to reorder"
+              @pointerdown="onPointerDown($event, index)"
+              @keydown.up.prevent="nudge(index, -1)"
+              @keydown.down.prevent="nudge(index, 1)"
+            >
+              <AppIcon name="grip" class="w-4 h-4" />
+            </button>
+            <!-- Only on optional rows, so the common case keeps its layout and
+                 nothing shifts sideways on a recipe that has none. -->
+            <input
+              v-if="ingredient.is_optional"
+              type="checkbox"
+              class="checkbox checkbox-sm shrink-0"
+              :checked="!!ingredient.is_included"
+              :aria-label="`Include ${ingredientName(ingredient)}`"
+              @change="setIncluded(ingredient.id, ($event.target as HTMLInputElement).checked)"
+            >
+
+            <div class="flex-1 min-w-0" :class="{ 'opacity-50': ingredient.is_optional && !ingredient.is_included }">
               <!-- The badge sits outside the truncating link on purpose:
                    inside it, a long recipe name clips the badge away entirely,
                    which is exactly when it is most needed. -->
@@ -399,6 +581,10 @@ const logLink = computed(
                   v-if="isNestedRecipe(ingredient)"
                   class="badge badge-xs badge-primary shrink-0"
                 >recipe</span>
+                <span
+                  v-if="ingredient.is_optional"
+                  class="badge badge-xs badge-ghost shrink-0"
+                >optional</span>
               </div>
               <div class="text-xs truncate tabular" :class="isResolved(ingredient) ? 'text-base-content/60' : 'text-warning'">
                 <template v-if="isResolved(ingredient)">
@@ -412,11 +598,20 @@ const logLink = computed(
 
             <!-- A dash rather than 0: we don't know what this is, which is not
                  the same as knowing it has no calories. -->
+            <!-- A switched-off optional shows what it *would* add, prefixed,
+                 rather than a bare number that reads as part of the total. -->
             <div
               class="text-sm tabular shrink-0"
-              :class="{ 'text-base-content/30': !isResolved(ingredient) }"
+              :class="{
+                'text-base-content/30': !isResolved(ingredient),
+                'text-base-content/50': ingredient.is_optional && !ingredient.is_included,
+              }"
             >
-              {{ isResolved(ingredient) ? Math.round(ingredient.nutrients.kcal ?? 0) : '—' }}
+              <template v-if="!isResolved(ingredient)">—</template>
+              <template v-else-if="ingredient.is_optional && !ingredient.is_included">
+                +{{ Math.round(ingredient.nutrients.kcal ?? 0) }}
+              </template>
+              <template v-else>{{ Math.round(ingredient.nutrients.kcal ?? 0) }}</template>
             </div>
 
             <!-- A nested recipe is a place you can go, not just an amount to

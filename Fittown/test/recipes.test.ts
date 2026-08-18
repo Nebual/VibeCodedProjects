@@ -11,6 +11,10 @@ import {
   showsGramPortions,
   isRecipeLog,
   RECIPE_LOG_SOURCE,
+  applyAdjustments,
+  describeAdjustments,
+  ingredientIsIncluded,
+  shortFoodName,
 } from '#shared/recipes'
 
 /**
@@ -220,5 +224,172 @@ describe('when gram portions may be shown', () => {
       .toBe(false)
     expect(showsGramPortions({ source: RECIPE_LOG_SOURCE, recipe_final_weight_g: 900 }))
       .toBe(true)
+  })
+})
+
+describe('optional ingredients', () => {
+  /**
+   * The invariant that would otherwise go quietly wrong: a switched-off
+   * ingredient has to leave the coverage denominator as well as the weight sum.
+   * If it only left the sum, 200 g of skipped bacon would still count as weight
+   * that declares no vitamin K, and blank the whole recipe's vitamin K.
+   */
+  it('leave both the weight and the coverage denominator', () => {
+    const kept = { grams: 100, food: chicken }
+    const skipped = { grams: 300, food: oil, is_included: 0 }
+
+    const rolled = rollUpRecipe([kept, skipped])
+
+    expect(rolled.raw_g).toBe(100)
+    expect(rolled.totals.kcal).toBeCloseTo(165, 6)
+    // Chicken declares iron and is now 100% of the weight, so iron survives.
+    // With the oil counted as weight it would be 25% covered, and null.
+    expect(rolled.totals.iron_mg).toBeCloseTo(1, 6)
+  })
+
+  it('absent means included, so nothing that predates the column changes', () => {
+    expect(ingredientIsIncluded({ grams: 1, food: chicken })).toBe(true)
+    expect(ingredientIsIncluded({ grams: 1, food: chicken, is_included: 1 })).toBe(true)
+    expect(ingredientIsIncluded({ grams: 1, food: chicken, is_included: 0 })).toBe(false)
+    expect(ingredientIsIncluded({ grams: 1, food: chicken, is_included: null as never })).toBe(true)
+
+    const withFlag = rollUpRecipe([{ grams: 100, food: chicken, is_included: 1 }])
+    const without = rollUpRecipe([{ grams: 100, food: chicken }])
+    expect(withFlag).toEqual(without)
+  })
+})
+
+describe('adjusting a recipe for one meal', () => {
+  const omelette = [
+    { id: 1, grams: 200, food: chicken, serving_label: 'egg', serving_count: 4 },
+    { id: 2, grams: 35, food: rice, serving_label: null, serving_count: null },
+    { id: 3, grams: 50, food: oil, serving_label: null, serving_count: null, is_optional: 1, is_included: 0 },
+  ]
+
+  it('changes an amount without touching anything else', () => {
+    const adjusted = applyAdjustments(omelette, [
+      { op: 'set', ingredient_id: 1, grams: 150, serving_label: 'egg', serving_count: 3 },
+    ])
+
+    expect(adjusted[0]!.grams).toBe(150)
+    expect(adjusted[0]!.serving_count).toBe(3)
+    expect(adjusted[1]!.grams).toBe(35)
+    expect(adjusted).toHaveLength(3)
+  })
+
+  it('keeps a skipped ingredient in the list, marked', () => {
+    // It has to stay: the frozen copy is a record of the meal, and "no cheese"
+    // is part of what happened. It just stops counting.
+    const adjusted = applyAdjustments(omelette, [
+      { op: 'set', ingredient_id: 2, included: false },
+    ])
+
+    expect(adjusted).toHaveLength(3)
+    expect(adjusted[1]!.is_included).toBe(0)
+    expect(rollUpRecipe(adjusted).raw_g).toBe(200)
+  })
+
+  it('swaps a food, and drops the row when the swap cannot be found', () => {
+    const swapped = applyAdjustments(
+      omelette,
+      [{ op: 'set', ingredient_id: 2, food_id: 77 }],
+      () => oil,
+    )
+    expect(swapped[1]!.food).toBe(oil)
+
+    // No lookup: the food is gone, so the row has nothing to contribute and
+    // must not silently keep the old one's nutrition.
+    const missing = applyAdjustments(omelette, [{ op: 'set', ingredient_id: 2, food_id: 77 }])
+    expect(missing[1]!.food).toBeNull()
+  })
+
+  it('adds something the recipe never had', () => {
+    const adjusted = applyAdjustments(
+      omelette,
+      [{ op: 'add', food_id: 77, grams: 20 }],
+      () => oil,
+    )
+
+    expect(adjusted).toHaveLength(4)
+    expect(adjusted[3]!.grams).toBe(20)
+    // No ingredient row of its own yet, so no id to address it by.
+    expect(adjusted[3]!.id).toBe(0)
+    expect(rollUpRecipe(adjusted).raw_g).toBe(255)
+  })
+
+  it('ignores an add whose food cannot be found', () => {
+    expect(applyAdjustments(omelette, [{ op: 'add', food_id: 77, grams: 20 }])).toHaveLength(3)
+  })
+
+  it('takes the last edit when a row is adjusted twice', () => {
+    const adjusted = applyAdjustments(omelette, [
+      { op: 'set', ingredient_id: 1, grams: 150 },
+      { op: 'set', ingredient_id: 1, grams: 100 },
+    ])
+    expect(adjusted[0]!.grams).toBe(100)
+  })
+
+  it('leaves the list alone when there is nothing to apply', () => {
+    expect(applyAdjustments(omelette, [])).toEqual(omelette)
+  })
+})
+
+describe('describing what was different about a meal', () => {
+  it('reads as a sentence someone would say', () => {
+    // The name is dropped when the amount already carries it, or this reads
+    // "3 × egg Egg instead of 4 × egg".
+    expect(describeAdjustments([
+      { kind: 'amount', name: 'Egg', from: '4 × egg', to: '3 × egg' },
+      { kind: 'skipped', name: 'Bacon' },
+    ])).toBe('3 × egg instead of 4 × egg · no Bacon')
+
+    // …and kept when it doesn't.
+    expect(describeAdjustments([
+      { kind: 'amount', name: 'Cheddar', from: '35 g', to: '20 g' },
+    ])).toBe('20 g Cheddar instead of 35 g')
+
+    expect(describeAdjustments([
+      { kind: 'added', name: 'Cheddar', amount: '20 g' },
+    ])).toBe('plus 20 g Cheddar')
+
+    expect(describeAdjustments([
+      { kind: 'swapped', name: 'Butter', to: 'Olive oil' },
+    ])).toBe('Olive oil instead of Butter')
+  })
+
+  it('is null when nothing changed, so the diary line stays clean', () => {
+    expect(describeAdjustments([])).toBeNull()
+  })
+
+  it('stops at three and counts the rest', () => {
+    const notes = ['A', 'B', 'C', 'D', 'E'].map((name) => ({ kind: 'skipped' as const, name }))
+    expect(describeAdjustments(notes)).toBe('no A · no B · no C · +2 more')
+  })
+})
+
+describe('shortening a food name for a diary line', () => {
+  it('cuts a lab-analysed name at its first comma', () => {
+    expect(shortFoodName('Chicken, broiler or fryers, breast, skinless, boneless'))
+      .toBe('Chicken')
+    expect(shortFoodName('Oil, olive, extra virgin')).toBe('Oil')
+  })
+
+  it('leaves a short name alone', () => {
+    expect(shortFoodName('Cheddar')).toBe('Cheddar')
+    expect(shortFoodName('Egg')).toBe('Egg')
+  })
+
+  it('clamps a long name with no comma to cut', () => {
+    // 23 characters plus the ellipsis: the cap counts the ellipsis, because it
+    // is what the line has room for, not what the name would like.
+    const clamped = shortFoodName('Extraordinarily Long Product Name Here')
+    expect(clamped).toBe('Extraordinarily Long Pr…')
+    expect(clamped).toHaveLength(24)
+  })
+
+  it('ignores a leading fragment too short to identify anything', () => {
+    // "A, long descriptive name" — the head is a letter, so keep the name and
+    // clamp it instead of reporting "A".
+    expect(shortFoodName('A, long descriptive name for a food')).toBe('A, long descriptive nam…')
   })
 })

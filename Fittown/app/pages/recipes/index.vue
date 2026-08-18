@@ -114,6 +114,10 @@ async function create() {
                   <template v-if="recipe.kcal_per_serving !== null">
                     · {{ Math.round(recipe.kcal_per_serving) }} kcal each
                   </template>
+                  <template v-if="recipe.variant_count">
+                    · {{ recipe.variant_count }}
+                    {{ recipe.variant_count === 1 ? 'variant' : 'variants' }}
+                  </template>
                 </template>
               </div>
             </div>

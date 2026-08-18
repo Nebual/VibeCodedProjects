@@ -350,6 +350,91 @@ now returns the set of columns it added, which is what lets a one-time backfill
 (`recipe_family_id = id`) run exactly once rather than re-scanning 200k rows on
 every boot.
 
+**An ingredient can be optional, and that takes two flags.**
+`recipe_ingredients.is_optional` says the UI offers a switch for it;
+`is_included` says whether it currently counts. Bacon on top is
+`optional, not included`; almond flour beside flour is the same; an optional you
+usually do add is `optional, included`. Only `is_included` touches the
+arithmetic, and it does so through the **one** predicate in `rollUpRecipe()`
+(`ingredientIsIncluded()`), which must keep gating the weight sum *and* the
+coverage denominator together — 200 g of skipped bacon left in the denominator
+blanks the recipe's vitamin K on the strength of weight that isn't there.
+**Absent reads as included**, matching the column default, so every row and every
+fixture that predates the columns behaves exactly as it did.
+`is_optional = 0` implies `is_included = 1`; that wants a `CHECK`, cannot have
+one without a table rebuild, and is enforced in the two ingredient routes —
+clearing `is_optional` switches it back on, or the recipe keeps a permanently
+missing ingredient with no control on screen to bring it back.
+
+**A meal's adjustments land on the frozen copy, never on the recipe.**
+"Three eggs instead of four, no bacon, a bit more cheddar" arrives as
+`adjustments` on `POST /api/diary/entries`, is validated by `assertAdjustments()`
+(`server/utils/adjustments.ts`), and is applied by `cloneRecipe()` *while it
+copies* — keyed by the source recipe's ingredient ids, because the copy's rows
+don't exist yet and mapping between them afterwards is a second thing to keep
+right. Four rules:
+
+- **A skipped ingredient is still written**, with `is_included = 0`. The frozen
+  copy is a record of a meal, and "no bacon" is part of what happened.
+- **The server re-derives the portion.** The client sized "1 serving" against the
+  recipe as written; the adjusted copy weighs something else.
+  `resolveLoggedGrams()` recomputes it — and is the same `nestedPortionGrams()` a
+  nested recipe uses, because it is the same question. A portion entered in grams
+  is left exactly as typed.
+- **`resnapshotForLog()` is the only thing that writes to a frozen meal**, and it
+  is scoped to `RECIPE_LOG_SOURCE` and to the owner. It is safe *because* the copy
+  belongs to exactly one diary row, so editing it is the same act as editing that
+  row. It re-derives nutrition from the ingredient foods as they are now, which is
+  right: re-saving is a fresh act of logging.
+- **`applyAdjustments()` is the shared authority** for what is actually in the
+  bowl. The log screen calls it to size the portion and draw the preview; the
+  server calls it again to build the copy. Two implementations would drift, and
+  the one nobody was looking at would be the one in the diary.
+
+**Reordering takes the whole list.** `PATCH /api/recipes/[id]/ingredient-order`
+sends every ingredient id, and `reorderIngredients()` refuses anything else —
+compared as **sets**, so a duplicate id is caught too (`[7, 7]` against two rows
+has the right length and would leave one row where it was). A client working from
+a stale copy would otherwise scramble the rows it didn't know about, and the rows
+it did send would look right. The path is deliberately not `ingredients/order`,
+which would sit beside `[ingredientId].patch.ts` and depend on
+static-beats-dynamic routing not to be read as an ingredient called "order".
+
+**A drag ends on the `window`, never on the thing you grabbed.** The reorder
+handle in the recipe editor binds only `pointerdown`; `useDragSort` then listens
+for `pointermove`/`pointerup`/`pointercancel`/`blur` on the window for the
+duration. This was a bug, and it is an easy one to reintroduce because binding
+the handlers to the handle looks obviously right: `setPointerCapture` is supposed
+to guarantee the handle receives the release, but **capture is lost when the
+captured element is moved in the DOM** — which is exactly what reordering a list
+live does. The release then landed on whatever was under the pointer, `dragging`
+never cleared, and the next move over any handle picked the drag back up, so rows
+followed the mouse until you clicked the handle again. A second guard backs it up:
+a `pointermove` with `buttons === 0` ends the drag, because a release we never
+heard about is still a release. The e2e step "a drag stops when you let go of it"
+drops capture deliberately mid-drag and then wanders the pointer back over the
+handles; without both guards it fails.
+
+**Variants are a flat family, keyed by `recipe_family_id`.** Every member holds
+the id of whichever of them was created first — set on insert in
+`createRecipeFood()`, because the id doesn't exist until the row does, and
+backfilled once for recipes that predate the column. Flat rather than a tree
+because "the three ways I make chili" have no natural parent, and a tree would
+make deleting the first one a question about the other two instead of just a
+deletion: **a group key survives its founder**, which is the property
+`listVariants()` and the strip on the recipe page depend on. Three things to keep
+right:
+
+- **`POST /api/recipes/[id]/variants` must pass the *source's* family**, not mint
+  a new one. Nothing in the unit suite can see this — the route is the only place
+  it happens — so the e2e step "variants are linked, and you can walk between
+  them" is the guard, and it checks the link in *both* directions, because a
+  one-way link means the id went on the wrong row.
+- **`copyRecipeInto()` starts a new family.** Someone who copies your chili
+  copied one recipe, not your collection.
+- **A snapshot has no family** (`familyId: null` in `createRecipeFood()`), which
+  is also what keeps frozen meals out of `variant_count` and out of the strip.
+
 **A recipe may contain another recipe, and three rules keep that from going
 wrong.** The ingredient's `food_id` points at a `foods` row with
 `source = 'recipe'`; the arithmetic needs nothing new, because a recipe already

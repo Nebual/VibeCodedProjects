@@ -1,6 +1,15 @@
 <script setup lang="ts">
 import { scaleNutrients } from '#shared/nutrients'
-import { isRecipe, isRecipeLog } from '#shared/recipes'
+import {
+  WHOLE_RECIPE_LABEL,
+  applyAdjustments,
+  isRecipe,
+  isRecipeLog,
+  recipeServingGrams,
+  rollUpRecipe,
+  type RecipeAdjustment,
+} from '#shared/recipes'
+import type { RecipeDetail } from '~/composables/useRecipes'
 import type { FoodRow, Goals, MealName } from '~/composables/useDiary'
 import { MEAL_LABELS, MEAL_ORDER } from '~/composables/useDiary'
 import type { FoodServing, PortionSelection } from '~/composables/usePortionOptions'
@@ -26,6 +35,16 @@ const ingredientId = computed(() =>
 )
 
 const meal = ref<MealName>((route.query.meal as MealName) || 'snack')
+
+/**
+ * Is this ingredient a suggestion rather than part of the dish?
+ *
+ * Carried in the URL by the recipe editor, the same way the portion is, so this
+ * page doesn't need to fetch the recipe to know. Marking one optional belongs
+ * here rather than in the list: it is an edit to the ingredient, and the list
+ * row's job is the one-tap version — switching it on and off.
+ */
+const optional = ref(route.query.opt === '1')
 
 const { data, error } = await useFetch<{ food: FoodRow; servings: FoodServing[] }>(
   () => `/api/foods/${foodId.value}`,
@@ -61,15 +80,93 @@ const initial = computed<PortionSelection | null>(() => {
  * the nutrition preview from the same grams, and it has to have them before it
  * renders or the server and the client disagree about what a portion contains.
  */
-const picker = usePortionOptions(
-  food,
-  computed(() => data.value?.servings ?? []),
-  system,
-  initial,
+// --- adjusting a recipe for this meal ---------------------------------------
+
+/**
+ * Which recipe's ingredients this screen can adjust, if any.
+ *
+ * Fetched here in `setup`, not lazily when the panel opens: an adjusted recipe
+ * weighs something else, so the portion picker's grams depend on it, and
+ * `usePortionOptions` has to have them before the first render or the server and
+ * the client disagree about what a serving contains (see the note at the bottom
+ * of that composable).
+ */
+const adjustableRecipeId = computed(() => {
+  const value = food.value
+  if (!value || !isRecipe(value) || recipeId.value) return null
+  return isRecipeLog(value) ? null : value.id
+})
+
+const { data: recipeData } = await useFetch<RecipeDetail>(
+  () => `/api/recipes/${adjustableRecipeId.value}`,
+  { immediate: !!adjustableRecipeId.value },
 )
 
+/** A meal already logged, read back so it can be corrected. */
+const { data: entryData } = await useFetch<{ detail: RecipeDetail | null }>(
+  () => `/api/diary/entries/${entryId.value}`,
+  { immediate: !!entryId.value && isRecipeLog(food.value ?? {}) },
+)
+
+const adjustable = computed(() => recipeData.value?.ingredients ?? entryData.value?.detail?.ingredients ?? null)
+
+const adjustments = ref<RecipeAdjustment[]>([])
+const showAdjuster = ref(false)
+
+/**
+ * The food as this meal will actually be — the recipe's own row when nothing is
+ * adjusted, and a re-rolled version of it when something is.
+ *
+ * Overlaid rather than fetched: `rollUpRecipe()` is the same function the server
+ * will use on the frozen copy, so the preview and the stored figures agree, and
+ * the portion picker keeps working on an ordinary-looking food row.
+ */
+const adjustedFood = computed(() => {
+  const base = food.value
+  if (!base || adjustments.value.length === 0 || !adjustable.value) return base
+
+  const lookup = (id: number) =>
+    (adjustable.value!.find((row) => row.food?.id === id)?.food ?? null) as
+      | Record<string, unknown>
+      | null
+
+  const rolled = rollUpRecipe(
+    applyAdjustments(adjustable.value as never[], adjustments.value, lookup),
+    base.recipe_final_weight_g as number | null,
+  )
+  const servings = Number(base.recipe_servings ?? 1) || 1
+
+  return {
+    ...base,
+    ...rolled.per100,
+    serving_grams: recipeServingGrams(rolled.basis_g, servings),
+    /** Carried so the "whole recipe" option below can be resized with it. */
+    __basis_g: rolled.basis_g,
+  } as typeof base & { __basis_g?: number }
+})
+
+/**
+ * The named portions, resized when the meal has been adjusted.
+ *
+ * `food_servings` holds "whole recipe" at the recipe's own weight; three eggs
+ * instead of four makes that a different number, and a picker offering the old
+ * one would log a portion nobody ate.
+ */
+const servingOptions = computed(() => {
+  const list = data.value?.servings ?? []
+  const basis = (adjustedFood.value as { __basis_g?: number } | undefined)?.__basis_g
+  if (basis === undefined) return list
+  return list.map((serving) =>
+    serving.label === WHOLE_RECIPE_LABEL ? { ...serving, grams: basis } : serving,
+  )
+})
+
+const picker = usePortionOptions(adjustedFood, servingOptions, system, initial)
+
 const preview = computed(() =>
-  food.value ? scaleNutrients(food.value as Record<string, unknown>, picker.grams) : {},
+  adjustedFood.value
+    ? scaleNutrients(adjustedFood.value as Record<string, unknown>, picker.grams)
+    : {},
 )
 
 /**
@@ -112,12 +209,16 @@ async function save() {
           // `food_id` matters when the row didn't have one: this is how an
           // imported line the matcher wasn't sure about gets its food. Sending
           // it when the row already points here is a harmless no-op.
-          body: { ...body, food_id: food.value.id },
+          //
+          // `is_optional` is sent every time rather than only when it changed:
+          // the route turns a cleared flag back into "counted", which is the
+          // behaviour that needs to happen on the way back as well.
+          body: { ...body, food_id: food.value.id, is_optional: optional.value },
         })
       } else {
         await $fetch(`/api/recipes/${recipeId.value}/ingredients`, {
           method: 'POST',
-          body: { food_id: food.value.id, ...body },
+          body: { food_id: food.value.id, ...body, is_optional: optional.value },
         })
       }
       await router.push(`/recipes/${recipeId.value}`)
@@ -127,12 +228,19 @@ async function save() {
     if (entryId.value) {
       await $fetch(`/api/diary/entries/${entryId.value}`, {
         method: 'PATCH',
-        body: { ...body, meal: meal.value },
+        body: { ...body, meal: meal.value, adjustments: adjustments.value },
       })
     } else {
       await $fetch('/api/diary/entries', {
         method: 'POST',
-        body: { date: date.value, meal: meal.value, food_id: food.value.id, ...body },
+        body: {
+          date: date.value,
+          meal: meal.value,
+          food_id: food.value.id,
+          ...body,
+          // Empty means "as written", which is almost every meal.
+          adjustments: adjustments.value,
+        },
       })
     }
     await router.push(date.value ? `/?d=${date.value}` : '/')
@@ -157,6 +265,35 @@ async function remove() {
 }
 
 const canRemove = computed(() => !!entryId.value || !!ingredientId.value)
+
+// --- keeping an adjustment -----------------------------------------------
+
+/**
+ * Turn this meal's changes into a recipe of their own.
+ *
+ * The point at which "three eggs today" becomes "this is how I make it". The
+ * variant is a sibling of the recipe it came from, so either one leads back to
+ * the other, and the log that follows uses the variant — otherwise saving it
+ * would leave you looking at a recipe you aren't about to eat.
+ */
+const variantName = ref('')
+const savingVariant = ref(false)
+
+async function saveAsVariant() {
+  if (!food.value || adjustments.value.length === 0) return
+  savingVariant.value = true
+  saveError.value = null
+  try {
+    const { id } = await $fetch<{ id: number }>(`/api/recipes/${food.value.id}/variants`, {
+      method: 'POST',
+      body: { name: variantName.value.trim() || undefined, adjustments: adjustments.value },
+    })
+    await router.push(`/recipes/${id}`)
+  } catch (err) {
+    saveError.value = (err as { statusMessage?: string }).statusMessage ?? 'Could not save'
+    savingVariant.value = false
+  }
+}
 </script>
 
 <template>
@@ -179,6 +316,13 @@ const canRemove = computed(() => !!entryId.value || !!ingredientId.value)
     <section class="card bg-base-100 shadow-sm">
       <div class="card-body p-4 gap-3">
         <PortionPicker :picker="picker">
+          <label v-if="recipeId" class="label cursor-pointer justify-start gap-3 py-0">
+            <input v-model="optional" type="checkbox" class="toggle toggle-sm">
+            <span class="label-text text-sm">
+              Optional — suggest it, don’t count it
+            </span>
+          </label>
+
           <label v-if="!recipeId" class="form-control">
             <span class="label-text text-xs mb-1">Meal</span>
             <div role="tablist" class="tabs tabs-box">
@@ -195,6 +339,70 @@ const canRemove = computed(() => !!entryId.value || !!ingredientId.value)
             </div>
           </label>
         </PortionPicker>
+      </div>
+    </section>
+
+    <!-- Adjusting the recipe for this one meal. Collapsed by default: logging a
+         recipe as written should stay two taps, and it is what happens almost
+         every time. -->
+    <section v-if="adjustable" class="card bg-base-100 shadow-sm">
+      <div class="card-body p-4 gap-3">
+        <button
+          class="flex items-center gap-2 text-left"
+          :aria-expanded="showAdjuster"
+          @click="showAdjuster = !showAdjuster"
+        >
+          <div class="flex-1 min-w-0">
+            <h2 class="font-semibold text-sm">
+              {{ entryId ? 'What was in it' : 'Adjust for this meal' }}
+            </h2>
+            <p class="text-xs text-base-content/50">
+              <template v-if="adjustments.length">
+                {{ adjustments.length }}
+                {{ adjustments.length === 1 ? 'change' : 'changes' }} — the recipe stays as it is
+              </template>
+              <template v-else>
+                Fewer eggs, no bacon, a bit more cheese — just this once
+              </template>
+            </p>
+          </div>
+          <AppIcon
+            :name="showAdjuster ? 'minus' : 'plus'"
+            class="w-4 h-4 text-base-content/40 shrink-0"
+          />
+        </button>
+
+        <template v-if="showAdjuster">
+          <RecipeAdjuster
+            :ingredients="adjustable"
+            @update:adjustments="adjustments = $event"
+          />
+
+          <!-- Only once something has changed: an empty name box on a screen
+               nobody is naming anything on is just clutter. -->
+          <div v-if="adjustments.length && !entryId" class="flex flex-col gap-2 pt-1">
+            <div class="flex gap-2">
+              <input
+                v-model="variantName"
+                type="text"
+                class="input input-bordered input-sm flex-1 min-w-0"
+                :placeholder="`${food.name} (my way)`"
+                aria-label="Name for the variant"
+              >
+              <button
+                class="btn btn-outline btn-sm gap-2"
+                :disabled="savingVariant"
+                @click="saveAsVariant"
+              >
+                <span v-if="savingVariant" class="loading loading-spinner loading-xs" />
+                Save as a variant
+              </button>
+            </div>
+            <p class="text-xs text-base-content/50">
+              Keeps these changes as a recipe variant, linked to this one.
+            </p>
+          </div>
+        </template>
       </div>
     </section>
 

@@ -43,6 +43,16 @@ export default defineEventHandler(async (event) => {
   })
   const note = optionalText(body.note, 200)
 
+  // An optional ingredient added now is a *suggestion* — "50 g bacon on top" —
+  // so it starts switched off and the recipe's totals are the base dish. A
+  // caller can say otherwise; nothing in the app currently does.
+  const isOptional = body.is_optional ? 1 : 0
+  const isIncluded = body.is_included === undefined
+    ? (isOptional ? 0 : 1)
+    : (body.is_included ? 1 : 0)
+  // The constraint the schema can't carry: a required ingredient is always in.
+  const included = isOptional ? isIncluded : 1
+
   return transact((db) => {
     const recipe = findRecipe(db, recipeId, user.id)
     if (!recipe) throw createError({ statusCode: 404, statusMessage: 'Recipe not found' })
@@ -88,8 +98,8 @@ export default defineEventHandler(async (event) => {
       .prepare(
         `INSERT INTO recipe_ingredients
            (recipe_food_id, food_id, grams, serving_label, serving_count,
-            raw_text, note, sort_order)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            raw_text, note, sort_order, is_optional, is_included)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         recipeId,
@@ -100,6 +110,8 @@ export default defineEventHandler(async (event) => {
         rawText,
         note,
         nextIngredientOrder(db, recipeId),
+        isOptional,
+        included,
       )
 
     recomputeRecipeAndDependents(db, recipeId)

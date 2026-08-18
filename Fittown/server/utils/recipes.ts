@@ -1,17 +1,21 @@
 import type { DatabaseSync } from 'node:sqlite'
 import { NUTRIENT_KEYS, scaleNutrients } from '#shared/nutrients'
 import { uniqueCopyName } from '#shared/friends'
+import type { AdjustmentNote, RecipeAdjustment } from '#shared/recipes'
 import {
   MAX_RECIPE_DEPTH,
   RECIPE_LOG_SOURCE,
   RECIPE_SOURCE,
   RECIPE_SOURCES,
+  SERVING_LABEL,
+  WHOLE_RECIPE_LABEL,
+  describeAdjustments,
   needsWholeRecipeOption,
+  shortFoodName,
   nestedPortionGrams,
   recipeServingGrams,
   recipeServingLabel,
   rollUpRecipe,
-  WHOLE_RECIPE_LABEL,
   type RecipeRollUp,
 } from '#shared/recipes'
 // Explicit extension: `scripts/recompute-recipes.mjs` imports this module under
@@ -53,6 +57,10 @@ export interface IngredientRow {
   /** Amount descriptor or prep note — "a lot of", "minced". */
   note: string | null
   sort_order: number
+  /** Does the UI offer a switch for this one? */
+  is_optional: number
+  /** Is it currently counted? A switched-off optional contributes nothing. */
+  is_included: number
   /**
    * The ingredient's food row, or **null** when the import couldn't match this
    * line to one with confidence. A null food contributes no nutrition and no
@@ -75,13 +83,20 @@ export function findRecipe(
   db: DatabaseSync,
   id: number,
   userId: number,
+  /**
+   * Which kind of row to accept. Defaults to an editable recipe, and every
+   * mutation route relies on that default: passing `RECIPE_LOG_SOURCE` here is
+   * how the *read-only* view of a logged meal is fetched, and nothing that
+   * writes may do it.
+   */
+  source: string = RECIPE_SOURCE,
 ): RecipeRow | undefined {
   return db
     .prepare(
       `SELECT ${foodCols()}, ${RECIPE_EXTRA_COLS} FROM foods f
        WHERE f.id = ? AND f.owner_user_id = ? AND f.source = ?`,
     )
-    .get(id, userId, RECIPE_SOURCE) as RecipeRow | undefined
+    .get(id, userId, source) as RecipeRow | undefined
 }
 
 /**
@@ -102,6 +117,7 @@ export function listIngredients(db: DatabaseSync, recipeFoodId: number): Ingredi
     .prepare(
       `SELECT ri.id AS ingredient_id, ri.grams, ri.serving_label, ri.serving_count,
               ri.raw_text, ri.note, ri.sort_order, ri.food_id AS ri_food_id,
+              ri.is_optional, ri.is_included,
               ${foodCols()}
        FROM recipe_ingredients ri
        LEFT JOIN foods f ON f.id = ri.food_id
@@ -120,6 +136,8 @@ export function listIngredients(db: DatabaseSync, recipeFoodId: number): Ingredi
       note,
       sort_order: sortOrder,
       ri_food_id: foodId,
+      is_optional: isOptional,
+      is_included: isIncluded,
       ...food
     } = row
     return {
@@ -130,6 +148,11 @@ export function listIngredients(db: DatabaseSync, recipeFoodId: number): Ingredi
       raw_text: (rawText as string | null) ?? null,
       note: (note as string | null) ?? null,
       sort_order: Number(sortOrder),
+      is_optional: Number(isOptional ?? 0),
+      // Absent reads as included, matching the column default and
+      // `ingredientIsIncluded()` — a database that predates the migration must
+      // not silently drop every ingredient out of every recipe.
+      is_included: isIncluded === null || isIncluded === undefined ? 1 : Number(isIncluded),
       food: foodId === null || foodId === undefined ? null : food,
     }
   })
@@ -314,6 +337,49 @@ export function recipesInDependencyOrder(
     .map((recipe) => ({ ...recipe, depth: recipeDepthBelow(db, Number(recipe.id)) }))
     .sort((a, b) => a.depth - b.depth)
     .map(({ id, name }) => ({ id: Number(id), name }))
+}
+
+/**
+ * The other recipes in this one's family — its variants.
+ *
+ * A family is a flat set sharing `recipe_family_id`, which is the id of whichever
+ * of them came first. Flat rather than a tree on purpose: "the three ways I make
+ * chili" have no natural parent, and a tree would make deleting the first one a
+ * question about the other two rather than just a deletion.
+ *
+ * Scoped to the owner as well as the family, so a family id guessed from
+ * somebody else's recipe returns nothing.
+ */
+export function listVariants(
+  db: DatabaseSync,
+  familyId: number,
+  excludeId: number,
+  ownerId: number,
+) {
+  const rows = db
+    .prepare(
+      `SELECT f.id, f.name, f.recipe_servings, f.serving_grams, f.kcal
+       FROM foods f
+       WHERE f.recipe_family_id = ? AND f.id != ? AND f.owner_user_id = ? AND f.source = ?
+       ORDER BY f.name COLLATE NOCASE`,
+    )
+    .all(familyId, excludeId, ownerId, RECIPE_SOURCE) as {
+      id: number
+      name: string
+      kcal: number | null
+      serving_grams: number | null
+    }[]
+
+  return rows.map((row) => ({
+    id: Number(row.id),
+    name: row.name,
+    // The figure the chip shows. Null when the variant is still empty, which is
+    // not the same as zero.
+    kcal_per_serving:
+      row.kcal !== null && row.serving_grams !== null
+        ? (row.kcal * row.serving_grams) / 100
+        : null,
+  }))
 }
 
 /** Recipes that contain this one, transitively. Excludes the recipe itself. */
@@ -530,6 +596,13 @@ export function listRecipeSummaries(db: DatabaseSync, userId: number) {
       `SELECT f.id, f.name, f.source, f.brand, f.is_liquid,
               f.recipe_servings, f.recipe_final_weight_g,
               f.serving_grams, f.kcal,
+              COALESCE(f.recipe_family_id, f.id) AS family_id,
+              -- Siblings, so the list can say "2 variants" without a second
+              -- query per row. COALESCE for rows that predate the column.
+              (SELECT COUNT(*) FROM foods v
+               WHERE v.source = f.source AND v.owner_user_id = f.owner_user_id
+                 AND COALESCE(v.recipe_family_id, v.id) = COALESCE(f.recipe_family_id, f.id)
+                 AND v.id != f.id) AS variant_count,
               (SELECT COUNT(*) FROM recipe_ingredients ri
                WHERE ri.recipe_food_id = f.id) AS ingredient_count,
               -- So the list can say "2 need a food" on an imported recipe. It
@@ -567,8 +640,13 @@ export function listRecipeSummaries(db: DatabaseSync, userId: number) {
  * Returns undefined when `ownerId` doesn't own recipe `id`, which is what
  * makes a guessed id a 404 on every route that calls this.
  */
-export function recipeDetail(db: DatabaseSync, id: number, ownerId: number) {
-  const recipe = findRecipe(db, id, ownerId)
+export function recipeDetail(
+  db: DatabaseSync,
+  id: number,
+  ownerId: number,
+  source: string = RECIPE_SOURCE,
+) {
+  const recipe = findRecipe(db, id, ownerId, source)
   if (!recipe) return undefined
 
   const ingredients = listIngredients(db, id)
@@ -599,6 +677,8 @@ export function recipeDetail(db: DatabaseSync, id: number, ownerId: number) {
       raw_text: ingredient.raw_text,
       note: ingredient.note,
       sort_order: ingredient.sort_order,
+      is_optional: ingredient.is_optional,
+      is_included: ingredient.is_included,
       food: ingredient.food,
       // An empty object, not a row of zeroes: the UI renders a missing key as
       // "not recorded", which is the honest answer for a line we never matched.
@@ -614,11 +694,23 @@ export function recipeDetail(db: DatabaseSync, id: number, ownerId: number) {
     unresolved_count: ingredients.filter((i) => i.food === null).length,
     totals,
     per_serving: perServing,
+    /**
+     * Which family this recipe belongs to, and who else is in it.
+     *
+     * `?? id` covers a recipe from before the column existed and a frozen meal,
+     * which has no family at all — in both cases it is a family of one, and the
+     * strip on screen shows nothing.
+     */
+    family_id: Number(recipe.recipe_family_id ?? id),
+    variants: source === RECIPE_SOURCE
+      ? listVariants(db, Number(recipe.recipe_family_id ?? id), id, ownerId)
+      : [],
   }
 }
 
 /** One ingredient row, as `cloneRecipe()` reads it off the source recipe. */
 interface SourceIngredient {
+  id: number
   food_id: number | null
   grams: number
   serving_label: string | null
@@ -626,6 +718,8 @@ interface SourceIngredient {
   raw_text: string | null
   note: string | null
   sort_order: number
+  is_optional: number
+  is_included: number
   owner_user_id: number | null
   /** The ingredient food's own source — 'recipe' means copy it recursively. */
   source: string | null
@@ -654,6 +748,13 @@ export interface CloneOptions {
    * one dressing used twice is duplicated once.
    */
   localised?: Map<number, number>
+  /**
+   * Changes to apply while copying, keyed by the **source** recipe's ingredient
+   * ids. Applied here rather than to the finished clone because the clone's rows
+   * have new ids, and mapping between them after the fact is a second thing to
+   * keep correct.
+   */
+  adjustments?: RecipeAdjustment[]
 }
 
 /**
@@ -708,8 +809,9 @@ export function cloneRecipe(
   // vinaigrette with no salt and no oregano, with nothing on screen to say so.
   const ingredients = db
     .prepare(
-      `SELECT ri.food_id, ri.grams, ri.serving_label, ri.serving_count,
+      `SELECT ri.id, ri.food_id, ri.grams, ri.serving_label, ri.serving_count,
               ri.raw_text, ri.note, ri.sort_order,
+              ri.is_optional, ri.is_included,
               f.owner_user_id, f.source
        FROM recipe_ingredients ri
        LEFT JOIN foods f ON f.id = ri.food_id
@@ -723,15 +825,24 @@ export function cloneRecipe(
   // of the same recipe is copied once, not twice.
   const localised = options.localised ?? new Map<number, number>()
 
+  const sets = new Map<number, Extract<RecipeAdjustment, { op: 'set' }>>()
+  const adds: Extract<RecipeAdjustment, { op: 'add' }>[] = []
+  for (const adjustment of options.adjustments ?? []) {
+    if (adjustment.op === 'add') adds.push(adjustment)
+    else sets.set(adjustment.ingredient_id, adjustment)
+  }
+
   const insert = db.prepare(
     `INSERT INTO recipe_ingredients
        (recipe_food_id, food_id, grams, serving_label, serving_count,
-        raw_text, note, sort_order)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        raw_text, note, sort_order, is_optional, is_included)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
 
   for (const ingredient of ingredients) {
-    let foodId = ingredient.food_id
+    const change = sets.get(Number(ingredient.id))
+    // A swap for this meal only: the recipe still says butter.
+    let foodId = change?.food_id ?? ingredient.food_id
     // Unmatched rows have nothing to localise — they are already just text.
     if (
       options.localiseForeignFoods
@@ -759,16 +870,52 @@ export function cloneRecipe(
     insert.run(
       newId,
       foodId,
-      ingredient.grams,
-      ingredient.serving_label,
-      ingredient.serving_count,
+      change?.grams ?? ingredient.grams,
+      change?.serving_label === undefined ? ingredient.serving_label : change.serving_label,
+      change?.serving_count === undefined ? ingredient.serving_count : change.serving_count,
       // The CHECK constraint needs one of the two. A row with no food that
       // somehow also has no text cannot be copied into a legal row, so give it
       // something rather than failing the whole copy.
       foodId === null ? (ingredient.raw_text ?? 'Unnamed ingredient') : ingredient.raw_text,
       ingredient.note,
       ingredient.sort_order,
+      // Carried, not defaulted: a copy that forgot these would count somebody's
+      // suggested bacon, and a frozen meal would silently regain an ingredient
+      // the person skipped.
+      ingredient.is_optional ?? 0,
+      // Skipped for this meal. The row is still written — a frozen meal is a
+      // record, and "no bacon" is part of what happened — it just counts for
+      // nothing, exactly like an optional the user never switched on.
+      change?.included === undefined
+        ? (ingredient.is_included ?? 1)
+        : (change.included ? 1 : 0),
     )
+  }
+
+  // Things the recipe never had. Appended after the copied rows, so the order
+  // reads as "the recipe, then what I put in as well".
+  let extraOrder = ingredients.length
+  for (const addition of adds) {
+    const food = db
+      .prepare(
+        'SELECT id, name FROM foods WHERE id = ? AND (owner_user_id IS NULL OR owner_user_id = ?)',
+      )
+      .get(addition.food_id, userId) as { id: number; name: string } | undefined
+    if (!food) continue
+
+    insert.run(
+      newId,
+      food.id,
+      addition.grams,
+      addition.serving_label ?? null,
+      addition.serving_count ?? null,
+      null,
+      null,
+      extraOrder,
+      0,
+      1,
+    )
+    extraOrder += 1
   }
 
   // The children were cloned above, so they are already rolled up by the time
@@ -820,6 +967,119 @@ export function copyRecipeInto(
 }
 
 /**
+ * Describe what a meal's adjustments changed, for the diary line.
+ *
+ * Reads the *source* rows so it can say "instead of 200 g". Formats the amount
+ * the way the row is measured: a row entered as "4 × egg" is described in eggs,
+ * because that is the change the person made.
+ */
+function noteAdjustments(
+  db: DatabaseSync,
+  recipeId: number,
+  adjustments: RecipeAdjustment[],
+): string | null {
+  if (adjustments.length === 0) return null
+
+  const rows = listIngredients(db, recipeId)
+  const byId = new Map(rows.map((row) => [row.id, row]))
+  const notes: AdjustmentNote[] = []
+
+  /** "4 × egg", or "200 g" when the row is measured by weight. */
+  const amount = (
+    grams: number,
+    label: string | null,
+    count: number | null,
+    isLiquid: boolean,
+  ) => (label && count
+    ? `${Number(count.toFixed(2))} × ${label}`
+    : `${Math.round(grams)} ${isLiquid ? 'ml' : 'g'}`)
+
+  for (const adjustment of adjustments) {
+    if (adjustment.op === 'add') {
+      const food = db.prepare('SELECT name, is_liquid FROM foods WHERE id = ?')
+        .get(adjustment.food_id) as { name: string; is_liquid: number } | undefined
+      if (!food) continue
+      notes.push({
+        kind: 'added',
+        name: shortFoodName(food.name),
+        amount: amount(
+          adjustment.grams,
+          adjustment.serving_label ?? null,
+          adjustment.serving_count ?? null,
+          !!food.is_liquid,
+        ),
+      })
+      continue
+    }
+
+    const row = byId.get(adjustment.ingredient_id)
+    if (!row) continue
+    const full = (row.food?.name as string | undefined) ?? row.raw_text ?? 'an ingredient'
+    const name = shortFoodName(full)
+    const isLiquid = !!row.food?.is_liquid
+
+    if (adjustment.included === false) {
+      notes.push({ kind: 'skipped', name })
+      continue
+    }
+    if (adjustment.food_id !== undefined) {
+      const swap = db.prepare('SELECT name FROM foods WHERE id = ?').get(adjustment.food_id) as
+        | { name: string }
+        | undefined
+      notes.push({
+        kind: 'swapped',
+        name,
+        to: swap ? shortFoodName(swap.name) : 'something else',
+      })
+      continue
+    }
+    if (adjustment.grams !== undefined && adjustment.grams !== row.grams) {
+      notes.push({
+        kind: 'amount',
+        name,
+        from: amount(row.grams, row.serving_label, row.serving_count, isLiquid),
+        to: amount(
+          adjustment.grams,
+          adjustment.serving_label === undefined ? row.serving_label : adjustment.serving_label,
+          adjustment.serving_count === undefined ? row.serving_count : adjustment.serving_count,
+          isLiquid,
+        ),
+      })
+    }
+  }
+
+  return describeAdjustments(notes)
+}
+
+/**
+ * How many grams of a recipe a named portion comes to.
+ *
+ * The client sizes its preview against the recipe as it is; once a meal has been
+ * adjusted, the frozen copy weighs something else, and "1 serving" has to mean a
+ * serving *of what was eaten*. Re-deriving here makes the server the only
+ * authority on the number that lands in the diary — and it is the same helper a
+ * nested recipe uses, because it is the same question.
+ *
+ * Returns null for a plain gram portion, where the client's figure is the whole
+ * truth and nothing needs re-deriving.
+ */
+export function resolveLoggedGrams(
+  db: DatabaseSync,
+  foodId: number,
+  servingLabel: string | null,
+  servingCount: number | null,
+): number | null {
+  if (servingLabel !== SERVING_LABEL && servingLabel !== WHOLE_RECIPE_LABEL) return null
+
+  const row = db
+    .prepare('SELECT serving_grams, recipe_servings FROM foods WHERE id = ?')
+    .get(foodId) as { serving_grams: number | null; recipe_servings: number | null } | undefined
+
+  if (!row) return null
+  return nestedPortionGrams(servingLabel, servingCount, row)
+}
+
+/**
  * Freeze a recipe at the moment it is logged, and return the frozen food id.
  *
  * The diary entry points at this, not at the recipe, which is what makes
@@ -828,6 +1088,10 @@ export function copyRecipeInto(
  * same as it always did; it is never indexed for search, never listed among
  * the user's recipes, and never recomputed again.
  *
+ * `adjustments` are this meal's changes — three eggs instead of four, no bacon,
+ * a handful of extra cheese. They land on the copy, so the recipe still says
+ * what it always said.
+ *
  * Ownership is checked here rather than trusted from the caller: this mints a
  * row, and a recipe id guessed from another account must find nothing.
  */
@@ -835,23 +1099,119 @@ export function snapshotRecipeForLog(
   db: DatabaseSync,
   recipeId: number,
   userId: number,
-  logNote: string | null = null,
-): { id: number; servingGrams: number | null } {
+  adjustments: RecipeAdjustment[] = [],
+): { id: number; servingGrams: number | null; note: string | null } {
   const recipe = findRecipe(db, recipeId, userId)
   if (!recipe) throw new Error(`No recipe with id ${recipeId} for user ${userId}`)
+
+  // Built from the source rows, so it can say "instead of 200 g" — which means
+  // reading them before the clone exists.
+  const note = noteAdjustments(db, recipeId, adjustments)
 
   const id = cloneRecipe(db, recipeId, userId, {
     source: RECIPE_LOG_SOURCE,
     familyId: null,
     loggedFrom: recipeId,
-    logNote,
+    logNote: note,
+    adjustments,
   })
 
   const row = db.prepare('SELECT serving_grams FROM foods WHERE id = ?').get(id) as
     | { serving_grams: number | null }
     | undefined
 
-  return { id, servingGrams: row?.serving_grams ?? null }
+  return { id, servingGrams: row?.serving_grams ?? null, note }
+}
+
+/**
+ * Re-apply a meal's adjustments to the frozen copy already behind an entry.
+ *
+ * Editing an entry, not rewriting history: the copy belongs to exactly one
+ * diary row, so changing it in place is the same act as changing that row. The
+ * ingredient ids are the **copy's** own, because that is what the screen showing
+ * the meal was drawn from.
+ *
+ * Nutrition is re-derived from the ingredient foods as they are *now*, which is
+ * right — re-saving is a fresh act of logging, and a stale figure is the thing
+ * being corrected.
+ */
+export function resnapshotForLog(
+  db: DatabaseSync,
+  snapshotId: number,
+  userId: number,
+  adjustments: RecipeAdjustment[],
+): { servingGrams: number | null; note: string | null } {
+  const snapshot = db
+    .prepare('SELECT id, name, recipe_log_note FROM foods WHERE id = ? AND owner_user_id = ? AND source = ?')
+    .get(snapshotId, userId, RECIPE_LOG_SOURCE) as
+    | { id: number; recipe_log_note: string | null }
+    | undefined
+
+  if (!snapshot) throw new Error(`No logged meal with id ${snapshotId} for user ${userId}`)
+
+  const fresh = noteAdjustments(db, snapshotId, adjustments)
+
+  const update = db.prepare(
+    `UPDATE recipe_ingredients
+     SET grams = ?, serving_label = ?, serving_count = ?, food_id = ?, is_included = ?
+     WHERE id = ? AND recipe_food_id = ?`,
+  )
+  const insert = db.prepare(
+    `INSERT INTO recipe_ingredients
+       (recipe_food_id, food_id, grams, serving_label, serving_count, sort_order,
+        is_optional, is_included)
+     VALUES (?, ?, ?, ?, ?, ?, 0, 1)`,
+  )
+
+  const rows = listIngredients(db, snapshotId)
+  const byId = new Map(rows.map((row) => [row.id, row]))
+  let order = rows.length
+
+  for (const adjustment of adjustments) {
+    if (adjustment.op === 'add') {
+      const food = db
+        .prepare(
+          'SELECT id FROM foods WHERE id = ? AND (owner_user_id IS NULL OR owner_user_id = ?)',
+        )
+        .get(adjustment.food_id, userId) as { id: number } | undefined
+      if (!food) continue
+      insert.run(
+        snapshotId,
+        food.id,
+        adjustment.grams,
+        adjustment.serving_label ?? null,
+        adjustment.serving_count ?? null,
+        order,
+      )
+      order += 1
+      continue
+    }
+
+    const row = byId.get(adjustment.ingredient_id)
+    if (!row) continue
+    update.run(
+      adjustment.grams ?? row.grams,
+      adjustment.serving_label === undefined ? row.serving_label : adjustment.serving_label,
+      adjustment.serving_count === undefined ? row.serving_count : adjustment.serving_count,
+      adjustment.food_id ?? (row.food?.id as number | undefined) ?? null,
+      adjustment.included === undefined ? row.is_included : (adjustment.included ? 1 : 0),
+      row.id,
+      snapshotId,
+    )
+  }
+
+  // Keep whatever the meal already said it differed by: this edit is described
+  // against the copy, so a second pass would otherwise report "no changes" and
+  // erase the note explaining the first one.
+  const note = fresh ?? snapshot.recipe_log_note
+  db.prepare('UPDATE foods SET recipe_log_note = ? WHERE id = ?').run(note, snapshotId)
+
+  recomputeRecipe(db, snapshotId)
+  const row = db.prepare('SELECT serving_grams FROM foods WHERE id = ?').get(snapshotId) as
+    | { serving_grams: number | null }
+    | undefined
+
+  return { servingGrams: row?.serving_grams ?? null, note }
 }
 
 /**
@@ -934,6 +1294,43 @@ export function copyCustomFoodInto(
     source.brand ?? null,
   )
   return id
+}
+
+/**
+ * Put a recipe's ingredients in the given order.
+ *
+ * Takes the **whole** list. A partial one throws rather than being applied: a
+ * client working from a stale copy of the recipe would otherwise scramble the
+ * rows it didn't know about, and the rows it did send would look right, so
+ * nothing on screen would say so.
+ *
+ * Compared as sets, which also catches a duplicate id — `[7, 7]` against two
+ * rows has the right length and would leave one row at whatever order it had.
+ */
+export function reorderIngredients(
+  db: DatabaseSync,
+  recipeFoodId: number,
+  ids: number[],
+): void {
+  const existing = (
+    db
+      .prepare('SELECT id FROM recipe_ingredients WHERE recipe_food_id = ?')
+      .all(recipeFoodId) as { id: number }[]
+  ).map((row) => Number(row.id))
+
+  const sent = new Set(ids)
+  const complete = sent.size === ids.length
+    && existing.length === ids.length
+    && existing.every((id) => sent.has(id))
+
+  if (!complete) {
+    throw new Error('The order must list every ingredient in this recipe exactly once')
+  }
+
+  const update = db.prepare(
+    'UPDATE recipe_ingredients SET sort_order = ? WHERE id = ? AND recipe_food_id = ?',
+  )
+  ids.forEach((id, index) => update.run(index, id, recipeFoodId))
 }
 
 /** Next free slot at the end of a recipe's ingredient list. */

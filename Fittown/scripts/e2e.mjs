@@ -821,6 +821,282 @@ await step('the picker won’t offer a choice that makes a recipe contain itself
 })
 
 // ---------------------------------------------------------------------------
+// Optional ingredients, reordering, and changing a recipe for one meal.
+// ---------------------------------------------------------------------------
+
+const omeletteName = `E2E Omelette ${Date.now()}`
+let omeletteUrl = null
+
+await step('an optional ingredient is in the recipe but not in the total', async () => {
+  omeletteUrl = await createRecipe(omeletteName)
+  await addIngredientGrams(omeletteUrl, 'chicken breast', 200)
+
+  const base = await page.locator('section:has(h2:text("Nutrition"))').innerText()
+  const baseKcal = Number(base.match(/(\d[\d,]*)\s*kcal/)?.[1]?.replace(/,/g, ''))
+
+  // Added through the normal flow, with the Optional switch on.
+  await page.goto(omeletteUrl.replace('/recipes/', '/add?recipe='), { waitUntil: 'networkidle' })
+  await page.getByPlaceholder('Search foods').fill('olive oil')
+  await page.waitForTimeout(1400)
+  await page.locator('a[href^="/food/"]').first().click()
+  await page.waitForLoadState('networkidle')
+  await page.waitForTimeout(600)
+  await page.locator('label:has-text("Optional") input[type="checkbox"]').check()
+  await page.locator('label:has-text("Portion") select').selectOption({ label: 'g' })
+  await page.locator('label:has-text("Amount") input').fill('50')
+  await page.getByRole('button', { name: /Add to recipe/i }).click()
+  await page.waitForURL(/\/recipes\/\d+/, { timeout: 15000 })
+  await page.waitForTimeout(900)
+
+  const withOptional = await page.locator('main').innerText()
+  if (!/optional/i.test(withOptional)) {
+    throw new Error(`the ingredient is not marked optional: ${withOptional.slice(0, 500)}`)
+  }
+  const after = await page.locator('section:has(h2:text("Nutrition"))').innerText()
+  const afterKcal = Number(after.match(/(\d[\d,]*)\s*kcal/)?.[1]?.replace(/,/g, ''))
+  if (afterKcal !== baseKcal) {
+    throw new Error(`a suggestion should not change the total: ${baseKcal} became ${afterKcal}`)
+  }
+
+  // Switching it on counts it — the same ingredient, one tap.
+  await page.locator('input[aria-label^="Include "]').first().check()
+  await page.waitForTimeout(1400)
+  const onText = await page.locator('section:has(h2:text("Nutrition"))').innerText()
+  const onKcal = Number(onText.match(/(\d[\d,]*)\s*kcal/)?.[1]?.replace(/,/g, ''))
+  if (onKcal <= baseKcal) {
+    throw new Error(`switching the optional on should raise the total: ${baseKcal} then ${onKcal}`)
+  }
+
+  // …and back off, so the rest of these steps work from the base recipe.
+  await page.locator('input[aria-label^="Include "]').first().uncheck()
+  await page.waitForTimeout(1400)
+})
+
+await step('ingredients can be reordered, and it sticks', async () => {
+  await page.goto(omeletteUrl, { waitUntil: 'networkidle' })
+  await page.waitForTimeout(800)
+
+  const names = async () =>
+    (await page.locator('section:has(h2:text("Ingredients")) li a[href^="/food/"]').allInnerTexts())
+      .map((text) => text.trim())
+
+  const before = await names()
+  if (before.length < 2) throw new Error(`expected two ingredients: ${before}`)
+
+  // The keyboard path, which is the same commit as the drag and is the one a
+  // browser can drive deterministically. The pointer drag is a manual check.
+  const handle = page.locator('button[aria-label^="Reorder "]').first()
+  await handle.focus()
+  await handle.press('ArrowDown')
+  await page.waitForTimeout(1400)
+
+  const after = await names()
+  if (after[0] === before[0]) {
+    throw new Error(`the first ingredient did not move: ${before} then ${after}`)
+  }
+
+  // Reload rather than trust the optimistic list: the point is that it saved.
+  await page.reload({ waitUntil: 'networkidle' })
+  await page.waitForTimeout(900)
+  const reloaded = await names()
+  if (reloaded.join('|') !== after.join('|')) {
+    throw new Error(`the order did not persist: ${after} became ${reloaded}`)
+  }
+})
+
+await step('a drag stops when you let go of it', async () => {
+  // A regression test for a real bug: the drag handlers used to live on the
+  // handle, so the drag only ended if the handle received `pointerup`. Pointer
+  // capture is supposed to guarantee that — but capture is lost when the
+  // captured element is moved in the DOM, which is exactly what reordering the
+  // list does. The release then landed on whatever was under the pointer, the
+  // drag stayed live, and rows followed the mouse until you clicked the handle
+  // again.
+  //
+  // Reproducing it needs that lost capture, so this drops it deliberately
+  // mid-drag rather than hoping the browser does.
+  await page.goto(omeletteUrl, { waitUntil: 'networkidle' })
+  await page.waitForTimeout(900)
+
+  await page.evaluate(() => {
+    window.__dragIds = []
+    document.addEventListener('pointerdown', (e) => window.__dragIds.push(e.pointerId), true)
+    window.__dropCapture = () => {
+      const id = window.__dragIds.at(-1)
+      for (const el of document.querySelectorAll('button[aria-label^="Reorder "]')) {
+        if (el.hasPointerCapture?.(id)) { el.releasePointerCapture(id); return true }
+      }
+      return false
+    }
+  })
+
+  const names = async () =>
+    (await page.locator('section:has(h2:text("Ingredients")) li a[href^="/food/"]').allInnerTexts())
+      .map((text) => text.trim())
+
+  const handles = page.locator('button[aria-label^="Reorder "]')
+  const first = await handles.first().boundingBox()
+  const last = await handles.last().boundingBox()
+
+  await page.mouse.move(first.x + first.width / 2, first.y + first.height / 2)
+  await page.mouse.down()
+  for (let i = 1; i <= 6; i += 1) {
+    await page.mouse.move(first.x + first.width / 2, first.y + (last.y + last.height - first.y) * i / 6)
+  }
+  await page.waitForTimeout(200)
+
+  const moved = await names()
+  if (moved[0] === (await names())[1]) throw new Error('the drag did not move anything')
+
+  if (!(await page.evaluate(() => window.__dropCapture()))) {
+    throw new Error('could not drop pointer capture — the drag never took it')
+  }
+
+  // Release well away from the handle column, where nothing is listening.
+  await page.mouse.move(first.x + 250, last.y + last.height / 2)
+  await page.mouse.up()
+  await page.waitForTimeout(500)
+  const released = await names()
+
+  // Wander back over the handles with no button held. Nothing may follow.
+  for (let i = 1; i <= 8; i += 1) {
+    await page.mouse.move(first.x + first.width / 2, last.y - (last.y - first.y) * i / 8)
+  }
+  await page.waitForTimeout(500)
+
+  const after = await names()
+  if (after.join('|') !== released.join('|')) {
+    throw new Error(`the drag continued after release: ${released} became ${after}`)
+  }
+})
+
+await step('a recipe can be changed for one meal without changing the recipe', async () => {
+  await page.goto(`${omeletteUrl.replace('/recipes/', '/food/')}?meal=dinner`, {
+    waitUntil: 'networkidle',
+  })
+  await page.waitForTimeout(800)
+
+  const previewKcal = async () =>
+    Number(
+      (await page.locator('section:has(h2:text("In this portion"))').innerText())
+        .match(/(\d[\d,]*)\s*kcal/)?.[1]?.replace(/,/g, ''),
+    )
+
+  const before = await previewKcal()
+
+  await page.getByRole('button', { name: /Adjust for this meal/i }).click()
+  await page.waitForTimeout(500)
+
+  // Halve the chicken for tonight only.
+  const amount = page.locator('input[aria-label^="Amount of Chicken"]').first()
+  await amount.fill('100')
+  await page.waitForTimeout(700)
+
+  const adjusted = await previewKcal()
+  if (!(adjusted < before)) {
+    throw new Error(`the preview did not follow the adjustment: ${before} then ${adjusted}`)
+  }
+
+  await page.getByRole('button', { name: /Add to Dinner/i }).click()
+  await page.waitForURL(/\/\?d=/, { timeout: 15000 })
+  await page.waitForTimeout(1000)
+
+  const row = page.locator('section:has(h2:text("Dinner")) li', { hasText: omeletteName })
+  if ((await row.count()) === 0) {
+    throw new Error('the adjusted meal is missing from the diary')
+  }
+  const rowText = await row.first().innerText()
+  // The diary says what was different about it.
+  if (!/instead of/.test(rowText)) {
+    throw new Error(`expected the entry to say what changed: ${rowText}`)
+  }
+  const logged = Number((await row.first().locator('div.tabular').first().innerText()).trim())
+  if (Math.abs(logged - adjusted) > 2) {
+    throw new Error(`the diary disagrees with the preview: ${adjusted} vs ${logged}`)
+  }
+
+  // And the recipe is exactly as it was.
+  await page.goto(omeletteUrl, { waitUntil: 'networkidle' })
+  await page.waitForTimeout(800)
+  const recipeText = await page.locator('section:has(h2:text("Ingredients"))').innerText()
+  if (!/200 g/.test(recipeText)) {
+    throw new Error(`the recipe was changed by a one-off: ${recipeText.slice(0, 400)}`)
+  }
+})
+
+await step('variants are linked, and you can walk between them', async () => {
+  // Covers the wiring no unit test can reach: the route has to put the new
+  // recipe in the *source's* family rather than starting a new one, and the only
+  // way that shows is the two of them pointing at each other on screen.
+  await page.goto(omeletteUrl, { waitUntil: 'networkidle' })
+  await page.waitForTimeout(800)
+
+  const variantName = `${omeletteName} big`
+  await page.getByRole('button', { name: /Save as a variant/i }).click()
+  await page.getByLabel('Name for the variant').fill(variantName)
+  await page.getByRole('button', { name: /^Create$/ }).click()
+  await page.waitForURL(/\/recipes\/\d+/, { timeout: 15000 })
+  await page.waitForTimeout(1000)
+
+  const variantUrl = page.url()
+  if (variantUrl === omeletteUrl) throw new Error('the variant did not open')
+  if ((await page.locator('label:has-text("Name") input').inputValue()) !== variantName) {
+    throw new Error('the variant is not the recipe on screen')
+  }
+
+  // From the variant, the original is one tap away…
+  const back = page.locator(`a[href^="/recipes/"]:has-text("${omeletteName}")`).first()
+  if ((await back.count()) === 0) {
+    throw new Error(
+      `the variant does not link back to its family: ${(await page.locator('main').innerText()).slice(0, 400)}`,
+    )
+  }
+  await back.click()
+  await page.waitForURL(/\/recipes\/\d+/, { timeout: 15000 })
+  await page.waitForTimeout(900)
+
+  // …and from the original, so is the variant. A one-way link would mean the
+  // family id went on the wrong row.
+  const forward = page.locator(`a[href^="/recipes/"]:has-text("${variantName}")`).first()
+  if ((await forward.count()) === 0) {
+    throw new Error('the original does not link to its variant')
+  }
+
+  // And the list says how many there are.
+  await page.goto(`${BASE}/recipes`, { waitUntil: 'networkidle' })
+  await page.waitForTimeout(800)
+  const list = await page.locator('main').innerText()
+  if (!/1 variant\b/.test(list)) {
+    throw new Error(`the recipe list does not count variants: ${list.slice(0, 600)}`)
+  }
+})
+
+await step('an adjustment can be kept as a variant', async () => {
+  await page.goto(`${omeletteUrl.replace('/recipes/', '/food/')}?meal=lunch`, {
+    waitUntil: 'networkidle',
+  })
+  await page.waitForTimeout(800)
+  await page.getByRole('button', { name: /Adjust for this meal/i }).click()
+  await page.waitForTimeout(500)
+  await page.locator('input[aria-label^="Amount of Chicken"]').first().fill('120')
+  await page.waitForTimeout(700)
+
+  const variantName = `${omeletteName} light`
+  await page.getByLabel('Name for the variant').fill(variantName)
+  await page.getByRole('button', { name: /Save as a variant/i }).click()
+  await page.waitForURL(/\/recipes\/\d+/, { timeout: 15000 })
+  await page.waitForTimeout(1000)
+
+  const name = await page.locator('label:has-text("Name") input').inputValue()
+  if (name !== variantName) throw new Error(`the variant is called ${name}`)
+
+  const text = await page.locator('section:has(h2:text("Ingredients"))').innerText()
+  if (!/120 g/.test(text)) {
+    throw new Error(`the variant did not keep the adjustment: ${text.slice(0, 400)}`)
+  }
+})
+
+// ---------------------------------------------------------------------------
 // Importing a recipe.
 //
 // The parser and the matcher are covered exhaustively by the unit suite; what

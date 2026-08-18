@@ -87,7 +87,11 @@ export function ingredientSearchTerm(ingredient: RecipeIngredient): string {
  * is the whole reason an unmeasurable ingredient is worth storing at all.
  */
 export function ingredientDetail(ingredient: RecipeIngredient): string {
-  return [ingredient.food?.brand, portionText(ingredient), ingredient.note]
+  // "not counted" rather than "optional": the badge beside the name already
+  // says it is optional, and what this line has to answer is whether the
+  // number on the right is in the total.
+  const skipped = ingredient.is_optional && !ingredient.is_included ? 'not counted' : null
+  return [ingredient.food?.brand, portionText(ingredient), ingredient.note, skipped]
     .map((part) => (part ?? '').trim())
     .filter(Boolean)
     .join(' · ')

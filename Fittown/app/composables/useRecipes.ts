@@ -18,6 +18,17 @@ export interface RecipeSummary {
   unresolved_count: number
   /** Null when the recipe is still empty — which is not the same as zero. */
   kcal_per_serving: number | null
+  /** Variants share this. A recipe with none is a family of one. */
+  family_id: number
+  /** How many *other* recipes are in that family. */
+  variant_count: number
+}
+
+/** A sibling recipe, as the variants strip draws it. */
+export interface RecipeVariant {
+  id: number
+  name: string
+  kcal_per_serving: number | null
 }
 
 export interface RecipeIngredient {
@@ -30,6 +41,10 @@ export interface RecipeIngredient {
   /** Amount descriptor or prep note — "a lot of", "minced". */
   note: string | null
   sort_order: number
+  /** Does this ingredient get a switch — "50 g bacon on top"? */
+  is_optional: number
+  /** Is it counted? A switched-off optional is in the recipe but not in it. */
+  is_included: number
   /**
    * Null when an import couldn't match this line to a food. Such a row has no
    * nutrition and no weight; `raw_text` is the only name it has.
@@ -52,4 +67,8 @@ export interface RecipeDetail {
   per_serving: NutrientTotals
   /** The live public link for this recipe, if its owner made one. */
   share?: { token: string; created_at: string } | null
+  /** Which family this recipe belongs to — its own id when it has no variants. */
+  family_id?: number
+  /** The other recipes in that family. Empty for a frozen meal. */
+  variants?: RecipeVariant[]
 }

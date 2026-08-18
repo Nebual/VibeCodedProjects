@@ -61,7 +61,10 @@ const view = ref<'serving' | 'whole'>('serving')
             :key="ingredient.id"
             class="flex items-center gap-3 px-4 py-2.5"
           >
-            <div class="flex-1 min-w-0">
+            <div
+              class="flex-1 min-w-0"
+              :class="{ 'opacity-50': ingredient.is_optional && !ingredient.is_included }"
+            >
               <div class="flex items-center gap-1.5 min-w-0">
                 <div
                   class="truncate font-medium text-sm"
@@ -76,6 +79,13 @@ const view = ref<'serving' | 'whole'>('serving')
                   v-if="isNestedRecipe(ingredient)"
                   class="badge badge-xs badge-primary shrink-0"
                 >recipe</span>
+                <!-- Read-only, so no switch — but a reader still has to be able
+                     to tell a suggestion from part of the dish, or they will
+                     copy the recipe and wonder where the bacon went. -->
+                <span
+                  v-if="ingredient.is_optional"
+                  class="badge badge-xs badge-ghost shrink-0"
+                >optional</span>
               </div>
               <div class="text-xs text-base-content/60 truncate tabular">
                 {{ ingredientDetail(ingredient) || 'amount not given' }}
@@ -84,8 +94,18 @@ const view = ref<'serving' | 'whole'>('serving')
             <!-- A dash, not a zero: an unmatched line contributes nothing
                  because we don't know what it is, which is not the same as it
                  contributing nothing because it has no calories. -->
-            <div class="text-sm tabular shrink-0" :class="{ 'text-base-content/30': !isResolved(ingredient) }">
-              {{ isResolved(ingredient) ? Math.round(ingredient.nutrients.kcal ?? 0) : '—' }}
+            <div
+              class="text-sm tabular shrink-0"
+              :class="{
+                'text-base-content/30': !isResolved(ingredient),
+                'text-base-content/50': ingredient.is_optional && !ingredient.is_included,
+              }"
+            >
+              <template v-if="!isResolved(ingredient)">—</template>
+              <template v-else-if="ingredient.is_optional && !ingredient.is_included">
+                +{{ Math.round(ingredient.nutrients.kcal ?? 0) }}
+              </template>
+              <template v-else>{{ Math.round(ingredient.nutrients.kcal ?? 0) }}</template>
             </div>
           </li>
         </ul>

@@ -1,5 +1,6 @@
 import { RECIPE_LOG_SOURCE, RECIPE_SOURCE } from '#shared/recipes'
-import { snapshotRecipeForLog } from '../../utils/recipes'
+import { assertAdjustments } from '../../utils/adjustments'
+import { resolveLoggedGrams, snapshotRecipeForLog } from '../../utils/recipes'
 
 /**
  * Log a food to a meal.
@@ -14,6 +15,10 @@ import { snapshotRecipeForLog } from '../../utils/recipes'
  * the clone. Editing the recipe afterwards can no longer move a meal that has
  * already been eaten. The whole thing runs in one transaction — an entry
  * without its snapshot, or a snapshot without its entry, is corruption.
+ *
+ * `adjustments` are this meal's one-off changes: three eggs instead of four, no
+ * bacon, extra cheese. They land on the frozen copy, so the recipe is untouched
+ * and tomorrow's omelette is the omelette again.
  */
 export default defineEventHandler(async (event) => {
   const user = await requireUser(event)
@@ -29,6 +34,7 @@ export default defineEventHandler(async (event) => {
     min: 0.01,
     max: 1000,
   })
+  const adjustments = assertAdjustments(body.adjustments)
 
   return transact((db) => {
     const food = db
@@ -61,9 +67,25 @@ export default defineEventHandler(async (event) => {
       })
     }
 
-    const loggedFoodId = food.source === RECIPE_SOURCE
-      ? snapshotRecipeForLog(db, foodId, user.id).id
-      : foodId
+    if (adjustments.length > 0 && food.source !== RECIPE_SOURCE) {
+      throw createError({
+        statusCode: 400,
+        statusMessage: 'Only a recipe can be adjusted',
+      })
+    }
+
+    let loggedFoodId = foodId
+    let loggedGrams = grams
+
+    if (food.source === RECIPE_SOURCE) {
+      loggedFoodId = snapshotRecipeForLog(db, foodId, user.id, adjustments).id
+      // The client sized its portion against the recipe as written. Three eggs
+      // instead of four makes the frozen copy lighter, so "1 serving" is a
+      // different number of grams — re-derived here so the server is the only
+      // authority on what lands in the diary. A plain gram portion is left
+      // exactly as the user typed it.
+      loggedGrams = resolveLoggedGrams(db, loggedFoodId, servingLabel, servingCount) ?? grams
+    }
 
     const { next } = db
       .prepare(
@@ -77,7 +99,7 @@ export default defineEventHandler(async (event) => {
            (user_id, date, meal, food_id, grams, serving_label, serving_count, sort_order)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(user.id, day, meal, loggedFoodId, grams, servingLabel, servingCount, next)
+      .run(user.id, day, meal, loggedFoodId, loggedGrams, servingLabel, servingCount, next)
 
     return { id: Number(info.lastInsertRowid) }
   })
