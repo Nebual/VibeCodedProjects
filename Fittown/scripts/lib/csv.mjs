@@ -1,9 +1,12 @@
+import { createReadStream } from 'node:fs'
+import { createInterface } from 'node:readline'
+
 /**
  * Minimal RFC4180 CSV parser.
  *
  * USDA's FoodData Central exports are real quoted CSV (values like
  * `"HUMMUS, SABRA CLASSIC"` embed commas), unlike Open Food Facts' TSV dump
- * which only needed `split('\t')`. Shared so the Foundation Foods and (future)
+ * which only needed `split('\t')`. Shared so the Foundation Foods and
  * Branded Foods importers parse the same way.
  */
 export function parseCsv(text) {
@@ -56,6 +59,33 @@ export function parseCsv(text) {
     rows.push(row)
   }
   return rows
+}
+
+/**
+ * Stream a CSV file as header-keyed row objects, one line at a time.
+ *
+ * `readFileSync` + `parseCsvRecords` is fine for Foundation Foods' few-MB
+ * files, but Branded Foods' are hundreds of MB to low-GB — too large (and in
+ * `food_nutrient.csv`'s case, past Node's comfortable single-string limit)
+ * to read whole. This is only safe when no field contains an embedded
+ * newline, since it treats one text line as one record — verified for the
+ * specific files it's used on (`wc -l` matches a full quote-aware parse) by
+ * whoever adds a new file here, not guaranteed in general for arbitrary CSV.
+ */
+export async function* streamCsvRecords(path) {
+  const rl = createInterface({ input: createReadStream(path), crlfDelay: Infinity })
+  let header = null
+  for await (const line of rl) {
+    if (line === '') continue
+    const fields = parseCsv(line)[0] ?? []
+    if (header === null) {
+      header = fields
+      continue
+    }
+    const record = {}
+    for (let i = 0; i < header.length; i++) record[header[i]] = fields[i] ?? ''
+    yield record
+  }
 }
 
 /** Parse a CSV file's text into an array of header-keyed objects. */

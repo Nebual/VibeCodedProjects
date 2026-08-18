@@ -79,3 +79,11 @@ Plan recipe improvements:
 - a recipe can have 'optional' ingredients, like suggesting 50g of bacon on top. It should be easy to toggle optionals in the recipe, where if off, it doesn't appear in the logged use in the diary. Choosing to skip an ingredient once in this way, is separate from removing it from the recipe permanently.
 - allow reordering ingredients, so we can put Almond Flour next to regular Flour as an optional substitution
 - Lets also allow recipes to include other recipes, so if I make a Salad Dressing recipe in bulk (6 servings) I can add 1 serving of it to my Salad recipe.
+
+I'm interested in importing Branded Foods now, which I would want to prioritize slightly above OFF due to quality. We should also, when searching for items, show a pill indicating OFF or USDA-BF too. Deduping is a good idea, curious if there's a clear winner between USDA-BF vs OFF for a few of the same barcodes. Any other questions I can answer?
+Did you say the same barcode pointed at multiple products? Would it be helpful to have the user specify their country (Canada or US) to help pick the right one?
+
+Are there any indexes we should add to speed up the Add Food search?
+
+
+

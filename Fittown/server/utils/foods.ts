@@ -62,6 +62,11 @@ export function buildFtsQuery(input: string): string | null {
  *    data — so the bonus is calibrated to clear even that worst case against
  *    OFF's best case (an exact-name match with this dataset's highest
  *    popularity), not just a typical one;
+ *  - USDA Branded Foods gets only a *slight* nudge (+3, vs. Foundation's
+ *    +20) — a real investigation into overlapping barcodes found neither
+ *    source is clearly better (both have their own data errors), so this is
+ *    a mild tiebreaker for comparably-relevant hits, not a guaranteed win;
+ *    a popular OFF product's own popularity bonus can still outrank it;
  *  - scan popularity, log-damped since it spans several orders of magnitude;
  *  - a mild penalty for very long names, which in OFF are usually marketing
  *    strings rather than the thing you actually searched for.
@@ -72,6 +77,7 @@ export const SEARCH_SCORE = `
   + (CASE WHEN LOWER(f.name) = LOWER($exact) THEN 8 ELSE 0 END)
   + (CASE WHEN LOWER(f.name) LIKE LOWER($exact) || '%' THEN 3 ELSE 0 END)
   + (CASE WHEN f.source = 'usda_foundation' THEN 20 ELSE 0 END)
+  + (CASE WHEN f.source = 'usda_branded' THEN 3 ELSE 0 END)
   + (LOG(1 + COALESCE(f.popularity, 0)) * 0.6)
   - (LENGTH(f.name) / 60.0)
 `

@@ -6,7 +6,7 @@ import type { EffortKey } from '#shared/activities'
 export interface FoodRow {
   id: number
   /** 'recipe_log' is a recipe frozen at the moment it was logged. */
-  source: 'off' | 'usda_foundation' | 'custom' | 'recipe' | 'recipe_log'
+  source: 'off' | 'usda_foundation' | 'usda_branded' | 'custom' | 'recipe' | 'recipe_log'
   barcode: string | null
   name: string
   brand: string | null

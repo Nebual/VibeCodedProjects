@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { MASS_UNITS, VOLUME_UNITS, baseUnit, roundGrams } from '#shared/portions'
+import { MASS_UNITS, VOLUME_UNITS, baseUnit, portionUnits, roundGrams, type PortionUnit } from '#shared/portions'
 import { MAX_INSTRUCTIONS_CHARS, showsGramPortions } from '#shared/recipes'
 import { sharedRecipeUrl } from '#shared/friends'
 import {
@@ -192,6 +192,122 @@ async function setIncluded(ingredientId: number, included: boolean) {
     await $fetch(`/api/recipes/${id.value}/ingredients/${ingredientId}`, {
       method: 'PATCH',
       body: { is_included: included },
+    })
+    await refresh()
+  } catch (err) {
+    saveError.value = (err as { statusMessage?: string }).statusMessage ?? 'Could not save'
+  } finally {
+    saving.value = false
+  }
+}
+
+// --- inline amount edit -------------------------------------------------
+
+/** This ingredient's own unit, if it's stored as a named serving rather than a bare weight. */
+const unitOf = (ingredient: RecipeIngredient) =>
+  ingredient.serving_label && ingredient.serving_count
+    ? { label: ingredient.serving_label, size: ingredient.grams / ingredient.serving_count }
+    : null
+
+/** The unit this row is in right now, before any switch. */
+function baseChoice(ingredient: RecipeIngredient): PortionUnit {
+  const own = unitOf(ingredient)
+  if (own) return { key: 'own', label: own.label, size: own.size }
+  const base = baseUnit(!!ingredient.food?.is_liquid)
+  return { key: base, label: base, size: 1 }
+}
+
+/** Every unit this row's amount can be switched to, same table the meal-time
+ *  adjuster offers: its own unit first, then the usual weight/volume units. */
+function unitChoices(ingredient: RecipeIngredient): PortionUnit[] {
+  const own = unitOf(ingredient)
+  const isLiquidFood = !!ingredient.food?.is_liquid
+  const list: PortionUnit[] = own ? [{ key: 'own', label: own.label, size: own.size }] : []
+  for (const choice of portionUnits(isLiquidFood)) {
+    if (own && choice.label.toLowerCase() === own.label.toLowerCase()) continue
+    list.push(choice)
+  }
+  if (!isLiquidFood && !(own && own.label.toLowerCase().includes('cup'))) {
+    const cup = VOLUME_UNITS.find((u) => u.key === 'cup')!
+    list.push({ key: 'u:cup', label: cup.label, size: cup.size })
+  }
+  return list
+}
+
+function displayAmount(ingredient: RecipeIngredient, choice: PortionUnit): number {
+  if (choice.key === 'g' || choice.key === 'ml') return roundGrams(ingredient.grams)
+  return Math.round((ingredient.grams / choice.size) * 100) / 100
+}
+
+/** Which row's amount is open for a quick edit, and its unsaved draft. */
+const editingIngredientId = ref<number | null>(null)
+const amountDraft = ref(0)
+const unitDraft = ref<PortionUnit>({ key: 'g', label: 'g', size: 1 })
+const amountInputEl = ref<HTMLInputElement | null>(null)
+function setAmountInputEl(el: Element | null) {
+  amountInputEl.value = el as HTMLInputElement | null
+}
+
+watch(editingIngredientId, async (opened) => {
+  if (opened === null) return
+  await nextTick()
+  amountInputEl.value?.focus()
+  amountInputEl.value?.select()
+})
+
+function startEditAmount(ingredient: RecipeIngredient) {
+  const choice = baseChoice(ingredient)
+  editingIngredientId.value = ingredient.id
+  unitDraft.value = choice
+  amountDraft.value = displayAmount(ingredient, choice)
+}
+
+/** Switching units mid-edit keeps the weight fixed — it just re-expresses it —
+ *  rather than keeping the number in the box and quietly changing the weight. */
+function switchDraftUnit(unit: PortionUnit) {
+  const grams = amountDraft.value * unitDraft.value.size
+  unitDraft.value = unit
+  amountDraft.value = Math.round((grams / unit.size) * 100) / 100
+}
+
+function cancelEditAmount() {
+  editingIngredientId.value = null
+}
+
+/**
+ * Closes the editor and, if anything actually changed, saves it.
+ *
+ * Bound to the group's `focusout`, not each control's `blur`: moving focus
+ * from the amount box to the unit picker is still *inside* this edit, and
+ * closing it mid-click there would throw the unit change away.
+ */
+function onAmountGroupFocusOut(event: FocusEvent, ingredient: RecipeIngredient) {
+  const next = event.relatedTarget as Node | null
+  const group = event.currentTarget as HTMLElement
+  if (next && group.contains(next)) return
+  commitAmount(ingredient)
+}
+
+async function commitAmount(ingredient: RecipeIngredient) {
+  if (editingIngredientId.value !== ingredient.id) return
+  editingIngredientId.value = null
+
+  const isBaseUnit = unitDraft.value.key === 'g' || unitDraft.value.key === 'ml'
+  const grams = amountDraft.value * unitDraft.value.size
+  const servingLabel = isBaseUnit ? null : unitDraft.value.label
+  const servingCount = isBaseUnit ? null : amountDraft.value
+
+  const unchanged = Math.abs(grams - ingredient.grams) < 0.0001
+    && servingLabel === (ingredient.serving_label ?? null)
+    && servingCount === (ingredient.serving_count ?? null)
+  if (unchanged) return
+
+  saving.value = true
+  saveError.value = null
+  try {
+    await $fetch(`/api/recipes/${id.value}/ingredients/${ingredient.id}`, {
+      method: 'PATCH',
+      body: { grams, serving_label: servingLabel, serving_count: servingCount },
     })
     await refresh()
   } catch (err) {
@@ -586,13 +702,46 @@ const logLink = computed(
                   class="badge badge-xs badge-ghost shrink-0"
                 >optional</span>
               </div>
-              <div class="text-xs truncate tabular" :class="isResolved(ingredient) ? 'text-base-content/60' : 'text-warning'">
-                <template v-if="isResolved(ingredient)">
-                  {{ ingredientDetail(ingredient) || 'no amount given' }}
-                </template>
-                <template v-else>
-                  Tap to pick a food{{ ingredient.note ? ` · ${ingredient.note}` : '' }}
-                </template>
+              <div
+                v-if="editingIngredientId === ingredient.id"
+                class="flex items-center gap-1.5 flex-wrap"
+                @focusout="onAmountGroupFocusOut($event, ingredient)"
+              >
+                <input
+                  :ref="setAmountInputEl"
+                  v-model.number="amountDraft"
+                  type="number"
+                  min="0"
+                  step="any"
+                  inputmode="decimal"
+                  class="input input-bordered input-xs w-20 text-right tabular"
+                  :aria-label="`Amount of ${ingredientName(ingredient)}`"
+                  @keydown.enter="commitAmount(ingredient)"
+                  @keydown.esc="cancelEditAmount"
+                >
+                <select
+                  class="select select-bordered select-xs w-24 truncate"
+                  :aria-label="`Unit for ${ingredientName(ingredient)}`"
+                  :value="unitDraft.key"
+                  @change="switchDraftUnit(unitChoices(ingredient).find((u) => u.key === ($event.target as HTMLSelectElement).value)!)"
+                  @keydown.enter="commitAmount(ingredient)"
+                  @keydown.esc="cancelEditAmount"
+                >
+                  <option v-for="choice in unitChoices(ingredient)" :key="choice.key" :value="choice.key">
+                    {{ choice.label }}
+                  </option>
+                </select>
+              </div>
+              <button
+                v-else-if="isResolved(ingredient)"
+                type="button"
+                class="block text-xs truncate tabular text-base-content/60 rounded hover:bg-base-200 -mx-1 px-1"
+                @click="startEditAmount(ingredient)"
+              >
+                {{ ingredientDetail(ingredient) || 'no amount given' }}
+              </button>
+              <div v-else class="text-xs truncate tabular text-warning">
+                Tap to pick a food{{ ingredient.note ? ` · ${ingredient.note}` : '' }}
               </div>
             </div>
 
@@ -601,6 +750,7 @@ const logLink = computed(
             <!-- A switched-off optional shows what it *would* add, prefixed,
                  rather than a bare number that reads as part of the total. -->
             <div
+              v-if="editingIngredientId !== ingredient.id"
               class="text-sm tabular shrink-0"
               :class="{
                 'text-base-content/30': !isResolved(ingredient),
@@ -615,9 +765,10 @@ const logLink = computed(
             </div>
 
             <!-- A nested recipe is a place you can go, not just an amount to
-                 change: half of what is in this dish is in there. -->
+                 change: half of what is in this dish is in there. Hidden while
+                 this row's amount is being edited so the picker has the room. -->
             <NuxtLink
-              v-if="isNestedRecipe(ingredient)"
+              v-if="isNestedRecipe(ingredient) && editingIngredientId !== ingredient.id"
               :to="`/recipes/${ingredient.food!.id}`"
               class="btn btn-ghost btn-xs btn-square text-base-content/40 hover:text-primary"
               :aria-label="`Open ${ingredientName(ingredient)}`"
@@ -628,9 +779,10 @@ const logLink = computed(
 
             <!-- Only for rows that already have a food. An unmatched row's own
                  name is the link to the same search, so a second one beside it
-                 would be two controls doing one job. -->
+                 would be two controls doing one job. Hidden mid-edit for the
+                 same reason as the recipe link above. -->
             <NuxtLink
-              v-if="isResolved(ingredient)"
+              v-if="isResolved(ingredient) && editingIngredientId !== ingredient.id"
               :to="changeLink(ingredient)"
               class="btn btn-ghost btn-xs btn-square text-base-content/40 hover:text-primary"
               :aria-label="`Change ${ingredientName(ingredient)} to a different food`"
@@ -640,6 +792,7 @@ const logLink = computed(
             </NuxtLink>
 
             <button
+              v-if="editingIngredientId !== ingredient.id"
               class="btn btn-ghost btn-xs btn-square text-base-content/40 hover:text-error"
               :aria-label="`Remove ${ingredientName(ingredient)}`"
               @click="removeIngredient(ingredient.id)"

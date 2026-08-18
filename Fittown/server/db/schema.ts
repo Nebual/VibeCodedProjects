@@ -85,7 +85,7 @@ CREATE TABLE IF NOT EXISTS user_goals (
 
 CREATE TABLE IF NOT EXISTS foods (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  source          TEXT NOT NULL,          -- 'off' | 'usda_foundation' | 'custom' | 'recipe'
+  source          TEXT NOT NULL,          -- 'off' | 'usda_foundation' | 'usda_branded' | 'custom' | 'recipe'
   barcode         TEXT,                   -- OFF \`code\` / USDA \`fdc_id\`; null for most custom foods
   name            TEXT NOT NULL,
   brand           TEXT,
