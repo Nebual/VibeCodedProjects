@@ -6,15 +6,74 @@ and fixed (so they don't get reintroduced), and environment gotchas specific to 
 
 ## Current status
 
-Phases 0–3 from `plans/INITIAL_PLAN.md` are built and working: foundation, auth/admin, recorder,
-ingest, library/albums/sharing/export, and the waveform editor with auto-trim. **Phases 4–6 (noise
-reduction, PWA polish, Demucs) have not been started** — there is no `NoisePanel.vue`, no ambience
-lead-in in the recorder, and `@vite-pwa/nuxt` mentioned in the plan's stack section is not installed.
+Phases 0–5 from `plans/INITIAL_PLAN.md` are built and working: foundation, auth/admin, recorder
+(including the ambience lead-in), ingest, library/albums/sharing/export, the waveform editor with
+auto-trim, noise reduction (`EditorNoisePanel.vue`, learned-profile `afftdn` via `asendcmd`, FFT
+auto-notch, `om=n` audition, agate, loudnorm), and Phase 5 polish (`@vite-pwa/nuxt` installability +
+static-asset caching, keyboard shortcuts, bulk tag editing). **Phase 6 (Demucs source separation)
+has not been started** — deliberately: it needs a separate sidecar container per the plan, out of
+scope for an in-place session.
 
-Typecheck, production build, `pnpm test` (24 unit tests), and `pnpm test:e2e` (6 e2e tests) are all
+Typecheck, production build, `pnpm test` (46 unit tests), and `pnpm test:e2e` (13 e2e tests) are all
 green as of the end of this session. `INITIAL_PLAN.md` is the plan as originally written and hasn't
 been edited to reflect build decisions made along the way — where this file disagrees with it
 (notably impersonation and the auto-trim algorithm below), trust this file and the code.
+
+### Phase 5 notes
+
+- **PWA**: `@vite-pwa/nuxt` needs two non-obvious pieces beyond the module install + `pwa` config
+  block in `nuxt.config.ts`, or it silently doesn't work: (1) `<NuxtPwaManifest />` (or
+  `<VitePwaManifest />`) must be placed somewhere in `app.vue` — the module registers it as a
+  component but never renders it for you, so without this there's no `<link rel="manifest">` in the
+  page at all despite the manifest file existing on disk; (2) for a fully SSR app with no
+  prerendered routes, the module's own default (`workbox.navigateFallback: '/'`) is broken — "/"
+  is never precached for an SSR app, so it must be explicitly set to `null` (not `false` — workbox
+  validates that field as `null | string`), otherwise the production build throws
+  `WorkboxConfigError`. Static JS/CSS under `/_nuxt/` is cached via a `CacheFirst` `runtimeCaching`
+  rule instead of precaching, since `generateSW`'s glob-based precaching is gated on
+  `nitro.static`/prerendered routes and never runs for a plain SSR app — verify any future PWA
+  change against a real `pnpm build` + a real browser (curl only shows pre-hydration HTML and won't
+  show either the manifest link or the SW registration).
+- **Keyboard shortcuts**: two independent listeners, not one — `usePlayerShortcuts()` (space/arrows
+  for the persistent bottom PlayerBar, wired in `layouts/default.vue`) and a page-local handler in
+  the editor (`Ctrl/Cmd+Z`/`+Shift+Z` for undo/redo, space for the editor's own wavesurfer playback).
+  They don't conflict in practice because the global one no-ops whenever `usePlayer()`'s
+  `currentSong` is unset, which it always is on the editor page. Both check
+  `isEditableTarget()` (`app/utils/keyboard.ts`) first so typing in any form field is never
+  intercepted.
+- **Bulk tag editing**: additive/subtractive only (`POST /api/songs/bulk-tags` with
+  `mode: 'add' | 'remove'`), never a wholesale replace — replacing would silently wipe each
+  selected song's *other* tags, which is exactly wrong for a multi-song operation. Silently skips
+  any song id in the request the caller doesn't own rather than 404ing the whole batch.
+- e2e specs added in this phase (`bulk-tags.spec.ts`, `player-shortcuts.spec.ts`,
+  `editor-keyboard-shortcuts.spec.ts`) all resolve "the fixture song" via `?q=test-tone` rather than
+  blindly taking `songs[0]` — `/api/songs` sorts newest-first, and `recorder.spec.ts` creates a new
+  song mid-suite that would otherwise silently outrank the fixture and make a concurrently-running
+  spec interact with the wrong song. Follow this pattern in any new spec that needs "the" fixture
+  song. Also don't forget the `networkidle` hydration-race gotcha (below) applies to `page.goto` on
+  *any* page with a client-side click immediately after, not just the recorder.
+
+### Phase 4 notes
+
+- `songs.noise_region` is captured automatically: `record.vue`/`useRecorder.ts` run a 5s "hold
+  still — sampling the room" countdown as an *overlay on top of* the still-live rolling waveform
+  (not a replacement — the mic-is-hearing-me reassurance matters during the ambience sample too,
+  and the recorder e2e spec depends on the waveform `<canvas>` staying mounted throughout). The
+  countdown is toggleable per-recording and only ever applies to the very first take of a session,
+  never a punch-in.
+- The noise-profile region is drawn on the editor's waveform as a distinct, draggable/resizable
+  amber region (id `noise-profile`), coexisting with the crop-selection regions. Its coordinate
+  space is the post-segment-join, pre-filter timeline (same axis as `editList.segments`) — filters
+  never shift time, so this stays valid across denoise-only edits even though `master.ogg` is
+  re-rendered with filters baked in.
+- `server/utils/ffmpeg.ts`'s `buildFilterGraph`/`buildFiltersOnlyGraph` are pure and unit-tested
+  (`tests/unit/ffmpeg.test.ts`) — `renderEditList` just calls `buildFilterGraph` then spawns ffmpeg.
+  The `afftdn` learned-profile chain is `asendcmd=c='{start}-{end} [enter] afftdn@fN sn
+  start,[leave] afftdn@fN sn stop',afftdn@fN=...` — verified directly against the real `ffmpeg`
+  binary before shipping, not just against docs, since `asendcmd`'s escaping rules are easy to get
+  subtly wrong.
+- `server/utils/autoNotch.ts` is a self-contained radix-2 FFT + Welch-averaged peak detector, no
+  new npm dependency.
 
 ## Renamed files — check current names before assuming
 
@@ -112,6 +171,33 @@ never auto-applies a proposal without preview.
   per-spec `test.use()` — both work, project-level is what's there now). The fixture WAV needs genuine
   amplitude *variation* (not a constant tone) or a real bug (flat waveform) and a healthy correct
   rendering look identical — a constant-volume fake mic produces a solid rectangle either way.
+
+## Node 24.19.0 crashes better-sqlite3 under load — this affects production, not just the sandbox
+
+`node:24-slim` (a floating tag) will eventually pull Node 24.19.0, which shipped a regression in
+`ObjectWrap` cleanup-hook handling that crashes NAN-style native addons — `better-sqlite3`'s
+`Statement` finalizer among them — with `Assertion failed: (env) != nullptr` in
+`RemoveEnvironmentCleanupHook` (`api/hooks.cc:142`), aborting the whole Node process.
+
+This is not environment-specific, and **pinning the Node version reduces but does not eliminate
+it**: under 24.19.0 the app's e2e suite (7 parallel workers hammering one long-lived dev-server
+process with DB-backed requests) crashed on essentially every run; pinned to 24.18.0 it crashed on
+roughly half of several back-to-back runs of the same suite, with no code changes in between —
+purely a GC-timing race in how often a `Statement` object gets finalized relative to environment
+teardown. **The `Dockerfile` now pins `node:24.18-slim`** on both build and runtime stages as the
+right proportionate mitigation (do not float it back to `node:24-slim` until a later Node 24.x patch
+is confirmed fixed), but treat that as risk-reduction, not a guarantee. The e2e suite's request
+density is a far more concentrated stress pattern than this app's real "family-scale" traffic will
+ever produce, so the residual risk in production is low but not zero.
+
+If e2e or dev-server runs in this sandbox ever abort mid-suite with that exact assertion, it is
+almost certainly this known issue, not a real bug in the code under test — just re-run (under a
+pinned 24.18.x if not already: `nvm install 24.18.0`, prepend its `bin/` to `PATH`) rather than
+chasing it as a regression. A durable fix would mean either waiting for an upstream Node/
+better-sqlite3 patch, or changing the DB layer to cache/reuse prepared statements instead of
+creating a fresh one per query (`db.select()...get()` today, throughout `server/`) — worth
+considering later, but a large enough refactor that it was deliberately left out of this session's
+scope.
 
 ## Sandbox environment notes
 

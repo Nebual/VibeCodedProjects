@@ -3,7 +3,7 @@ import WaveSurfer from 'wavesurfer.js'
 import RegionsPlugin from 'wavesurfer.js/plugins/regions'
 import type { Region } from 'wavesurfer.js/plugins/regions'
 import { ArrowUturnLeftIcon, ArrowUturnRightIcon, ScissorsIcon } from '@heroicons/vue/24/outline'
-import type { EditList } from '#shared/types'
+import type { EditFilter, EditList, NoiseRegion } from '#shared/types'
 import type { ResolvedSegment, TimelineTake } from '#shared/utils/timeline'
 
 interface SongDetail {
@@ -11,6 +11,7 @@ interface SongDetail {
   title: string
   durationS: number | null
   editList: EditList
+  noiseRegion: NoiseRegion | null
 }
 
 interface TakeInfo {
@@ -25,6 +26,8 @@ interface PeaksResponse {
 }
 
 interface KeepRange { start: number, end: number }
+
+definePageMeta({ hidePlayerBar: true })
 
 const route = useRoute()
 const songId = route.params.id as string
@@ -42,6 +45,10 @@ let regionsPlugin: RegionsPlugin | null = null
 let disableDragSelection: (() => void) | null = null
 let marqueeRegion: Region | null = null
 
+const monitorGain = useMonitorGain()
+let masterGainNode: GainNode | null = null
+let masterPeaksFloat: Float32Array | null = null
+
 const isReady = ref(false)
 const isPlaying = ref(false)
 const currentTime = ref(0)
@@ -50,6 +57,12 @@ const loadError = ref<string | null>(null)
 const baseSegments = ref<ResolvedSegment[]>(song.value.editList.segments)
 const keepRanges = ref<KeepRange[]>([])
 const masterDuration = ref(song.value.durationS ?? 0)
+
+const filters = ref<EditFilter[]>(structuredClone(song.value.editList.filters))
+const gain = ref<EditList['gain']>(structuredClone(song.value.editList.gain))
+const noiseRegionRef = ref<NoiseRegion | null>(structuredClone(song.value.noiseRegion))
+const initialFiltersJson = JSON.stringify(song.value.editList.filters)
+const initialGainJson = JSON.stringify(song.value.editList.gain ?? null)
 
 const takesEnabled = ref<Record<string, boolean>>({})
 watchEffect(() => {
@@ -132,6 +145,8 @@ function makeDeleteButton(onClick: () => void): HTMLElement {
 
 function renderRegions() {
   if (!regionsPlugin) return
+  // A single clearRegions() wipes every region in the plugin, so the noise-profile
+  // region below must be redrawn here too, not in a separate call site.
   regionsPlugin.clearRegions()
   const sorted = [...keepRanges.value].sort((a, b) => a.start - b.start)
   sorted.forEach((range, i) => {
@@ -151,6 +166,18 @@ function renderRegions() {
       }))
     }
   })
+
+  if (noiseRegionRef.value) {
+    const region = regionsPlugin.addRegion({
+      id: 'noise-profile',
+      start: noiseRegionRef.value.start,
+      end: noiseRegionRef.value.end,
+      color: 'rgba(251,191,36,0.35)',
+      drag: true,
+      resize: true,
+    })
+    region.element?.setAttribute('data-region-id', 'noise-profile')
+  }
 }
 
 function syncKeepRangesFromRegions() {
@@ -168,6 +195,16 @@ function clearMarquee() {
   marqueeRegion?.remove()
   marqueeRegion = null
   hasMarquee.value = false
+}
+
+const selectingAmbience = ref(false)
+function startSelectingAmbience() {
+  clearMarquee()
+  selectingAmbience.value = true
+}
+function clearAmbience() {
+  noiseRegionRef.value = null
+  renderRegions()
 }
 
 function removeSelection() {
@@ -192,6 +229,7 @@ function removeSelection() {
 function setupCustomDragSelection(wavesurfer: WaveSurfer, regions: RegionsPlugin): () => void {
   const wrapper = wavesurfer.getWrapper()
   let dragStartTime: number | null = null
+  let ambienceDragRegion: Region | null = null
 
   function xToTime(clientX: number): number {
     const rect = wrapper.getBoundingClientRect()
@@ -199,9 +237,43 @@ function setupCustomDragSelection(wavesurfer: WaveSurfer, regions: RegionsPlugin
     return Math.max(0, Math.min(masterDuration.value, fraction * masterDuration.value))
   }
 
+  function onAmbiencePointerMove(e: PointerEvent) {
+    if (dragStartTime === null) return
+    const current = xToTime(e.clientX)
+    const start = Math.min(dragStartTime, current)
+    const end = Math.max(dragStartTime, current)
+    if (end - start < 0.05) return
+    if (!ambienceDragRegion) {
+      ambienceDragRegion = regions.addRegion({ id: 'ambience-select', start, end, color: 'rgba(251,191,36,0.35)', drag: false, resize: false })
+    } else {
+      ambienceDragRegion.setOptions({ start, end })
+    }
+  }
+
+  function onAmbiencePointerUp() {
+    window.removeEventListener('pointermove', onAmbiencePointerMove)
+    if (dragStartTime !== null && ambienceDragRegion) {
+      noiseRegionRef.value = { start: ambienceDragRegion.start, end: ambienceDragRegion.end }
+    }
+    ambienceDragRegion?.remove()
+    ambienceDragRegion = null
+    dragStartTime = null
+    selectingAmbience.value = false
+    renderRegions()
+  }
+
   function onPointerDown(e: PointerEvent) {
+    if (selectingAmbience.value) {
+      e.preventDefault()
+      e.stopPropagation()
+      dragStartTime = xToTime(e.clientX)
+      window.addEventListener('pointermove', onAmbiencePointerMove)
+      window.addEventListener('pointerup', onAmbiencePointerUp, { once: true })
+      return
+    }
     const target = e.target as HTMLElement
     if (target.closest('[part*="region-handle"]')) return // let native resize proceed
+    if (target.closest('[data-region-id="noise-profile"]')) return // let native drag-to-move proceed
     e.preventDefault()
     e.stopPropagation()
     dragStartTime = xToTime(e.clientX)
@@ -240,11 +312,12 @@ onMounted(() => {
     try {
       const peaks = await $fetch<PeaksResponse>(`/api/songs/${songId}/peaks`)
       const duration = song.value!.durationS ?? undefined
+      masterPeaksFloat = peaksToFloatArray(peaks.data)
 
       ws = WaveSurfer.create({
         container: containerRef.value!,
         url: `/api/songs/${songId}/audio`,
-        peaks: [peaksToFloatArray(peaks.data)],
+        peaks: [masterPeaksFloat],
         duration,
         height: 96,
         waveColor: 'oklch(70% 0.02 250)',
@@ -257,6 +330,7 @@ onMounted(() => {
 
       regionsPlugin.on('region-updated', (region) => {
         if (region.id.startsWith('keep-')) syncKeepRangesFromRegions()
+        if (region.id === 'noise-profile') noiseRegionRef.value = { start: region.start, end: region.end }
       })
 
       ws.on('ready', (dur) => {
@@ -265,6 +339,8 @@ onMounted(() => {
         pushHistory()
         renderRegions()
         isReady.value = true
+        masterGainNode = monitorGain.wrapElement(ws!.getMediaElement())
+        masterGainNode.gain.value = monitorGain.gainForPeaks(masterPeaksFloat!)
       })
       ws.on('play', () => { isPlaying.value = true })
       ws.on('pause', () => { isPlaying.value = false })
@@ -276,7 +352,33 @@ onMounted(() => {
   })()
 })
 
+function onKeydown(e: KeyboardEvent) {
+  if (isEditableTarget(e.target)) return
+  const modKey = e.metaKey || e.ctrlKey
+  if (modKey && e.key.toLowerCase() === 'z') {
+    e.preventDefault()
+    if (e.shiftKey) redo()
+    else undo()
+  } else if (e.code === 'Space' && isReady.value) {
+    e.preventDefault()
+    togglePlay()
+  }
+}
+
+onMounted(() => {
+  window.addEventListener('keydown', onKeydown)
+  // Stop any playback started from the song list before navigating in here — its footer
+  // player is hidden on this route (see hidePlayerBar), so lingering audio would be inaudible
+  // to control.
+  usePlayer().pause()
+})
+
+watch(monitorGain.targetLevelDb, () => {
+  if (masterGainNode && masterPeaksFloat) masterGainNode.gain.value = monitorGain.gainForPeaks(masterPeaksFloat)
+})
+
 onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onKeydown)
   disableDragSelection?.()
   ws?.destroy()
 })
@@ -289,8 +391,25 @@ function togglePlay() {
 interface AutoTrimProposal { startCut: number, endCut: number, noiseFloorDb: number, tailPadS: number, fadeOutMs: number }
 const autoTrimProposal = ref<AutoTrimProposal | null>(null)
 const autoTrimLoading = ref(false)
-const previewAudio = ref<HTMLAudioElement | null>(null)
 const previewingWindow = ref<'start' | 'end' | null>(null)
+const cutPreviewPlayer = usePreviewPlayer()
+const CUT_PREVIEW_PADDING = 3
+
+function cutPreviewCenter(which: 'start' | 'end'): number {
+  return which === 'start' ? autoTrimProposal.value!.startCut : masterDuration.value - autoTrimProposal.value!.endCut
+}
+
+// The window is only symmetric around the cut when there's enough audio on both sides to pad
+// evenly — trimming e.g. 1s off the very start clamps the window's actual start to 0, so the
+// cut sits wherever `center` really falls within the *actual* played duration, not at 50%.
+const cutMarkerFraction = computed(() => {
+  if (!previewingWindow.value || !autoTrimProposal.value) return 0.5
+  const center = cutPreviewCenter(previewingWindow.value)
+  const clipStart = Math.max(0, center - CUT_PREVIEW_PADDING)
+  const clipDuration = cutPreviewPlayer.duration.value
+  if (!clipDuration) return 0.5
+  return Math.min(1, Math.max(0, (center - clipStart) / clipDuration))
+})
 
 async function fetchAutoTrim() {
   autoTrimLoading.value = true
@@ -303,18 +422,20 @@ async function fetchAutoTrim() {
 
 async function previewCut(which: 'start' | 'end') {
   if (!autoTrimProposal.value) return
+  if (previewingWindow.value === which) {
+    cutPreviewPlayer.stop()
+    previewingWindow.value = null
+    return
+  }
   previewingWindow.value = which
-  const center = which === 'start' ? autoTrimProposal.value.startCut : masterDuration.value - autoTrimProposal.value.endCut
+  const center = cutPreviewCenter(which)
   try {
     const blob = await $fetch<Blob>(`/api/songs/${songId}/preview-window`, {
       method: 'POST',
-      body: { center, padding: 3 },
+      body: { center, padding: CUT_PREVIEW_PADDING, clickAtCenter: true },
     })
-    const url = URL.createObjectURL(blob)
-    if (!previewAudio.value) previewAudio.value = new Audio()
-    previewAudio.value.src = url
-    await previewAudio.value.play()
-  } finally {
+    await cutPreviewPlayer.loadAndPlay(blob)
+  } catch {
     previewingWindow.value = null
   }
 }
@@ -353,7 +474,7 @@ async function toggleTake(takeId: string) {
 
     const preview = await $fetch<{ url: string }>(`/api/songs/${songId}/preview`, {
       method: 'POST',
-      body: { editList: { segments: newSegments, filters: song.value!.editList.filters } },
+      body: { editList: { segments: newSegments, filters: filters.value } },
     })
 
     baseSegments.value = newSegments
@@ -374,8 +495,8 @@ async function toggleTake(takeId: string) {
 // --- Preview / Save ---
 const finalEditList = computed<EditList>(() => ({
   segments: applyKeepRanges(baseSegments.value, keepRanges.value),
-  filters: song.value!.editList.filters,
-  gain: song.value!.editList.gain,
+  filters: filters.value,
+  gain: gain.value,
   fades: song.value!.editList.fades,
 }))
 
@@ -402,7 +523,10 @@ async function runSave() {
   saving.value = true
   saveError.value = null
   try {
-    await $fetch(`/api/songs/${songId}/edit`, { method: 'POST', body: { editList: finalEditList.value } })
+    await $fetch(`/api/songs/${songId}/edit`, {
+      method: 'POST',
+      body: { editList: finalEditList.value, noiseRegion: noiseRegionRef.value },
+    })
     router.push(`/songs/${songId}`)
   } catch (e) {
     saveError.value = e instanceof Error ? e.message : 'Could not save changes.'
@@ -412,6 +536,8 @@ async function runSave() {
 }
 
 const hasEdits = computed(() => {
+  if (JSON.stringify(filters.value) !== initialFiltersJson) return true
+  if (JSON.stringify(gain.value ?? null) !== initialGainJson) return true
   if (keepRanges.value.length !== 1) return true
   const r = keepRanges.value[0]
   return !r || Math.abs(r.start) > 0.05 || Math.abs(r.end - masterDuration.value) > 0.05
@@ -454,6 +580,25 @@ const hasEdits = computed(() => {
       Drag on the waveform to select a range, then remove it. Drag a region's edge to trim.
     </p>
 
+    <!--
+    <div class="flex items-center gap-2">
+      <span class="text-sm text-base-content/60 whitespace-nowrap">Preview loudness</span>
+      <input
+        v-model.number="monitorGain.targetLevelDb.value"
+        type="range"
+        class="range range-xs w-32"
+        min="-30"
+        max="-6"
+        step="1"
+        aria-label="Preview loudness target"
+      >
+      <span class="text-xs text-base-content/50 tabular-nums">{{ monitorGain.targetLevelDb.value }}dB</span>
+    </div>
+    <p class="text-xs text-base-content/50 -mt-2">
+      Boosts every playback on this page to a consistent monitoring level — doesn't affect the saved audio.
+    </p>
+    -->
+
     <!-- Auto-trim -->
     <div class="card bg-base-100 shadow-sm p-4">
       <div class="flex items-center justify-between mb-2">
@@ -470,17 +615,46 @@ const hasEdits = computed(() => {
           {{ autoTrimProposal.tailPadS }}s pad past where the decay flattens, so a held chord isn't clipped.
         </p>
         <div class="flex gap-2">
-          <button class="btn btn-xs" :disabled="previewingWindow === 'start'" @click="previewCut('start')">
-            {{ previewingWindow === 'start' ? 'Playing…' : 'Preview start cut' }}
+          <button class="btn btn-xs" @click="previewCut('start')">
+            {{ previewingWindow === 'start' ? 'Stop' : 'Preview start cut' }}
           </button>
-          <button class="btn btn-xs" :disabled="previewingWindow === 'end'" @click="previewCut('end')">
-            {{ previewingWindow === 'end' ? 'Playing…' : 'Preview end cut' }}
+          <button class="btn btn-xs" @click="previewCut('end')">
+            {{ previewingWindow === 'end' ? 'Stop' : 'Preview end cut' }}
           </button>
           <button class="btn btn-xs btn-primary" @click="applyAutoTrim">Apply</button>
           <button class="btn btn-xs btn-ghost" @click="autoTrimProposal = null">Dismiss</button>
         </div>
+        <MiniPlayer
+          v-if="previewingWindow"
+          :is-playing="cutPreviewPlayer.isPlaying.value"
+          :current-time="cutPreviewPlayer.currentTime.value"
+          :duration="cutPreviewPlayer.duration.value"
+          :marker-fraction="cutMarkerFraction"
+          @toggle="cutPreviewPlayer.toggle"
+          @seek="cutPreviewPlayer.seek"
+        />
+        <p class="text-xs text-base-content/50">
+          The marker on the seek bar is the cut point — the clip is padded evenly on both sides of it.
+        </p>
       </div>
     </div>
+
+    <!-- Noise reduction -->
+    <EditorNoisePanel
+      v-model:filters="filters"
+      v-model:gain="gain"
+      :song-id="songId"
+      :noise-region="noiseRegionRef"
+      :preview-center="currentTime"
+      @select-ambience="startSelectingAmbience"
+      @clear-ambience="clearAmbience"
+    />
+    <p v-if="selectingAmbience" class="text-xs text-warning -mt-2">
+      Drag on the waveform to set the ambience sample.
+    </p>
+    <p v-else class="text-xs text-base-content/50 -mt-2">
+      Drag the amber region on the waveform to adjust which part of the recording is sampled as the noise profile.
+    </p>
 
     <!-- Takes -->
     <div v-if="showTakesPanel" class="card bg-base-100 shadow-sm p-4">

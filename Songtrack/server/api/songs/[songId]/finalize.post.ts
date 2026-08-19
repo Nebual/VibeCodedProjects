@@ -3,12 +3,14 @@ import { join } from 'node:path'
 import { asc, eq } from 'drizzle-orm'
 import { db } from '../../../database/client'
 import { songs, takes } from '../../../database/schema'
-import type { EditList } from '#shared/types'
+import type { EditList, NoiseRegion } from '#shared/types'
 
 export default defineEventHandler(async (event) => {
   const actor = await requireActor(event)
   const songId = getRouterParam(event, 'songId')!
   getOwnedSong(actor.user.id, songId)
+
+  const body = await readBody<{ noiseRegion?: NoiseRegion | null }>(event).catch(() => null)
 
   const songTakes = db.select().from(takes).where(eq(takes.songId, songId)).orderBy(asc(takes.ordinal)).all()
   if (songTakes.length === 0) {
@@ -36,6 +38,7 @@ export default defineEventHandler(async (event) => {
     masterPath,
     peaksPath,
     editList,
+    noiseRegion: body?.noiseRegion ?? null,
     durationS: probe.durationS,
     sampleRate: probe.sampleRate,
     channels: probe.channels,

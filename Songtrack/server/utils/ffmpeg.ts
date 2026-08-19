@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import type { EditList } from '#shared/types'
+import type { AfftdnFilter, EditFilter, EditList } from '#shared/types'
 
 export function runFfmpeg(args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -109,18 +109,127 @@ export async function decodeMonoPcm16(inputPath: string, sampleRate: number): Pr
   return samples
 }
 
+/** Mono PCM for just a time window — used by auto-notch, which only needs to analyze the profiled noise region. */
+export async function decodeMonoPcm16Window(inputPath: string, sampleRate: number, start: number, duration: number): Promise<Int16Array> {
+  const buf = await runFfmpegCapture(['-ss', String(start), '-t', String(duration), '-i', inputPath, '-f', 's16le', '-acodec', 'pcm_s16le', '-ac', '1', '-ar', String(sampleRate), 'pipe:1'])
+  const samples = new Int16Array(Math.floor(buf.length / 2))
+  for (let i = 0; i < samples.length; i++) samples[i] = buf.readInt16LE(i * 2)
+  return samples
+}
+
 export interface RenderSource {
   id: string
   path: string
 }
 
 /**
- * Builds and runs the single ffmpeg filtergraph shared by ingest (empty
+ * `afftdn` learns a much better noise profile from a timed sample of real
+ * room tone (the ambience lead-in, or a hand-picked quiet region) than from
+ * its own blind noise-floor guess. `asendcmd` fires `sn start`/`sn stop` at
+ * the region's edges, targeting this filter instance by name so multiple
+ * afftdn filters in one graph (audition mode aside) never cross-talk.
+ * Falls back to `tn=1` (continuous floor tracking) when there's no region —
+ * the plan's documented fallback for when AGC has polluted a fixed profile.
+ */
+function afftdnLink(chain: string, next: string, f: AfftdnFilter, index: number, om?: 'n'): string {
+  const instance = `f${index}`
+  const omArg = om ? `:om=${om}` : ''
+  const expr = `afftdn@${instance}=nr=${f.nr}:gs=${f.gs}${f.noiseRegion ? '' : ':tn=1'}${omArg}`
+  if (!f.noiseRegion) return `[${chain}]${expr}[${next}]`
+  const cmd = `${f.noiseRegion.start}-${f.noiseRegion.end} [enter] afftdn@${instance} sn start,[leave] afftdn@${instance} sn stop`
+  return `[${chain}]asendcmd=c='${cmd}',${expr}[${next}]`
+}
+
+export interface RenderOptions {
+  /**
+   * "Listen to what's being removed": outputs only the material afftdn
+   * subtracts (`om=n`), skipping every other filter, gain and fades — the
+   * A/B guard against over-processing. Throws if there's no afftdn filter.
+   */
+  audition?: boolean
+}
+
+export interface FilterGraph {
+  inputArgs: string[]
+  filterComplex: string
+  outputLabel: string
+}
+
+/**
+ * Appends the filters → gain → fades stages onto an existing filtergraph in
+ * progress, mutating `filterParts` and returning the new final label. Split
+ * out from `buildFilterGraph` so the windowed 15s denoise preview (which has
+ * no segments/takes, just one file) can reuse the exact same filter-string
+ * logic instead of duplicating it.
+ */
+function appendFilterChain(
+  filterParts: string[],
+  startChain: string,
+  filters: EditFilter[],
+  gain: EditList['gain'] | undefined,
+  fades: EditList['fades'] | undefined,
+  totalDuration: number | undefined,
+  opts: RenderOptions,
+): string {
+  let chain = startChain
+
+  if (opts.audition) {
+    const afftdnFilters = filters.filter((f): f is AfftdnFilter => f.type === 'afftdn')
+    if (afftdnFilters.length === 0) throw new Error('No noise-reduction filter to audition')
+    afftdnFilters.forEach((f, i) => {
+      const next = `filt${i}`
+      filterParts.push(afftdnLink(chain, next, f, i, 'n'))
+      chain = next
+    })
+    return chain
+  }
+
+  // Normalizing before the noise-reduction filters (rather than after, as this used to) gives
+  // afftdn properly-leveled audio to analyze — its noise-floor/profile estimation has absolute-
+  // level-dependent behavior, so feeding it a too-quiet signal makes its `nr`/`gs` controls behave
+  // inconsistently (too weak at low strengths, chewing into program material at higher ones).
+  if (gain?.mode === 'loudnorm') {
+    const next = `gain_${chain}`
+    filterParts.push(`[${chain}]loudnorm=I=${gain.targetLufs}:TP=-1.5:LRA=11[${next}]`)
+    chain = next
+  }
+
+  filters.forEach((f, i) => {
+    const next = `filt${i}`
+    if (f.type === 'afftdn') {
+      filterParts.push(afftdnLink(chain, next, f, i))
+    } else if (f.type === 'notch') {
+      const chained = f.freqs.map(freq => `equalizer=f=${freq}:t=q:w=${f.q}:g=-24`).join(',')
+      filterParts.push(`[${chain}]${chained}[${next}]`)
+    } else if (f.type === 'highpass') {
+      filterParts.push(`[${chain}]highpass=f=${f.freq}[${next}]`)
+    } else if (f.type === 'agate') {
+      filterParts.push(`[${chain}]agate=threshold=${f.threshold}dB:ratio=${f.ratio}[${next}]`)
+    }
+    chain = next
+  })
+
+  if (fades && totalDuration != null) {
+    const next = `fade_${chain}`
+    const fadeOutStart = Math.max(0, totalDuration - fades.outMs / 1000)
+    filterParts.push(
+      `[${chain}]afade=t=in:d=${fades.inMs / 1000},afade=t=out:st=${fadeOutStart}:d=${fades.outMs / 1000}[${next}]`,
+    )
+    chain = next
+  }
+
+  return chain
+}
+
+/**
+ * Pure filtergraph construction, split out from `renderEditList` so the
+ * string-building (segments, crossfades, filters, gain, fades) is unit
+ * testable without spawning a real ffmpeg process. Shared by ingest (empty
  * filters, just the resolved take stack) and later edits/denoise (Phase 3/4
  * add filters to the same edit_list): trim each segment from its source take,
  * crossfade the joins, apply filters, then gain/fades.
  */
-export async function renderEditList(sources: RenderSource[], editList: EditList, outputPath: string, format: 'ogg' | 'mp3') {
+export function buildFilterGraph(sources: RenderSource[], editList: EditList, opts: RenderOptions = {}): FilterGraph {
   if (editList.segments.length === 0) throw new Error('Edit list has no segments')
 
   const uniqueSourceIds = [...new Set(editList.segments.map(s => s.source))]
@@ -152,45 +261,33 @@ export async function renderEditList(sources: RenderSource[], editList: EditList
     chain = next
   }
 
-  for (const [i, f] of editList.filters.entries()) {
-    const next = `filt${i}`
-    if (f.type === 'afftdn') {
-      filterParts.push(`[${chain}]afftdn=nr=${f.nr}:gs=${f.gs}[${next}]`)
-    } else if (f.type === 'notch') {
-      const chained = f.freqs.map(freq => `equalizer=f=${freq}:t=q:w=${f.q}:g=-24`).join(',')
-      filterParts.push(`[${chain}]${chained}[${next}]`)
-    } else if (f.type === 'highpass') {
-      filterParts.push(`[${chain}]highpass=f=${f.freq}[${next}]`)
-    } else if (f.type === 'agate') {
-      filterParts.push(`[${chain}]agate=threshold=${f.threshold}dB:ratio=${f.ratio}[${next}]`)
-    }
-    chain = next
-  }
+  const totalDuration = editList.segments.reduce((sum, s) => sum + (s.end - s.start), 0)
+  chain = appendFilterChain(filterParts, chain, editList.filters, editList.gain, editList.fades, totalDuration, opts)
 
-  if (editList.gain?.mode === 'loudnorm') {
-    const next = `gain_${chain}`
-    filterParts.push(`[${chain}]loudnorm=I=${editList.gain.targetLufs}:TP=-1.5:LRA=11[${next}]`)
-    chain = next
-  }
+  return { inputArgs, filterComplex: filterParts.join(';'), outputLabel: chain }
+}
 
-  if (editList.fades) {
-    const totalDuration = editList.segments.reduce((sum, s) => sum + (s.end - s.start), 0)
-    const next = `fade_${chain}`
-    const fadeOutStart = Math.max(0, totalDuration - editList.fades.outMs / 1000)
-    filterParts.push(
-      `[${chain}]afade=t=in:d=${editList.fades.inMs / 1000},afade=t=out:st=${fadeOutStart}:d=${editList.fades.outMs / 1000}[${next}]`,
-    )
-    chain = next
-  }
+/**
+ * Filters-only graph over a single already-decoded input (no segments/takes
+ * involved) — the windowed 15s denoise preview applies candidate filters
+ * directly to a slice of the current master.
+ */
+export function buildFiltersOnlyGraph(inputLabel: string, filters: EditFilter[], gain?: EditList['gain'], opts: RenderOptions = {}): FilterGraph {
+  const filterParts: string[] = []
+  const outputLabel = appendFilterChain(filterParts, inputLabel, filters, gain, undefined, undefined, opts)
+  return { inputArgs: [], filterComplex: filterParts.join(';'), outputLabel }
+}
 
+export async function renderEditList(sources: RenderSource[], editList: EditList, outputPath: string, format: 'ogg' | 'mp3', opts: RenderOptions = {}) {
+  const { inputArgs, filterComplex, outputLabel } = buildFilterGraph(sources, editList, opts)
   const codecArgs = format === 'mp3' ? ['-c:a', 'libmp3lame', '-q:a', '0'] : ['-c:a', 'libopus', '-b:a', '192k']
 
   await runFfmpeg([
     ...inputArgs,
     '-filter_complex',
-    filterParts.join(';'),
+    filterComplex,
     '-map',
-    `[${chain}]`,
+    `[${outputLabel}]`,
     ...codecArgs,
     outputPath,
   ])

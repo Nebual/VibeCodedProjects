@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm'
+import { and, eq, inArray } from 'drizzle-orm'
 import { nanoid } from 'nanoid'
 import { db } from '../database/client'
 import { songTags, tags } from '../database/schema'
@@ -20,4 +20,14 @@ export function attachTagsToSong(userId: string, songId: string, tagNames: strin
 
     db.insert(songTags).values({ songId, tagId: tag.id, createdAt: now }).onConflictDoNothing().run()
   }
+}
+
+/** Unlinks the named tags from a song, if present — leaves the tag row itself (other songs may still use it). */
+export function detachTagsFromSong(userId: string, songId: string, tagNames: string[]) {
+  const names = tagNames.map(n => n.trim()).filter(Boolean)
+  if (names.length === 0) return
+  const tagRows = db.select({ id: tags.id }).from(tags).where(and(eq(tags.userId, userId), inArray(tags.name, names))).all()
+  const tagIds = tagRows.map(t => t.id)
+  if (tagIds.length === 0) return
+  db.delete(songTags).where(and(eq(songTags.songId, songId), inArray(songTags.tagId, tagIds))).run()
 }

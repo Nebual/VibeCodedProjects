@@ -10,7 +10,7 @@ export default defineEventHandler(async (event) => {
   const songId = getRouterParam(event, 'songId')!
   getOwnedSong(actor.user.id, songId)
 
-  const body = await readBody<{ editList: EditList }>(event)
+  const body = await readBody<{ editList: EditList, audition?: boolean }>(event)
   const editList = body?.editList
   if (!editList?.segments?.length) {
     throw createError({ statusCode: 400, statusMessage: 'Edit list has no segments' })
@@ -21,11 +21,14 @@ export default defineEventHandler(async (event) => {
   if (editList.segments.some(s => !validIds.has(s.source))) {
     throw createError({ statusCode: 400, statusMessage: 'Edit list references an unknown take' })
   }
+  if (body?.audition && !editList.filters.some(f => f.type === 'afftdn')) {
+    throw createError({ statusCode: 400, statusMessage: 'No noise-reduction filter to audition' })
+  }
 
   const sources = songTakes.map(t => ({ id: t.id, path: t.sourcePath }))
   const previewId = nanoid()
   const outPath = join(rendersDir(), `preview-${songId}-${previewId}.ogg`)
-  await renderEditList(sources, editList, outPath, 'ogg')
+  await renderEditList(sources, editList, outPath, 'ogg', { audition: body?.audition })
 
   return { url: `/api/songs/${songId}/preview/${previewId}` }
 })

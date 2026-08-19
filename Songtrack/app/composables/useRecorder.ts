@@ -4,6 +4,7 @@ import {
   timelineDuration,
   punchInOverwriteAmount,
 } from '#shared/utils/timeline'
+import type { NoiseRegion } from '#shared/types'
 
 export interface RecordedTake {
   id: string
@@ -16,6 +17,41 @@ export interface RecordedTake {
 }
 
 export const BUCKET_RATE = 10 // waveform buckets per second
+/** Length of the "hold still" room-tone capture at the start of a fresh recording. */
+export const AMBIENCE_LEAD_IN_S = 5
+
+/**
+ * Static gain to apply to the review-playback buffer, estimated from the
+ * decoded PCM itself rather than a real-time AGC. Targets a fixed RMS
+ * (roughly the same loudness ballpark as the finalize-time -16 LUFS
+ * `loudnorm` target) so quiet takes play back at a normal level without the
+ * pumping/artifacts a live compressor would introduce on musical material.
+ * Never pushes the boosted signal past -0.2 dBFS peak.
+ */
+function computePreviewGain(buffer: AudioBuffer): number {
+  const TARGET_RMS = 0.1
+  const MAX_GAIN = 6
+  const STRIDE = 8 // sampling stride keeps this cheap even for multi-minute takes
+  let sumSquares = 0
+  let sampleCount = 0
+  let peak = 0
+  for (let ch = 0; ch < buffer.numberOfChannels; ch++) {
+    const data = buffer.getChannelData(ch)
+    for (let i = 0; i < data.length; i += STRIDE) {
+      const v = data[i]!
+      sumSquares += v * v
+      sampleCount++
+      const abs = Math.abs(v)
+      if (abs > peak) peak = abs
+    }
+  }
+  if (sampleCount === 0 || peak === 0) return 1
+  const rms = Math.sqrt(sumSquares / sampleCount)
+  if (rms === 0) return 1
+  const targetGain = Math.min(TARGET_RMS / rms, MAX_GAIN)
+  const peakSafeGain = 0.98 / peak
+  return Math.min(targetGain, peakSafeGain)
+}
 
 function pickMimeType(): string {
   const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus']
@@ -55,6 +91,11 @@ export function useRecorder() {
   const isPreviewReady = ref(false)
   const error = ref<string | null>(null)
   const recoverableSessionId = ref<string | null>(null)
+  /** User-facing toggle, read once when `start()` begins the very first take. */
+  const ambienceEnabled = ref(true)
+  /** Set once, from the first take's opening seconds, if the ambience lead-in ran. */
+  const noiseRegion = ref<NoiseRegion | null>(null)
+  let firstTakeId: string | null = null
 
   let stream: MediaStream | null = null
   let mediaRecorder: MediaRecorder | null = null
@@ -68,6 +109,7 @@ export function useRecorder() {
   let rafId: number | null = null
   const decodedBuffers = new Map<string, AudioBuffer>()
   let mergedBuffer: AudioBuffer | null = null
+  let previewGainNode: GainNode | null = null
   let sourceNode: AudioBufferSourceNode | null = null
   let playbackStartContextTime = 0
   let playbackStartOffset = 0
@@ -99,6 +141,12 @@ export function useRecorder() {
   const punchInWarning = computed(() => {
     if (state.value !== 'paused') return 0
     return punchInOverwriteAmount(timelineTakes.value, reviewPosition.value)
+  })
+
+  /** Seconds left in the ambience lead-in countdown; 0 once past it, on a punch-in, or if it wasn't used. */
+  const leadInRemaining = computed(() => {
+    if (!noiseRegion.value || state.value !== 'recording' || currentTakeId.value !== firstTakeId) return 0
+    return Math.max(0, noiseRegion.value.end - displayDuration.value)
   })
 
   /** Last ~10s of RMS buckets for the take currently being recorded. */
@@ -211,7 +259,13 @@ export function useRecorder() {
   }
 
   async function beginTake(timelineStart: number) {
-    if (!stream) stream = await acquireMicStream()
+    if (!stream) {
+      stream = await acquireMicStream()
+      // Freshly-opened mic streams tend to pop/click for the first ~400ms while the hardware's
+      // analog front-end settles (absent on pause/resume, which reuse this same live stream) —
+      // wait it out before anything starts listening to the stream.
+      await new Promise(resolve => setTimeout(resolve, 400))
+    }
     const mimeType = pickMimeType()
     takes.value.push({ id: nanoid(), timelineStart, duration: 0, mimeType, blob: null, rms: [] })
     // Mutations below must go through this reactive reference, not the plain
@@ -267,6 +321,8 @@ export function useRecorder() {
       await acquireWakeLock()
       setMediaSessionRecording(true)
       await beginTake(0)
+      firstTakeId = currentTakeId.value
+      noiseRegion.value = ambienceEnabled.value ? { start: 0, end: AMBIENCE_LEAD_IN_S } : null
       state.value = 'recording'
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Could not access the microphone.'
@@ -350,6 +406,8 @@ export function useRecorder() {
     }
 
     mergedBuffer = out
+    if (!previewGainNode) previewGainNode = ctx.createGain()
+    previewGainNode.gain.value = computePreviewGain(out)
     isPreviewReady.value = true
   }
 
@@ -367,7 +425,9 @@ export function useRecorder() {
     stopSource()
     const node = audioCtx.createBufferSource()
     node.buffer = mergedBuffer
-    node.connect(audioCtx.destination)
+    if (!previewGainNode) previewGainNode = audioCtx.createGain()
+    previewGainNode.connect(audioCtx.destination)
+    node.connect(previewGainNode)
     const offset = Math.min(Math.max(position, 0), mergedBuffer.duration)
     node.start(0, offset)
     node.onended = () => {
@@ -487,7 +547,7 @@ export function useRecorder() {
       await uploadTake(songId, takes.value[i]!, i)
     }
 
-    await $fetch(`/api/songs/${songId}/finalize`, { method: 'POST' })
+    await $fetch(`/api/songs/${songId}/finalize`, { method: 'POST', body: { noiseRegion: noiseRegion.value } })
 
     stream?.getTracks().forEach(t => t.stop())
     releaseWakeLock()
@@ -523,6 +583,8 @@ export function useRecorder() {
     isPreviewReady,
     punchInWarning,
     recoverableSessionId,
+    ambienceEnabled,
+    leadInRemaining,
     start,
     pause,
     resume,

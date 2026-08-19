@@ -19,7 +19,18 @@ const {
   isPreviewReady,
   punchInWarning,
   recoverableSessionId,
+  ambienceEnabled,
+  leadInRemaining,
 } = recorder
+
+// Brief "Go!" flash the instant the ambience countdown finishes.
+const showGoSignal = ref(false)
+watch(leadInRemaining, (curr, prev) => {
+  if (prev > 0 && curr === 0) {
+    showGoSignal.value = true
+    setTimeout(() => { showGoSignal.value = false }, 600)
+  }
+})
 
 const router = useRouter()
 
@@ -122,11 +133,16 @@ const hasContent = computed(() => state.value !== 'idle' || takes.value.length >
 
     <p v-if="error" class="alert alert-error text-sm">{{ error }}</p>
 
+    <label v-if="state === 'idle' && takes.length === 0" class="label cursor-pointer justify-center gap-3">
+      <span class="label-text">5s ambience lead-in</span>
+      <input v-model="ambienceEnabled" type="checkbox" class="toggle toggle-sm toggle-primary">
+    </label>
+
     <div class="text-center text-5xl font-mono font-semibold tabular-nums my-4">
       {{ formatDuration(displayDuration) }}
     </div>
 
-    <div class="h-20 bg-base-300 rounded-box overflow-hidden">
+    <div class="h-20 bg-base-300 rounded-box overflow-hidden relative">
       <WaveformCanvas
         v-if="state === 'paused'"
         :buckets="reviewWaveform"
@@ -137,6 +153,16 @@ const hasContent = computed(() => state.value !== 'idle' || takes.value.length >
         :buckets="rollingWaveform"
         :color="isClipping ? 'oklch(65% 0.2 25)' : undefined"
       />
+      <!-- Overlays the still-live waveform rather than replacing it — seeing
+           the mic actually respond matters just as much during the ambience
+           sample as it does once the music starts. -->
+      <div v-if="leadInRemaining > 0" class="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-base-300/80">
+        <span class="text-sm text-base-content/70">Hold still — sampling the room</span>
+        <span class="text-3xl font-mono tabular-nums">{{ Math.ceil(leadInRemaining) }}</span>
+      </div>
+      <div v-else-if="showGoSignal" class="absolute inset-0 flex items-center justify-center bg-base-300/80">
+        <span class="text-3xl font-semibold text-success">Go!</span>
+      </div>
     </div>
 
     <div v-if="state === 'paused'" class="flex flex-col gap-2">

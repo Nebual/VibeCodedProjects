@@ -1,6 +1,8 @@
 <script setup lang="ts">
+const route = useRoute()
 const { user, clear } = useUserSession()
 const { data: me, refresh: refreshMe } = useMe()
+usePlayerShortcuts()
 
 async function signOut() {
   await clear()
@@ -66,6 +68,6 @@ async function exitImpersonation() {
       <slot />
     </main>
 
-    <PlayerBar />
+    <PlayerBar v-if="!route.meta.hidePlayerBar" />
   </div>
 </template>
