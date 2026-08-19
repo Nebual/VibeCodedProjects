@@ -60,8 +60,9 @@ describe('fresh database', () => {
     const tables = tableNames(db)
     for (const table of [
       'users', 'user_goals', 'foods', 'foods_fts', 'food_servings',
-      'diary_entries', 'water_entries', 'exercises', 'exercise_categories',
-      'workout_entries', 'weight_entries', 'biometric_types', 'biometric_entries',
+      'diary_entries', 'water_entries', 'daily_goal_adjustments', 'exercises',
+      'exercise_categories', 'workout_entries', 'weight_entries',
+      'biometric_types', 'biometric_entries',
     ]) {
       expect(tables, `missing table ${table}`).toContain(table)
     }

@@ -1,6 +1,8 @@
 import { scaleNutrients, sumNutrients, type NutrientTotals } from '#shared/nutrients'
+import { GOAL_REDUCTION_KCAL, computeGoalSuggestion } from '#shared/goalSuggestion'
 import { foodCols } from '../../utils/foods'
 import { HYDRATION_ML_SQL } from '../../utils/hydration'
+import { getGoalAdjustment, weeklyDailyKcals } from '../../utils/goalSuggestion'
 
 /**
  * Everything needed to render one day: food entries by meal, water, workouts,
@@ -82,7 +84,22 @@ export default defineEventHandler(async (event) => {
     )
     .all(user.id, day) as { calories: number | null }[]
 
-  const goals = db.prepare('SELECT * FROM user_goals WHERE user_id = ?').get(user.id)
+  const goals = db.prepare('SELECT * FROM user_goals WHERE user_id = ?').get(user.id) as Record<
+    string,
+    unknown
+  >
+
+  // The "lower today's goal?" nudge. Once the day has an accept/dismiss on
+  // record, that decision stands — accepting shaves the reduction off this
+  // day's effective goal; either way, the nudge itself doesn't reappear.
+  const adjustment = getGoalAdjustment(db, user.id, day)
+  const goalSuggestion =
+    adjustment === null
+      ? computeGoalSuggestion(weeklyDailyKcals(db, user.id, day), Number(goals.calorie_goal))
+      : null
+  if (adjustment === 'accepted') {
+    goals.calorie_goal = Number(goals.calorie_goal) - GOAL_REDUCTION_KCAL
+  }
 
   const weight = db
     .prepare('SELECT weight_kg FROM weight_entries WHERE user_id = ? AND date = ?')
@@ -129,6 +146,7 @@ export default defineEventHandler(async (event) => {
       ),
     },
     goals,
+    goal_suggestion: goalSuggestion,
     weight_kg: weight?.weight_kg ?? null,
     latest_weight_kg: latest?.weight_kg ?? null,
     biometrics,

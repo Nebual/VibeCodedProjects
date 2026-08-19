@@ -4,15 +4,13 @@
  * The diary is keyed by the user's *local* calendar day. Deriving that from
  * `toISOString()` would silently shift the day for anyone west of UTC after
  * their afternoon — food logged at 7pm would land on tomorrow's page.
+ *
+ * `toLocalDate`/`fromLocalDate`/`addDays` live in `#shared/dates` so the
+ * server can reuse the same day arithmetic; re-exported here so existing
+ * `~/utils/dates` imports keep working.
  */
-
-/** 'YYYY-MM-DD' for a Date in the *running process's* timezone. */
-export function toLocalDate(d: Date = new Date()): string {
-  const year = d.getFullYear()
-  const month = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
+import { addDays, fromLocalDate, toLocalDate } from '#shared/dates'
+export { addDays, fromLocalDate, toLocalDate }
 
 /**
  * Today's calendar date in an explicit IANA timezone.
@@ -40,18 +38,6 @@ export function todayIn(timeZone: string, now: Date = new Date()): string {
       day: '2-digit',
     }).format(now)
   }
-}
-
-/** Parse 'YYYY-MM-DD' as local midnight (not UTC midnight). */
-export function fromLocalDate(iso: string): Date {
-  const [y, m, d] = iso.split('-').map(Number)
-  return new Date(y!, m! - 1, d!)
-}
-
-export function addDays(iso: string, delta: number): string {
-  const d = fromLocalDate(iso)
-  d.setDate(d.getDate() + delta)
-  return toLocalDate(d)
 }
 
 /** "Today", "Yesterday", or e.g. "Sat 14 Jun", relative to a known today. */

@@ -308,6 +308,19 @@ CREATE TABLE IF NOT EXISTS water_entries (
 );
 CREATE INDEX IF NOT EXISTS idx_water_user_date ON water_entries(user_id, date);
 
+-- The user's answer to "lower today's goal by 100 kcal?", keyed by the day
+-- the nudge was shown for. One row per day: accepting shaves the reduction
+-- off that day's effective calorie_goal (see server/utils/goalSuggestion.ts);
+-- dismissing just hides the nudge without changing anything. Either way,
+-- recording the choice stops the same day from asking again after a refresh.
+CREATE TABLE IF NOT EXISTS daily_goal_adjustments (
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  date       TEXT NOT NULL,
+  status     TEXT NOT NULL,            -- 'accepted' | 'dismissed'
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (user_id, date)
+);
+
 -- ---------------------------------------------------------------------------
 -- Fitness
 -- ---------------------------------------------------------------------------

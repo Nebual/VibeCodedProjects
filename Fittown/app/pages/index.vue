@@ -20,6 +20,7 @@ const date = computed({
 const {
   day, pending, error, refresh, removeEntry, addWater, removeWorkout,
   setWeight, clearWeight, setBiometric, addBiometricType, removeBiometricType,
+  acceptGoalSuggestion, dismissGoalSuggestion,
 } = useDiary(date)
 
 const showMicros = ref(false)
@@ -45,6 +46,13 @@ async function setWeightUnit(unit: 'kg' | 'lb') {
     <!-- Keep the previous day on screen while the next one loads, so
          navigating between days doesn't flash an empty page. -->
     <template v-if="day">
+      <GoalSuggestion
+        v-if="date === today && day.goal_suggestion"
+        :suggestion="day.goal_suggestion"
+        @accept="acceptGoalSuggestion"
+        @dismiss="dismissGoalSuggestion"
+      />
+
       <CalorieSummary
         :totals="day.totals"
         :goals="day.goals"

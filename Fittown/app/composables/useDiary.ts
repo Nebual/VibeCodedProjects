@@ -95,6 +95,11 @@ export interface WorkoutRow {
   notes: string | null
 }
 
+export interface GoalSuggestion {
+  weekly_avg_kcal: number
+  suggested_goal_kcal: number
+}
+
 export interface DiaryDay {
   date: string
   meals: Record<string, DiaryEntry[]>
@@ -107,6 +112,8 @@ export interface DiaryDay {
   }
   workouts: { entries: WorkoutRow[]; total_calories: number; total_minutes: number }
   goals: Goals
+  /** Present only when the past week's average is over goal and today hasn't answered yet. */
+  goal_suggestion: GoalSuggestion | null
   weight_kg: number | null
   /** Most recent weigh-in on any date — what the calorie estimate uses. */
   latest_weight_kg: number | null
@@ -233,6 +240,16 @@ export function useDiary(date: Ref<string | null>) {
     await refresh()
   }
 
+  async function answerGoalSuggestion(action: 'accept' | 'dismiss') {
+    await $fetch('/api/diary/goal-suggestion', {
+      method: 'POST',
+      body: { date: requireDate(), action },
+    })
+    await refresh()
+  }
+  const acceptGoalSuggestion = () => answerGoalSuggestion('accept')
+  const dismissGoalSuggestion = () => answerGoalSuggestion('dismiss')
+
   return {
     day: data,
     pending,
@@ -249,5 +266,7 @@ export function useDiary(date: Ref<string | null>) {
     setBiometric,
     addBiometricType,
     removeBiometricType,
+    acceptGoalSuggestion,
+    dismissGoalSuggestion,
   }
 }
