@@ -1,4 +1,9 @@
 <script setup lang="ts">
+import { PauseIcon, PlayIcon } from '@heroicons/vue/24/solid'
+import { ForwardIcon, XMarkIcon } from '@heroicons/vue/24/outline'
+
+definePageMeta({ layout: false })
+
 const recorder = useRecorder()
 const {
   state,
@@ -11,6 +16,7 @@ const {
   reviewWaveform,
   reviewPosition,
   isReviewPlaying,
+  isPreviewReady,
   punchInWarning,
   recoverableSessionId,
 } = recorder
@@ -60,19 +66,39 @@ async function confirmSave() {
   }
 }
 
-function onScrub(e: Event) {
+// The scrubber shows a locally-held value while the user is actively
+// dragging, so the RAF-driven playhead position (while playing) can't fight
+// the drag gesture. Dragging pauses playback first, then resumes it on
+// release — the standard scrub UX, and it sidesteps the fight entirely.
+const isDragging = ref(false)
+const dragValue = ref(0)
+const wasPlayingBeforeDrag = ref(false)
+const sliderValue = computed(() => (isDragging.value ? dragValue.value : reviewPosition.value))
+
+function onScrubStart() {
+  isDragging.value = true
+  wasPlayingBeforeDrag.value = isReviewPlaying.value
+  dragValue.value = reviewPosition.value
+  if (isReviewPlaying.value) recorder.pauseReview()
+}
+function onScrubInput(e: Event) {
   const value = Number((e.target as HTMLInputElement).value)
+  dragValue.value = value
   recorder.seekReview(value)
+}
+function onScrubEnd() {
+  isDragging.value = false
+  if (wasPlayingBeforeDrag.value) recorder.playReview()
 }
 
 const hasContent = computed(() => state.value !== 'idle' || takes.value.length > 0)
 </script>
 
 <template>
-  <div class="max-w-md mx-auto p-4 flex flex-col gap-4 min-h-[calc(100vh-4rem)]">
+  <div class="h-dvh max-w-md mx-auto p-4 flex flex-col gap-4 overflow-y-auto">
     <div class="flex items-center justify-between">
       <button class="btn btn-ghost btn-sm btn-circle" aria-label="Cancel" @click="requestCancel">
-        ✕
+        <XMarkIcon class="w-5 h-5" />
       </button>
       <span v-if="hasContent" class="text-sm text-base-content/60">
         {{ state === 'recording' ? 'Recording…' : state === 'paused' ? 'Paused' : '' }}
@@ -102,7 +128,7 @@ const hasContent = computed(() => state.value !== 'idle' || takes.value.length >
       <WaveformCanvas
         v-if="state === 'paused'"
         :buckets="reviewWaveform"
-        :progress="elapsedTotal > 0 ? reviewPosition / elapsedTotal : 0"
+        :progress="elapsedTotal > 0 ? sliderValue / elapsedTotal : 0"
       />
       <WaveformCanvas
         v-else
@@ -114,66 +140,84 @@ const hasContent = computed(() => state.value !== 'idle' || takes.value.length >
     <div v-if="state === 'paused'" class="flex flex-col gap-2">
       <input
         type="range"
-        class="range range-sm"
+        class="range range-sm w-full"
         min="0"
         :max="elapsedTotal"
         step="0.05"
-        :value="reviewPosition"
-        @input="onScrub"
+        :value="sliderValue"
+        @pointerdown="onScrubStart"
+        @input="onScrubInput"
+        @pointerup="onScrubEnd"
       >
       <div class="flex items-center justify-between">
-        <button class="btn btn-sm btn-circle" @click="isReviewPlaying ? recorder.pauseReview() : recorder.playReview()">
-          {{ isReviewPlaying ? '⏸' : '▶' }}
+        <button
+          class="btn btn-sm btn-circle"
+          :disabled="!isPreviewReady"
+          :aria-label="isReviewPlaying ? 'Pause' : 'Play'"
+          @click="isReviewPlaying ? recorder.pauseReview() : recorder.playReview()"
+        >
+          <span v-if="!isPreviewReady" class="loading loading-spinner loading-xs" />
+          <PauseIcon v-else-if="isReviewPlaying" class="w-4 h-4" />
+          <PlayIcon v-else class="w-4 h-4" />
         </button>
         <button
           v-if="reviewPosition < elapsedTotal - 0.05"
-          class="btn btn-sm"
+          class="btn btn-sm gap-1"
           @click="recorder.seekToEnd"
         >
-          Seek to end
+          <ForwardIcon class="w-4 h-4" /> Seek to end
         </button>
       </div>
     </div>
 
-    <div class="flex-1" />
-
-    <div class="flex flex-col items-center gap-3">
+    <div class="flex-1 flex items-center justify-center py-4">
       <button
         v-if="state === 'idle'"
-        class="btn btn-primary btn-circle w-20 h-20 text-lg"
+        class="btn btn-primary btn-circle w-36 h-36"
+        aria-label="Record"
         @click="recorder.start"
       >
-        ● Rec
+        <span class="block w-12 h-12 rounded-full bg-error" />
       </button>
       <button
         v-else-if="state === 'recording'"
-        class="btn btn-warning btn-circle w-20 h-20 text-lg"
+        class="btn btn-circle w-36 h-36 bg-warning border-warning hover:bg-warning/80"
+        aria-label="Pause"
         @click="recorder.pause"
       >
-        ⏸ Pause
+        <PauseIcon class="w-16 h-16 text-warning-content" />
       </button>
       <button
         v-else
-        class="btn btn-primary btn-circle w-20 h-20 text-lg"
+        class="btn btn-primary btn-circle w-36 h-36"
+        aria-label="Resume recording"
         :disabled="isReviewPlaying"
         @click="recorder.resume"
       >
-        ● Resume
-      </button>
-
-      <p v-if="state === 'paused' && punchInWarning > 0.05" class="text-warning text-sm text-center">
-        ⚠ Recording from {{ formatDuration(reviewPosition) }} will replace
-        {{ formatDuration(punchInWarning) }} of existing audio
-      </p>
-
-      <button
-        v-if="hasContent"
-        class="btn btn-outline w-full"
-        @click="openSaveSheet"
-      >
-        Save
+        <span class="block w-12 h-12 rounded-full bg-error" />
       </button>
     </div>
+
+    <p v-if="state === 'paused' && punchInWarning > 0.05" class="text-warning text-sm text-center">
+      ⚠ Recording from {{ formatDuration(reviewPosition) }} will replace
+      {{ formatDuration(punchInWarning) }} of existing audio
+    </p>
+
+    <input
+      v-if="state === 'paused'"
+      v-model="saveTitle"
+      type="text"
+      placeholder="Name this recording (optional)"
+      class="input input-bordered w-full"
+    >
+
+    <button
+      v-if="hasContent"
+      class="btn btn-outline w-full"
+      @click="openSaveSheet"
+    >
+      Save
+    </button>
 
     <!-- Cancel confirmation -->
     <dialog class="modal" :open="showCancelConfirm">

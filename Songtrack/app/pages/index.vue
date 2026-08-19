@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { PauseIcon, PlayIcon } from '@heroicons/vue/24/solid'
+
 interface SongListItem {
   id: string
   title: string
@@ -74,9 +76,11 @@ const player = usePlayer()
       >
         <button
           class="btn btn-circle btn-sm"
+          :aria-label="player.currentSong.value?.id === song.id && player.isPlaying.value ? 'Pause' : 'Play'"
           @click="player.toggle({ id: song.id, title: song.title, durationS: song.durationS ?? 0 })"
         >
-          {{ player.currentSong.value?.id === song.id && player.isPlaying.value ? '⏸' : '▶' }}
+          <PauseIcon v-if="player.currentSong.value?.id === song.id && player.isPlaying.value" class="w-4 h-4" />
+          <PlayIcon v-else class="w-4 h-4" />
         </button>
         <NuxtLink :to="`/songs/${song.id}`" class="flex-1 min-w-0">
           <div class="font-medium truncate">{{ song.title }}</div>

@@ -1,6 +1,5 @@
 import { nanoid } from 'nanoid'
 import {
-  activeTakeAt,
   resolveTimeline,
   timelineDuration,
   punchInOverwriteAmount,
@@ -53,6 +52,7 @@ export function useRecorder() {
   const isClipping = ref(false)
   const reviewPosition = ref(0)
   const isReviewPlaying = ref(false)
+  const isPreviewReady = ref(false)
   const error = ref<string | null>(null)
   const recoverableSessionId = ref<string | null>(null)
 
@@ -66,7 +66,11 @@ export function useRecorder() {
   let rmsIntervalId: ReturnType<typeof setInterval> | null = null
   let wakeLock: WakeLockSentinel | null = null
   let rafId: number | null = null
-  const audioEls = new Map<string, HTMLAudioElement>()
+  const decodedBuffers = new Map<string, AudioBuffer>()
+  let mergedBuffer: AudioBuffer | null = null
+  let sourceNode: AudioBufferSourceNode | null = null
+  let playbackStartContextTime = 0
+  let playbackStartOffset = 0
   const tickNow = ref(performance.now())
   let tickIntervalId: ReturnType<typeof setInterval> | null = null
 
@@ -122,7 +126,16 @@ export function useRecorder() {
 
   async function acquireWakeLock() {
     try {
-      wakeLock = await navigator.wakeLock?.request('screen')
+      const lock = await navigator.wakeLock?.request('screen')
+      wakeLock = lock ?? null
+      // The OS can revoke a wake lock on its own (low battery, power saving) even
+      // while the page stays visible — grab it back immediately when that happens.
+      wakeLock?.addEventListener('release', () => {
+        if (wakeLock === lock) wakeLock = null
+        if (state.value === 'recording' && document.visibilityState === 'visible') {
+          acquireWakeLock()
+        }
+      })
     } catch {
       // Not fatal — recording still works, just without the screen-stays-on guarantee.
     }
@@ -137,6 +150,22 @@ export function useRecorder() {
     if (document.visibilityState === 'visible' && state.value === 'recording' && !wakeLock) {
       await acquireWakeLock()
     }
+  }
+
+  /**
+   * Registers an active Media Session so Android treats the tab as playing
+   * media (lock-screen transport controls, less aggressive background
+   * throttling) for as long as recording is in progress. This can't override
+   * the hardware power button — no web API can, that's a deliberate OS
+   * security boundary — but it's the strongest signal a web page can give
+   * the OS that it should stay alive.
+   */
+  function setMediaSessionRecording(recording: boolean) {
+    if (!('mediaSession' in navigator)) return
+    navigator.mediaSession.metadata = recording
+      ? new MediaMetadata({ title: 'Recording…', artist: 'Songtrack' })
+      : null
+    navigator.mediaSession.playbackState = recording ? 'playing' : 'none'
   }
 
   function startRmsSampling(take: RecordedTake) {
@@ -231,6 +260,7 @@ export function useRecorder() {
     try {
       await opfsPersist()
       await acquireWakeLock()
+      setMediaSessionRecording(true)
       await beginTake(0)
       state.value = 'recording'
     } catch (e) {
@@ -241,91 +271,155 @@ export function useRecorder() {
   async function pause() {
     if (state.value !== 'recording') return
     await endTake()
+    setMediaSessionRecording(false)
     state.value = 'paused'
     reviewPosition.value = elapsedTotal.value
+    isPreviewReady.value = false
+    await rebuildMergedBuffer()
   }
 
   async function resume() {
     if (state.value !== 'paused' || isReviewPlaying.value) return
     pauseReview()
+    setMediaSessionRecording(true)
     await beginTake(reviewPosition.value)
     state.value = 'recording'
   }
 
-  function stopAllAudioEls() {
-    for (const el of audioEls.values()) el.pause()
+  /**
+   * Raw MediaRecorder WebM blobs have no duration/seek index (the same
+   * limitation the server-side ingest remux exists to fix), which makes
+   * seeking a native <audio> element into them unreliable in Chrome. Instead,
+   * fully decode each take to PCM via Web Audio and splice the resolved
+   * timeline into one continuous AudioBuffer — that gives sample-accurate
+   * seeking and gapless playback across punch-in boundaries for free, since
+   * there's no container to seek into anymore.
+   */
+  async function rebuildMergedBuffer() {
+    if (!audioCtx) audioCtx = new AudioContext()
+    const ctx = audioCtx
+
+    const segments = resolveTimeline(timelineTakes.value)
+    if (segments.length === 0) {
+      mergedBuffer = null
+      isPreviewReady.value = true
+      return
+    }
+
+    const bufferBySource = new Map<string, AudioBuffer>()
+    for (const seg of segments) {
+      if (bufferBySource.has(seg.source)) continue
+      const take = takes.value.find(t => t.id === seg.source)
+      if (!take?.blob) continue
+      let buf = decodedBuffers.get(take.id)
+      if (!buf) {
+        const arrayBuffer = await take.blob.arrayBuffer()
+        buf = await ctx.decodeAudioData(arrayBuffer)
+        decodedBuffers.set(take.id, buf)
+      }
+      bufferBySource.set(seg.source, buf)
+    }
+
+    const sampleRate = ctx.sampleRate
+    const numChannels = Math.max(1, ...[...bufferBySource.values()].map(b => b.numberOfChannels))
+    const totalSamples = segments.reduce((sum, seg) => sum + Math.round((seg.end - seg.start) * sampleRate), 0)
+    if (totalSamples === 0) {
+      mergedBuffer = null
+      isPreviewReady.value = true
+      return
+    }
+
+    const out = ctx.createBuffer(numChannels, totalSamples, sampleRate)
+    let writeOffset = 0
+    for (const seg of segments) {
+      const buf = bufferBySource.get(seg.source)
+      if (!buf) continue
+      const startSample = Math.round(seg.start * sampleRate)
+      const endSample = Math.min(Math.round(seg.end * sampleRate), buf.length)
+      const len = Math.max(0, endSample - startSample)
+      for (let ch = 0; ch < numChannels; ch++) {
+        const srcData = buf.getChannelData(Math.min(ch, buf.numberOfChannels - 1))
+        out.getChannelData(ch).set(srcData.subarray(startSample, endSample), writeOffset)
+      }
+      writeOffset += len
+    }
+
+    mergedBuffer = out
+    isPreviewReady.value = true
   }
 
-  function getAudioEl(take: RecordedTake): HTMLAudioElement | null {
-    if (!take.blob) return null
-    let el = audioEls.get(take.id)
-    if (!el) {
-      el = new Audio(URL.createObjectURL(take.blob))
-      audioEls.set(take.id, el)
+  function stopSource() {
+    if (sourceNode) {
+      sourceNode.onended = null
+      try { sourceNode.stop() } catch { /* already stopped */ }
+      sourceNode.disconnect()
+      sourceNode = null
     }
-    return el
+  }
+
+  function playFrom(position: number) {
+    if (!mergedBuffer || !audioCtx) return
+    stopSource()
+    const node = audioCtx.createBufferSource()
+    node.buffer = mergedBuffer
+    node.connect(audioCtx.destination)
+    const offset = Math.min(Math.max(position, 0), mergedBuffer.duration)
+    node.start(0, offset)
+    node.onended = () => {
+      if (sourceNode === node) {
+        sourceNode = null
+        isReviewPlaying.value = false
+      }
+    }
+    sourceNode = node
+    playbackStartContextTime = audioCtx.currentTime
+    playbackStartOffset = offset
   }
 
   function seekReview(position: number) {
     reviewPosition.value = Math.min(Math.max(position, 0), elapsedTotal.value)
-    stopAllAudioEls()
-    const active = activeTakeAt(timelineTakes.value, reviewPosition.value)
-    if (!active) return
-    const take = takes.value.find(t => t.id === active.id)
-    const el = take && getAudioEl(take)
-    if (el) {
-      el.currentTime = active.localTime
-      if (isReviewPlaying.value) el.play().catch(() => {})
-    }
+    if (isReviewPlaying.value) playFrom(reviewPosition.value)
   }
 
   function reviewTick() {
-    if (!isReviewPlaying.value) return
-    const active = activeTakeAt(timelineTakes.value, reviewPosition.value)
-    if (active) {
-      const el = audioEls.get(active.id)
-      if (el) {
-        const take = takes.value.find(t => t.id === active.id)!
-        const timelinePos = take.timelineStart + el.currentTime
-        reviewPosition.value = timelinePos
-        if (timelinePos >= elapsedTotal.value - 0.05) {
-          pauseReview()
-          reviewPosition.value = elapsedTotal.value
-          return
-        }
-        const stillActive = activeTakeAt(timelineTakes.value, timelinePos)
-        if (stillActive && stillActive.id !== active.id) {
-          seekReview(timelinePos)
-        }
-      }
+    if (!isReviewPlaying.value || !audioCtx) return
+    const pos = playbackStartOffset + (audioCtx.currentTime - playbackStartContextTime)
+    if (pos >= elapsedTotal.value - 0.02) {
+      pauseReview()
+      reviewPosition.value = elapsedTotal.value
+      return
     }
+    reviewPosition.value = pos
     rafId = requestAnimationFrame(reviewTick)
   }
 
-  function playReview() {
+  async function playReview() {
     if (state.value !== 'paused') return
-    isReviewPlaying.value = true
+    if (!mergedBuffer) await rebuildMergedBuffer()
+    await audioCtx?.resume()
     if (reviewPosition.value >= elapsedTotal.value - 0.01) reviewPosition.value = 0
-    seekReview(reviewPosition.value)
+    isReviewPlaying.value = true
+    playFrom(reviewPosition.value)
     reviewTick()
   }
 
   function pauseReview() {
     isReviewPlaying.value = false
-    stopAllAudioEls()
+    stopSource()
     if (rafId) cancelAnimationFrame(rafId)
     rafId = null
   }
 
   function seekToEnd() {
     pauseReview()
-    seekReview(elapsedTotal.value)
+    reviewPosition.value = elapsedTotal.value
   }
 
   async function discard() {
     pauseReview()
     stream?.getTracks().forEach(t => t.stop())
     releaseWakeLock()
+    setMediaSessionRecording(false)
     await opfsDeleteSession(sessionId)
   }
 
@@ -345,6 +439,7 @@ export function useRecorder() {
     state.value = 'paused'
     reviewPosition.value = elapsedTotal.value
     recoverableSessionId.value = null
+    await rebuildMergedBuffer()
     // Recovered audio uploads under the *original* session id so its OPFS files get cleaned up on save.
     await opfsDeleteSession(sessionId)
   }
@@ -391,6 +486,7 @@ export function useRecorder() {
 
     stream?.getTracks().forEach(t => t.stop())
     releaseWakeLock()
+    setMediaSessionRecording(false)
     await opfsDeleteSession(sessionId)
 
     return songId
@@ -419,6 +515,7 @@ export function useRecorder() {
     reviewWaveform,
     reviewPosition,
     isReviewPlaying,
+    isPreviewReady,
     punchInWarning,
     recoverableSessionId,
     start,

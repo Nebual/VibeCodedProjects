@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { ArrowPathRoundedSquareIcon, PauseIcon, PlayIcon } from '@heroicons/vue/24/solid'
+import { ArrowUturnLeftIcon, ArrowUturnRightIcon } from '@heroicons/vue/24/outline'
+
 const player = usePlayer()
 const { currentSong, isPlaying, currentTime, duration, playbackRate, loop } = player
 
@@ -12,11 +15,20 @@ function onSeek(e: Event) {
     v-if="currentSong"
     class="fixed bottom-0 inset-x-0 bg-base-100 border-t border-base-300 px-4 py-2 flex items-center gap-3 z-20"
   >
-    <button class="btn btn-circle btn-sm" @click="player.skip(-10)">−10</button>
-    <button class="btn btn-circle btn-primary btn-sm" @click="isPlaying ? player.pause() : player.play(currentSong)">
-      {{ isPlaying ? '⏸' : '▶' }}
+    <button class="btn btn-circle btn-sm" aria-label="Back 10 seconds" @click="player.skip(-10)">
+      <ArrowUturnLeftIcon class="w-4 h-4" />
     </button>
-    <button class="btn btn-circle btn-sm" @click="player.skip(10)">+10</button>
+    <button
+      class="btn btn-circle btn-primary btn-sm"
+      :aria-label="isPlaying ? 'Pause' : 'Play'"
+      @click="isPlaying ? player.pause() : player.play(currentSong)"
+    >
+      <PauseIcon v-if="isPlaying" class="w-4 h-4" />
+      <PlayIcon v-else class="w-4 h-4" />
+    </button>
+    <button class="btn btn-circle btn-sm" aria-label="Forward 10 seconds" @click="player.skip(10)">
+      <ArrowUturnRightIcon class="w-4 h-4" />
+    </button>
 
     <div class="flex-1 min-w-0">
       <div class="truncate text-sm font-medium">{{ currentSong.title }}</div>
@@ -47,12 +59,13 @@ function onSeek(e: Event) {
     </select>
 
     <button
-      class="btn btn-xs"
+      class="btn btn-xs btn-circle"
       :class="loop ? 'btn-primary' : 'btn-ghost'"
+      aria-label="Loop"
       title="Loop"
       @click="player.setLoop(!loop)"
     >
-      🔁
+      <ArrowPathRoundedSquareIcon class="w-4 h-4" />
     </button>
   </div>
 </template>

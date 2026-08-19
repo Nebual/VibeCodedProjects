@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { PauseIcon, PlayIcon } from '@heroicons/vue/24/solid'
+
 interface SongDetail {
   id: string
   title: string
@@ -92,8 +94,13 @@ async function deleteSong() {
 <template>
   <div v-if="song" class="max-w-xl mx-auto p-4 flex flex-col gap-4">
     <div class="flex items-center gap-3">
-      <button class="btn btn-circle btn-primary" @click="play">
-        {{ player.currentSong.value?.id === song.id && player.isPlaying.value ? '⏸' : '▶' }}
+      <button
+        class="btn btn-circle btn-primary"
+        :aria-label="player.currentSong.value?.id === song.id && player.isPlaying.value ? 'Pause' : 'Play'"
+        @click="play"
+      >
+        <PauseIcon v-if="player.currentSong.value?.id === song.id && player.isPlaying.value" class="w-5 h-5" />
+        <PlayIcon v-else class="w-5 h-5" />
       </button>
       <div>
         <h1 class="text-xl font-semibold">{{ song.title }}</h1>

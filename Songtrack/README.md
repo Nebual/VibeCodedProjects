@@ -1,14 +1,14 @@
 # Songtrack
 
-Piano recording, tagging, sharing, and non-destructive editing. See [PLAN.md](./PLAN.md) for the
-full design and rationale.
+Piano recording, tagging, sharing, and non-destructive editing. See [plans/INITIAL_PLAN.md](./plans/INITIAL_PLAN.md)
+for the full design and rationale.
 
 ## Development
 
 ```bash
 cp .env.example .env   # fill in NUXT_OAUTH_GOOGLE_CLIENT_ID/SECRET and NUXT_SESSION_PASSWORD
-npm install
-npm run dev
+pnpm install
+pnpm dev
 ```
 
 Requires Node 24 and a system `ffmpeg` binary on PATH.
@@ -16,7 +16,7 @@ Requires Node 24 and a system `ffmpeg` binary on PATH.
 ## Bulk-importing an existing folder of recordings
 
 ```bash
-npm run import -- /path/to/folder --user you@example.com
+pnpm import -- /path/to/folder --user you@example.com
 ```
 
 Idempotent (hashes file content), and preserves each file's mtime as its `created_at`.

@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { PauseIcon, PlayIcon } from '@heroicons/vue/24/solid'
+import { Bars3Icon } from '@heroicons/vue/24/outline'
+
 interface AlbumSong {
   id: string
   title: string
@@ -120,12 +123,14 @@ async function copyShareLink() {
         @dragover="onDragOver"
         @drop="onDrop(index)"
       >
-        <span class="text-base-content/40">⠿</span>
+        <Bars3Icon class="w-4 h-4 text-base-content/40 shrink-0" />
         <button
           class="btn btn-circle btn-xs"
+          :aria-label="player.currentSong.value?.id === song.id && player.isPlaying.value ? 'Pause' : 'Play'"
           @click="player.toggle({ id: song.id, title: song.title, durationS: song.durationS ?? 0 })"
         >
-          {{ player.currentSong.value?.id === song.id && player.isPlaying.value ? '⏸' : '▶' }}
+          <PauseIcon v-if="player.currentSong.value?.id === song.id && player.isPlaying.value" class="w-3 h-3" />
+          <PlayIcon v-else class="w-3 h-3" />
         </button>
         <NuxtLink :to="`/songs/${song.id}`" class="flex-1 min-w-0 truncate">{{ song.title }}</NuxtLink>
         <span v-if="song.durationS" class="text-xs text-base-content/60">{{ formatDuration(song.durationS) }}</span>

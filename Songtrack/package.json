@@ -10,12 +10,14 @@
     "dev": "nuxt dev",
     "generate": "nuxt generate",
     "preview": "nuxt preview",
+    "start": "node --env-file-if-exists=.env .output/server/index.mjs",
     "postinstall": "nuxt prepare",
     "db:generate": "drizzle-kit generate",
     "db:studio": "drizzle-kit studio",
     "import": "tsx --env-file=.env scripts/import.ts"
   },
   "dependencies": {
+    "@heroicons/vue": "^2.2.0",
     "better-sqlite3": "^11.10.0",
     "drizzle-orm": "^0.44.5",
     "nanoid": "^5.1.5",
