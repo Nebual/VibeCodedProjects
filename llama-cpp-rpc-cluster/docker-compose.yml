@@ -1,0 +1,32 @@
+# Run this on the PRIMARY node. It serves the OpenAI-compatible HTTP API on
+# the LAN and offloads part of the model to the remote RPC worker(s) listed
+# in RPC_HOSTS (see .env).
+services:
+  llama-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        CUDA_ARCHITECTURES: ${CUDA_ARCHITECTURES:-60;61;70;75;80;86;89;90}
+    image: llama-cpp-rpc:latest
+    container_name: llama-server
+    entrypoint: ["/app/bin/llama-server"]
+    command:
+      - --model=/models/${MODEL_FILE}
+      - --host=0.0.0.0
+      - --port=8080
+      - --n-gpu-layers=${N_GPU_LAYERS:-999}
+      - --rpc=${RPC_HOSTS}
+    ports:
+      # Bound to all interfaces so other machines on the LAN can reach it.
+      - "${SERVER_PORT:-8080}:8080"
+    volumes:
+      - ${MODELS_DIR:-./models}:/models:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
