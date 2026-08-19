@@ -14,7 +14,9 @@
     "postinstall": "nuxt prepare",
     "db:generate": "drizzle-kit generate",
     "db:studio": "drizzle-kit studio",
-    "import": "tsx --env-file=.env scripts/import.ts"
+    "import": "tsx --env-file=.env scripts/import.ts",
+    "test": "vitest run",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@heroicons/vue": "^2.2.0",
@@ -28,6 +30,7 @@
     "wavesurfer.js": "^7.11.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@tailwindcss/vite": "^4.1.16",
     "@types/better-sqlite3": "^7.6.13",
     "daisyui": "^5.1.29",
@@ -35,6 +38,7 @@
     "tailwindcss": "^4.1.16",
     "tsx": "^4.20.7",
     "typescript": "^5.9.3",
+    "vitest": "^4.1.10",
     "vue-tsc": "^3.3.10"
   }
 }

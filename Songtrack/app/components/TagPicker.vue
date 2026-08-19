@@ -38,6 +38,13 @@ function onEnter() {
     addTag(query.value)
   }
 }
+
+/** Called by the parent right before it saves, so unsubmitted text in the box isn't silently lost. */
+function commitPending() {
+  if (query.value.trim()) addTag(query.value)
+}
+
+defineExpose({ commitPending })
 </script>
 
 <template>

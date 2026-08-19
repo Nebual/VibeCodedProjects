@@ -101,6 +101,14 @@ export async function generatePeaks(inputPath: string, bucketCount = 4000): Prom
   }
 }
 
+/** Mono PCM samples at a given sample rate — the raw material for RMS envelope analysis (auto-trim). */
+export async function decodeMonoPcm16(inputPath: string, sampleRate: number): Promise<Int16Array> {
+  const buf = await runFfmpegCapture(['-i', inputPath, '-f', 's16le', '-acodec', 'pcm_s16le', '-ac', '1', '-ar', String(sampleRate), 'pipe:1'])
+  const samples = new Int16Array(Math.floor(buf.length / 2))
+  for (let i = 0; i < samples.length; i++) samples[i] = buf.readInt16LE(i * 2)
+  return samples
+}
+
 export interface RenderSource {
   id: string
   path: string

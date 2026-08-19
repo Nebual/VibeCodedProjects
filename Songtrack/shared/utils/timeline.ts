@@ -90,3 +90,49 @@ export function punchInOverwriteAmount(takes: TimelineTake[], scrubPosition: num
   const total = timelineDuration(takes)
   return Math.max(0, total - scrubPosition)
 }
+
+export interface KeepRange {
+  start: number
+  end: number
+}
+
+/** Total duration a segment list renders to (sum of each segment's own length). */
+export function segmentsDuration(segments: ResolvedSegment[]): number {
+  return segments.reduce((sum, s) => sum + (s.end - s.start), 0)
+}
+
+/**
+ * Re-expresses a keep-only selection of the CURRENT rendered master's
+ * timeline back in terms of the segments that produced it. This is the one
+ * mechanism behind trim-start, trim-end, and crop-the-middle: all three are
+ * just "keep these ranges of the master," and this maps those ranges back
+ * onto whichever take each already-resolved segment came from.
+ */
+export function applyKeepRanges(segments: ResolvedSegment[], keepRanges: KeepRange[]): ResolvedSegment[] {
+  const bounds: { segment: ResolvedSegment, masterStart: number, masterEnd: number }[] = []
+  let cursor = 0
+  for (const segment of segments) {
+    const len = segment.end - segment.start
+    bounds.push({ segment, masterStart: cursor, masterEnd: cursor + len })
+    cursor += len
+  }
+
+  const sortedRanges = [...keepRanges].sort((a, b) => a.start - b.start)
+  const result: ResolvedSegment[] = []
+
+  for (const range of sortedRanges) {
+    for (const b of bounds) {
+      const overlapStart = Math.max(range.start, b.masterStart)
+      const overlapEnd = Math.min(range.end, b.masterEnd)
+      if (overlapEnd - overlapStart <= 0) continue
+      const localOffset = overlapStart - b.masterStart
+      result.push({
+        source: b.segment.source,
+        start: b.segment.start + localOffset,
+        end: b.segment.start + localOffset + (overlapEnd - overlapStart),
+      })
+    }
+  }
+
+  return result
+}

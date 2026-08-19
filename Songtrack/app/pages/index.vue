@@ -94,5 +94,8 @@ const player = usePlayer()
         <div v-if="song.rating" class="text-sm text-warning whitespace-nowrap">★ {{ song.rating }}/10</div>
       </li>
     </ul>
+    <div v-if="me?.user?.email?.startsWith('allisonpiano')" class="mt-4 text-xs text-base-content/60 py-1">
+      Hi dad! Hope you find this app useful! Send me any feature requests and I'll add em quick :D
+    </div>
   </div>
 </template>

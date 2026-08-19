@@ -213,8 +213,13 @@ export function useRecorder() {
   async function beginTake(timelineStart: number) {
     if (!stream) stream = await acquireMicStream()
     const mimeType = pickMimeType()
-    const take: RecordedTake = { id: nanoid(), timelineStart, duration: 0, mimeType, blob: null, rms: [] }
-    takes.value.push(take)
+    takes.value.push({ id: nanoid(), timelineStart, duration: 0, mimeType, blob: null, rms: [] })
+    // Mutations below must go through this reactive reference, not the plain
+    // object literal above — pushing a plain object into a ref array doesn't
+    // make that original reference reactive, so mutating it directly (e.g.
+    // take.rms.push(...) from the RMS interval) would never trigger the
+    // computeds that read it, leaving the waveform stuck blank.
+    const take = takes.value[takes.value.length - 1]!
     currentTakeId.value = take.id
     activeChunks = []
     chunkIndex = 0

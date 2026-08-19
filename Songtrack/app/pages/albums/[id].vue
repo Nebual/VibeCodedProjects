@@ -71,10 +71,11 @@ async function removeSong(songId: string) {
 }
 
 // Sharing
+const requestUrl = useRequestURL()
 const shareUrl = computed(() => {
   if (!album.value?.shareToken) return null
   const slug = slugify(album.value.title)
-  return `${location.origin}/a/${album.value.shareToken}#${slug}`
+  return `${requestUrl.origin}/a/${album.value.shareToken}#${slug}`
 })
 const sharing = ref(false)
 async function toggleShare() {
@@ -90,8 +91,12 @@ async function toggleShare() {
     sharing.value = false
   }
 }
+const copied = ref(false)
 async function copyShareLink() {
-  if (shareUrl.value) await navigator.clipboard.writeText(shareUrl.value)
+  if (!shareUrl.value) return
+  await navigator.clipboard.writeText(shareUrl.value)
+  copied.value = true
+  setTimeout(() => { copied.value = false }, 2000)
 }
 </script>
 
@@ -109,7 +114,7 @@ async function copyShareLink() {
       </button>
       <template v-if="shareUrl">
         <input class="input input-bordered input-sm flex-1" readonly :value="shareUrl">
-        <button class="btn btn-sm btn-ghost" @click="copyShareLink">Copy</button>
+        <button class="btn btn-sm btn-ghost" @click="copyShareLink">{{ copied ? 'Copied!' : 'Copy' }}</button>
       </template>
     </div>
 

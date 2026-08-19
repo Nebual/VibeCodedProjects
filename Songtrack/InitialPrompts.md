@@ -79,3 +79,25 @@ Minor UI feedback:
 - Lets have the start recording button, look like a recording dot, when the recording is paused. Currently it looks like it'll play, which is misleading.
 
 Then continue with next phase
+
+## Feedback round 2
+
+I added some sample recordings from my phone in @samples/UpliftingClouds.m4a (this one should have 1 second trimmed off the start, and about 7 seconds off the end). @"samples/Wondering if Theres Something Here.m4a" should have 5s off the start and 10s off the end. Useful for when we get to that stage of testing the filters/etc
+
+The edit page won't seem to load for me. Clientside nav does nothing, and refreshing the /edit or /songs/x urls shows
+```
+Cannot read properties of undefined (reading 'origin')\n" +
+  'at ComputedRefImpl.fn (/home/nebual/Songtrack/app/pages/songs/[id].vue:80:24)\n' +
+```
+
+I also see an error 'Failed to resolve component: WaveformCanvas' , and indeed see no waveforms. I think it needs to move out of that recorder/ folder, or be accessed differently
+
+Ui tweak: when writing in tags, if Save is pressed while there's something in the tag search box, create a tag named that input value.
+When hitting the 'Copy' (share link) button, make it switch to say 'Copied!'
+
+Edit page still doesn't load (well it looks exactly the same as /songs/:id).
+Canvas still looks blank during recording.
+
+Having some tests (e2e, vitest) in the repo would be good
+
+Edit page loads now. I can't drag on the timeline where its already green, so I can't add a red (remove) zone to cut out a middle section. Dragging the edges of the green (keep) zone works, and dragging a red zone from outside the green in and hitting apply works.

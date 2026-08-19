@@ -42,7 +42,9 @@ watchEffect(() => {
 })
 
 const saving = ref(false)
+const tagPickerRef = useTemplateRef<{ commitPending: () => void }>('tagPicker')
 async function saveMeta() {
+  tagPickerRef.value?.commitPending()
   saving.value = true
   try {
     await $fetch(`/api/songs/${songId}`, { method: 'PATCH', body: { ...form } })
@@ -57,9 +59,10 @@ function play() {
   player.toggle({ id: song.value.id, title: song.value.title, durationS: song.value.durationS ?? 0 })
 }
 
+const requestUrl = useRequestURL()
 const shareUrl = computed(() => {
   if (!song.value?.shareToken) return null
-  return `${location.origin}/s/${song.value.shareToken}#${slugify(song.value.title)}`
+  return `${requestUrl.origin}/s/${song.value.shareToken}#${slugify(song.value.title)}`
 })
 const sharing = ref(false)
 async function toggleShare() {
@@ -75,8 +78,12 @@ async function toggleShare() {
     sharing.value = false
   }
 }
+const copied = ref(false)
 async function copyShareLink() {
-  if (shareUrl.value) await navigator.clipboard.writeText(shareUrl.value)
+  if (!shareUrl.value) return
+  await navigator.clipboard.writeText(shareUrl.value)
+  copied.value = true
+  setTimeout(() => { copied.value = false }, 2000)
 }
 
 function downloadUrl(format: 'mp3' | 'ogg') {
@@ -135,7 +142,7 @@ async function deleteSong() {
       </label>
       <div class="col-span-2 flex flex-col gap-1">
         <span class="label-text">Tags</span>
-        <TagPicker v-model="form.tagNames" />
+        <TagPicker ref="tagPicker" v-model="form.tagNames" />
       </div>
     </div>
 
@@ -146,6 +153,7 @@ async function deleteSong() {
     <div class="divider" />
 
     <div class="flex flex-wrap items-center gap-2">
+      <NuxtLink :to="`/songs/${songId}/edit`" class="btn btn-sm btn-outline">Edit</NuxtLink>
       <a :href="downloadUrl('mp3')" class="btn btn-sm btn-outline">Download MP3</a>
       <a :href="downloadUrl('ogg')" class="btn btn-sm btn-outline">Download OGG</a>
       <button class="btn btn-sm" :disabled="sharing" @click="toggleShare">
@@ -155,7 +163,7 @@ async function deleteSong() {
     </div>
     <div v-if="shareUrl" class="flex items-center gap-2">
       <input class="input input-bordered input-sm flex-1" readonly :value="shareUrl">
-      <button class="btn btn-sm btn-ghost" @click="copyShareLink">Copy</button>
+      <button class="btn btn-sm btn-ghost" @click="copyShareLink">{{ copied ? 'Copied!' : 'Copy' }}</button>
     </div>
   </div>
 </template>

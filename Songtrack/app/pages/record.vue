@@ -46,6 +46,7 @@ const saveTitle = ref('')
 const saveTags = ref<string[]>([])
 const saving = ref(false)
 const saveError = ref<string | null>(null)
+const tagPickerRef = useTemplateRef<{ commitPending: () => void }>('tagPicker')
 
 async function openSaveSheet() {
   if (state.value === 'recording') await recorder.pause()
@@ -54,6 +55,7 @@ async function openSaveSheet() {
 
 async function confirmSave() {
   if (!saveTitle.value.trim()) return
+  tagPickerRef.value?.commitPending()
   saving.value = true
   saveError.value = null
   try {
@@ -247,7 +249,7 @@ const hasContent = computed(() => state.value !== 'idle' || takes.value.length >
           required
         >
         <label class="label">Tags (optional)</label>
-        <TagPicker v-model="saveTags" />
+        <TagPicker ref="tagPicker" v-model="saveTags" />
         <p v-if="saveError" class="alert alert-error text-sm mt-3">{{ saveError }}</p>
         <div class="modal-action">
           <button class="btn" :disabled="saving" @click="showSaveSheet = false">Back</button>

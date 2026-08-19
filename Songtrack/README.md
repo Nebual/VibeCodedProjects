@@ -21,6 +21,21 @@ pnpm import -- /path/to/folder --user you@example.com
 
 Idempotent (hashes file content), and preserves each file's mtime as its `created_at`.
 
+## Testing
+
+```bash
+pnpm test           # vitest — pure-function unit tests (timeline resolution, auto-trim analysis)
+pnpm exec playwright install chromium   # once, to fetch the browser binary
+pnpm test:e2e       # playwright — full-app e2e, starts its own dev server on an isolated DB
+```
+
+The e2e suite runs against a real headless browser with its own SQLite database
+(`.data-e2e/`, gitignored) and Google OAuth bypassed via a `_test-login` route
+that's a 404 unless `ALLOW_TEST_LOGIN=true` — Playwright sets that only for its
+own server, so it stays inert in normal dev/production runs. One spec drives
+the recorder with a fake microphone device (`--use-fake-device-for-media-stream`),
+feeding it `tests/e2e/fixtures/test-tone.wav`.
+
 ## Production deploy
 
 ```bash

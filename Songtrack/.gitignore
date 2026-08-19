@@ -1,10 +1,16 @@
 # Nuxt dev/build outputs
 .output
 .data
+.data-e2e
 .nuxt
 .nitro
 .cache
 dist
+
+# Test outputs
+test-results
+playwright-report
+blob-report
 
 # Node dependencies
 node_modules
@@ -22,3 +28,5 @@ logs
 .env
 .env.*
 !.env.example
+
+samples/
