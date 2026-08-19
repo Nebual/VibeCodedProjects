@@ -5,7 +5,6 @@ import {
   DEFAULT_CALORIE_GOAL,
   activityLevel,
   bmi,
-  bmiCategory,
   cmToFtIn,
   formatWeight,
   ftInToCm,
@@ -209,10 +208,6 @@ const bmiValue = computed(() => {
   if (!form.height_cm || currentWeightKg.value === null) return null
   return bmi(currentWeightKg.value, form.height_cm)
 })
-
-const bmiLabel = computed(() =>
-  bmiValue.value === null ? null : bmiCategory(bmiValue.value).label,
-)
 
 const bmiOpen = ref(false)
 
@@ -464,22 +459,6 @@ const goalFields = [
           </div>
         </div>
 
-        <div class="flex items-center justify-between gap-2 rounded-box bg-base-200 p-3">
-          <div class="text-xs">
-            <div class="text-base-content/60">Body mass index</div>
-            <div v-if="bmiValue !== null" class="font-medium">
-              {{ bmiValue.toFixed(1) }} · {{ bmiLabel }}
-            </div>
-            <div v-else class="text-base-content/50">
-              Add your height and a weight below to see it.
-            </div>
-          </div>
-          <button class="btn btn-ghost btn-xs gap-1" @click="bmiOpen = true">
-            <AppIcon name="ruler" class="w-4 h-4" />
-            Categories
-          </button>
-        </div>
-
         <label class="form-control">
           <span class="label-text text-xs mb-1">Baseline Activity Level</span>
           <select
@@ -518,7 +497,13 @@ const goalFields = [
     <!-- Weight ------------------------------------------------------------->
     <section class="card bg-base-100 shadow-sm">
       <div class="card-body p-4 gap-3">
-        <h2 class="font-semibold">Today's weight</h2>
+        <div class="flex items-center justify-between gap-2">
+          <h2 class="font-semibold">Today's weight</h2>
+          <button class="btn btn-ghost btn-xs gap-1" @click="bmiOpen = true">
+            <AppIcon name="ruler" class="w-4 h-4" />
+            BMI
+          </button>
+        </div>
         <p class="text-xs text-base-content/50">
           Saved to today's diary and charted on Trends. To fix an earlier day,
           open it in the diary.
@@ -807,6 +792,12 @@ const goalFields = [
       @apply="applyPlan"
     />
 
-    <BmiDialog :open="bmiOpen" :value="bmiValue" @close="bmiOpen = false" />
+    <BmiDialog
+      :open="bmiOpen"
+      :value="bmiValue"
+      :height-cm="form.height_cm ?? null"
+      :weight-unit="weightUnit"
+      @close="bmiOpen = false"
+    />
   </div>
 </template>

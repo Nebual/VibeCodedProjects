@@ -38,7 +38,7 @@ async function devLogin() {
         <div>
           <h1 class="text-2xl font-semibold">Fittown</h1>
           <p class="text-sm text-base-content/60 mt-1">
-            Track food, water and training.
+            Track food, recipes, water, and exercise.
           </p>
         </div>
 

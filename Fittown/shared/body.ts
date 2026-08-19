@@ -350,6 +350,12 @@ export function bmi(weightKg: number, heightCm: number): number {
   return weightKg / (heightM * heightM)
 }
 
+/** Inverse of {@link bmi}: the weight at a given height that hits a target BMI. */
+export function weightForBmi(bmiValue: number, heightCm: number): number {
+  const heightM = heightCm / 100
+  return bmiValue * heightM * heightM
+}
+
 /** The bands are contiguous and unbounded at both ends, so this always matches. */
 export function bmiCategory(value: number): BmiCategory {
   return (

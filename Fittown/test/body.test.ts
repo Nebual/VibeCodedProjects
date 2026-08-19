@@ -11,6 +11,7 @@ import {
   bmi,
   bmiCategory,
   bmr,
+  weightForBmi,
   calorieFloor,
   cmToFtIn,
   dailyDeltaToRate,
@@ -236,6 +237,16 @@ describe('BMI', () => {
   it('categorizes a known profile', () => {
     // 25.69 falls just past the healthy/overweight boundary at 25.
     expect(bmiCategory(bmi(PROFILE.weightKg, PROFILE.heightCm)).key).toBe('overweight')
+  })
+
+  it('inverts bmi() — the weight at this height for a target BMI', () => {
+    for (const value of [18.5, 22, 25, 30]) {
+      expect(bmi(weightForBmi(value, PROFILE.heightCm), PROFILE.heightCm)).toBeCloseTo(value, 10)
+    }
+  })
+
+  it('gives a heavier person a higher weight at the same BMI', () => {
+    expect(weightForBmi(25, 180)).toBeGreaterThan(weightForBmi(25, 160))
   })
 })
 

@@ -1,10 +1,20 @@
 <script setup lang="ts">
-import { BMI_CATEGORIES, bmiCategory } from '#shared/body'
+import {
+  BMI_CATEGORIES,
+  bmiCategory,
+  formatWeight,
+  weightForBmi,
+  type BmiCategory,
+  type WeightUnit,
+} from '#shared/body'
 
 const props = defineProps<{
   open: boolean
   /** Null when height or weight is missing — the table still shows, minus the marker row. */
   value: number | null
+  /** Null when not yet entered — the weight-range column shows a dash instead. */
+  heightCm: number | null
+  weightUnit: WeightUnit
 }>()
 
 const emit = defineEmits<{ close: [] }>()
@@ -21,6 +31,20 @@ watch(
 
 const rounded = computed(() => (props.value === null ? null : Math.round(props.value * 10) / 10))
 const category = computed(() => (props.value === null ? null : bmiCategory(props.value)))
+
+/**
+ * The weight, at the user's own height, that each category's boundaries work
+ * out to — so "lose weight to reach a healthy BMI" becomes a concrete number
+ * rather than something they have to work out themselves.
+ */
+function weightRange(c: BmiCategory): string {
+  const heightCm = props.heightCm
+  if (!heightCm) return '—'
+  const fmt = (bmiBound: number) => formatWeight(weightForBmi(bmiBound, heightCm), props.weightUnit)
+  if (c.min === null) return `below ${fmt(c.max!)}`
+  if (c.max === null) return `${fmt(c.min)} and above`
+  return `${fmt(c.min)} – ${fmt(c.max)}`
+}
 </script>
 
 <template>
@@ -48,6 +72,7 @@ const category = computed(() => (props.value === null ? null : bmiCategory(props
             <tr>
               <th>Category</th>
               <th class="text-right">BMI range</th>
+              <th class="text-right">Weight range</th>
             </tr>
           </thead>
           <tbody>
@@ -69,10 +94,15 @@ const category = computed(() => (props.value === null ? null : bmiCategory(props
                 <template v-else-if="c.max === null">{{ c.min }} and above</template>
                 <template v-else>{{ c.min }} – {{ c.max }}</template>
               </td>
+              <td class="text-right tabular">{{ weightRange(c) }}</td>
             </tr>
           </tbody>
         </table>
       </div>
+
+      <p v-if="!heightCm" class="text-xs text-base-content/50">
+        Add your height in About you to see the weight each category works out to.
+      </p>
 
       <p class="text-[0.65rem] text-base-content/40 leading-snug">
         The WHO's standard adult bands — one formula for every body, so it reads
