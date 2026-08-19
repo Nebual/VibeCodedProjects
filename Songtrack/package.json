@@ -1,0 +1,38 @@
+{
+  "name": "songtrack",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "nuxt build",
+    "dev": "nuxt dev",
+    "generate": "nuxt generate",
+    "preview": "nuxt preview",
+    "postinstall": "nuxt prepare",
+    "db:generate": "drizzle-kit generate",
+    "db:studio": "drizzle-kit studio",
+    "import": "tsx --env-file=.env scripts/import.ts"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.10.0",
+    "drizzle-orm": "^0.44.5",
+    "nanoid": "^5.1.5",
+    "nuxt": "^4.5.2",
+    "nuxt-auth-utils": "^0.5.20",
+    "vue": "^3.5.41",
+    "vue-router": "^5.2.0",
+    "wavesurfer.js": "^7.11.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.16",
+    "@types/better-sqlite3": "^7.6.13",
+    "daisyui": "^5.1.29",
+    "drizzle-kit": "^0.31.5",
+    "tailwindcss": "^4.1.16",
+    "tsx": "^4.20.7",
+    "typescript": "^5.9.3",
+    "vue-tsc": "^3.3.10"
+  }
+}

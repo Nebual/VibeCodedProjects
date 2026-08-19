@@ -1,0 +1,12 @@
+@import "tailwindcss";
+@plugin "daisyui" {
+  themes: light --default, dark --prefersdark;
+}
+
+:root {
+  color-scheme: light dark;
+}
+
+html, body, #__nuxt {
+  height: 100%;
+}
