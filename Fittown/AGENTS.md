@@ -12,6 +12,19 @@ behind a decision.
 
 ## 1. You cannot `pnpm install` in this directory
 
+> **Environment caveat.** Everything in this section is about the *primary*
+> setup, where the source sits on a **virtiofs mount of the user's Windows
+> drive**. That filesystem is what breaks things. This is not the only way the
+> codebase is worked on: it is also developed from a **Docker terminal backend
+> (Hermes) on native/container storage**, where the source lives at `/workspace`
+> on an ordinary Linux filesystem and none of the virtiofs limits apply — pnpm
+> installs, symlinks and `node_modules` all just work there, and there is no
+> `$SRC`→`$RUN` rsync dance needed (edits are made directly where the server
+> runs). See "The docker-terminal dev environment" at the end of this section
+> for that workflow's quirks. Everything else in this file — the invariants,
+> the Verification layers, the data-guard discipline — applies in *both*
+> environments.
+
 The project lives on a **virtiofs mount of the user's Windows drive**. Symlinks
 fail outright (`EPERM`) and `rename`/`copyfile` fail intermittently
 (`EACCES`/`ENOENT`), so pnpm dies partway through. `node-linker=hoisted` does
@@ -41,49 +54,13 @@ fixed.
 Never commit a `.npmrc` with a sandbox `store-dir`; it isn't portable to the
 user's Linux box.
 
-### Guard `data/` while you do this
-
-`$SRC/data/fittown.db` is the **deliverable** and is supposed to contain the
-food library and nothing personal. The working copy's database fills up with
-test users and junk entries, and it is very easy to clobber one with the other
-— it happened during the first build, and again in a later session, both times
-*after* the deliverable had already been verified clean. Assume it will happen
-to you: re-verify at the end rather than trusting a check from an hour ago, and
-treat stray `data/fittown.db-wal` / `-shm` files next to the deliverable as
-proof that something opened it for writing. Two rules:
-
-- Keep `--exclude data` on **every** rsync, in both directions.
-- Before handing over, regenerate and re-verify rather than trusting an earlier
-  check:
-
-  ```bash
-  node scripts/reset-user-data.mjs "$RUN/data/fittown.db" --out /tmp/clean.db
-  cp /tmp/clean.db "$SRC/data/fittown.db"
-  rm -f "$SRC"/data/fittown.db-wal "$SRC"/data/fittown.db-shm
-  ```
-
-  Then confirm `users`, `diary_entries` and custom foods are all 0.
+### Guard `data/`
 
 **Never copy a live SQLite file with `cp`.** It is in WAL mode, so the main
 file alone can be many commits behind — copying `$RUN`'s database mid-session
 produced a file showing 2 diary entries when the database really had 26. Either
 `PRAGMA wal_checkpoint(TRUNCATE)` first, or use `VACUUM INTO` (which is what
 `reset-user-data.mjs --out` does).
-
-**This has already destroyed the deliverable once.** The `data/fittown.db`
-shipped before the friends work was **unreadable** — `SELECT … FROM
-sqlite_master` returned "database disk image is malformed", so every table in
-it, not just the personal ones. Its header was self-consistent (20,042 pages,
-file size to match, WAL mode) which is exactly what a main file separated from
-its WAL looks like. It was regenerated from `$RUN` with the procedure above and
-verified: `quick_check` ok, 203,695 OFF foods, 203,695 FTS rows, a live search
-hit, and zero rows in all twelve personal tables.
-
-So: **verify the deliverable, don't assume it.** And verify it *off* the
-Windows mount — open a copy on native storage and compare with `md5sum`/`cmp`.
-Opening `$SRC/data/fittown.db` in place is its own hazard: even a `readOnly`
-connection creates `-shm`/`-wal` beside it over virtiofs, which then looks like
-the evidence of tampering this file tells you to treat as a warning sign.
 
 ### Shell traps
 
@@ -97,6 +74,43 @@ the evidence of tampering this file tells you to treat as a warning sign.
 - Paths contain a space. Quote them, always.
 - Start long-lived servers detached: `(setsid nohup pnpm dev > /tmp/run.log 2>&1 < /dev/null &)`.
 
+### The docker-terminal dev environment (no virtiofs)
+
+When this codebase is developed from a Hermes **Docker terminal backend**, the
+source is at `/workspace` on native container storage. It is a first-class dev
+environment, not a degraded one, but it has its own quirks:
+
+- **Node must be ≥ 24.** If `node -v` is 20, install a newer one in the session:
+  ```bash
+  nvm install 24 && nvm use 24
+  ```
+  Then everything (vitest, `nuxi`, the dev server) works.
+- **Run the unit suite without pnpm:** `node_modules/.bin/vitest run` works
+  directly (pnpm's version-check may try to purge the already-installed
+  `node_modules` with `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY`; adding
+  `--frozen-lockfile`/CI env or just using the `.bin/vitest` binary avoids it).
+- **The dev login is at `/auth/dev`, NOT `/api/auth/dev`.** The route lives
+  under `server/routes/auth/` so it maps to the former; hitting the latter
+  with a curl cookie jar 404s and every authenticated call then 401s. This is
+  the standard trap when hand-rolling an HTTP smoke test.
+- **Killing the dev server is not `nuxi`-shaped.** The running process's
+  command line is `node …/nuxt/bin/nuxt.mjs dev`, so the self-avoiding
+  `pkill -f "nux[t].mjs dev"` from §1 never matches it (that's correct —
+  killing it would take the shell with it). Match `nu[x]t.mjs` instead or kill
+  by PID. A fresh `nuxi dev` on the same port also refuses to start with
+  "Another Nuxt dev server is already running (PID n)" — `NUXT_IGNORE_LOCK=1`
+  bypasses, but better to kill the old one first.
+- **Smoke-test against a throwaway DB.** Run the dev server pointed at a temp
+  file so you never touch the real `data/fittown.db`:
+  ```bash
+  FITTOWN_DB_PATH=/tmp/fittown-test.db NUXT_PORT=3100 node_modules/.bin/nuxi dev
+  ```
+  Then exercise auth + the feature with curl and per-user cookie jars
+  (`-c/ck-a` for three dev users). This is how the friends, reporting, copy and
+  search changes were verified end-to-end.
+- **The `data/` guard still applies fully here.** The source at `/workspace`
+  is the deliverable; don't point the throwaway server at `data/fittown.db`.
+
 ---
 
 ## 2. Verify your work
@@ -104,10 +118,10 @@ the evidence of tampering this file tells you to treat as a warning sign.
 Two layers, and they cover different things:
 
 ```bash
-cd $RUN && pnpm test                     # 358 unit tests, ~0.8s, no server needed
-cd $RUN && node scripts/e2e.mjs          # 38 steps, fails on any console error
+cd $RUN && pnpm test                     # >= 358 unit tests, ~0.8s, no server needed
+cd $RUN && node scripts/e2e.mjs          # >= 38 steps, fails on any console error
 node scripts/screenshots.mjs /tmp/shots  # mobile, dark, desktop — then Read them
-pnpm build                               # catches things dev mode hides
+pnpm build                               # catches things dev mode hides, run after large changes
 ```
 
 **Unit tests** (`test/*.test.ts`, plain Vitest — see `vitest.config.ts`) cover
@@ -722,13 +736,6 @@ contacts Google, so the derived `redirect_uri` is right there in the 302.
 ```bash
 curl -sD - -o /dev/null -H 'Host: example.com' http://localhost:3000/auth/google | grep -i location
 ```
-
-**Not tested:**
-
-- **Camera barcode scanning.** Uses the native `BarcodeDetector` API (no
-  scanning library). Unavailable in Safari, hence manual entry alongside. The
-  lookup API behind it is tested; the camera path is not.
-- **Real iOS/Android devices.** Only a 390×844 headless Chromium viewport.
 
 ---
 

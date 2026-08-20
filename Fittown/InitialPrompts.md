@@ -94,3 +94,25 @@ When creating custom food, allow scanning barcode to fill in that field. If the 
 When switching portion type (eg. To grams) auto focus and select the amount so you don't have to delete 3 times to clear it.
 
 When viewing a food or recipe, lets hide Vitamins, Minerals, and Other when they're 'not recorded'. Lets reorder macros to display as 'Fat', then 'Carbs', then Protein. Both in NutrientBreakdown and when adding custom foods.
+
+Have the diary default to Yesterday between 12am and 3am. Also when logging a food, assume its for yesterday during that late-night period. In Diary, when showing 'Yesterday' or 'Today' in the day switcher, include (Mon) or (Tue) as appropriate.
+
+# Nutrition Facts OCR
+
+Lets add Nutrition Facts label scanning for quickly adding a Custom Food. It'll use the same OCR api as the recipe scanner, and prefill the form. For a sample image see @file:PXL_20260820_075057303.jpg , which shows a Canadian Nutrition Facts label, top line 'Nutrition Facts'. If the label contains extra measurements that the Custom Food page doesn't normally show (eg. Calcium or Iron), show extra field inputs and prefill them too. The label may have 'English / French' fields (like 'Fat / Lipides'), disregard the French part. It may have % Daily value's, ignore those.
+
+Details to pull from this photo:
+Per 3 bars (45g)
+Calories 210
+Fat 15g
+Saturated 14g
+Trans 0g
+Carbohydrate 24g
+Fibre 3g
+Sugars 9g
+Protein 2g
+Cholesterol 0mg
+Sodium 0mg
+Potassium 150mg
+Calcium 0mg
+Iron 1.75mg

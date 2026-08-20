@@ -1,7 +1,14 @@
 <script setup lang="ts">
+import { NUTRIENT_BY_KEY } from '#shared/nutrients'
 import type { FoodRow, MealName } from '~/composables/useDiary'
 
 useHead({ title: 'New food · Fittown' })
+
+/** Shape of POST /api/foods/label — serving info plus recognised nutrient amounts. */
+interface LabelScanResult {
+  serving: { label: string | null; grams: number | null }
+  nutrients: Record<string, number>
+}
 
 const route = useRoute()
 const router = useRouter()
@@ -32,6 +39,78 @@ const form = reactive({
 })
 
 const unit = computed(() => (form.is_liquid ? 'ml' : 'g'))
+
+// --- scanning a Nutrition Facts label to prefill the form ----------------
+// Same on/off as the recipe photo scanner: the label scan talks to the same
+// local vision model, so there's nothing to set up twice.
+const { public: publicConfig } = useRuntimeConfig()
+const labelScanEnabled = computed(() => Boolean(publicConfig.recipeOcrEnabled))
+const scanning = ref(false)
+const scanError = ref<string | null>(null)
+const scanNotice = ref<string | null>(null)
+const labelFileInput = ref<HTMLInputElement | null>(null)
+
+/** Nutrient keys the base form already has an input for; the rest land in `extraNutrients`. */
+const BASE_NUTRIENT_KEYS = new Set([
+  'kcal', 'protein_g', 'carbs_g', 'fat_g', 'fiber_g', 'sugars_g', 'sat_fat_g', 'sodium_mg',
+])
+/**
+ * Nutrient amounts a label mentioned that the form doesn't normally show
+ * (e.g. Calcium, Iron, Potassium, Cholesterol). They're rendered as inputs
+ * only after a scan finds them, and saved through the ordinary foods route.
+ */
+const extraNutrients = reactive<Record<string, number | null>>({})
+
+/** Plenty for the model to read label text from, and a fraction of a raw phone photo's size. */
+const MAX_LABEL_DIMENSION = 1600
+
+async function onLabelPhotoSelected(event: Event) {
+  const file = (event.target as HTMLInputElement).files?.[0]
+  if (!file) return
+  scanError.value = null
+  try {
+    const image = await resizeImageToJpeg(file, MAX_LABEL_DIMENSION)
+    scanning.value = true
+    const result = await $fetch<LabelScanResult>('/api/foods/label', {
+      method: 'POST',
+      body: { image },
+    })
+    applyLabelScan(result)
+    scanNotice.value = result.serving.grams
+      ? `Filled from the label — per ${result.serving.label ?? `${result.serving.grams} g`}.`
+      : 'Filled from the label.'
+  } catch (err) {
+    scanError.value = (err as { statusMessage?: string }).statusMessage ?? 'Could not read that label'
+  } finally {
+    scanning.value = false
+    if (labelFileInput.value) labelFileInput.value.value = ''
+  }
+}
+
+function applyLabelScan(result: LabelScanResult) {
+  if (result.serving.grams && result.serving.grams >= 0.1) {
+    form.basis = 'serving'
+    form.basis_grams = result.serving.grams
+  } else {
+    // No usable serving weight: the label's amounts are per 100 g/ml.
+    form.basis = 'hundred'
+  }
+  for (const [key, value] of Object.entries(result.nutrients)) {
+    if (BASE_NUTRIENT_KEYS.has(key)) {
+      ;(form as Record<string, unknown>)[key] = value
+    } else {
+      extraNutrients[key] = value
+    }
+  }
+}
+
+function nutrientLabel(key: string) {
+  return NUTRIENT_BY_KEY.get(key)?.label ?? key
+}
+
+function nutrientUnit(key: string) {
+  return NUTRIENT_BY_KEY.get(key)?.unit ?? ''
+}
 
 // "Per 100 g" is just a fixed basis; keep the two in sync so the payload is
 // always expressed the same way server-side.
@@ -107,6 +186,10 @@ async function save() {
       method: 'POST',
       body: {
         ...form,
+        // Nutrients picked up from a scanned label that the base form doesn't
+        // always show (Calcium, Iron, …) ride along; the route reads every
+        // NUTRIENT_KEYS column.
+        ...extraNutrients,
         // A serving basis doubles as the food's default serving size.
         serving_grams: form.basis === 'serving' ? form.basis_grams : null,
         serving_size_text: form.basis === 'serving' ? `${form.basis_grams} ${unit.value}` : null,
@@ -149,6 +232,29 @@ const macroFields = [
 
     <section class="card bg-base-100 shadow-sm">
       <div class="card-body p-4 gap-3">
+        <div v-if="labelScanEnabled">
+          <input
+            ref="labelFileInput"
+            type="file"
+            accept="image/*"
+            capture="environment"
+            class="hidden"
+            @change="onLabelPhotoSelected"
+          >
+          <button
+            type="button"
+            class="btn btn-outline gap-2 w-full"
+            :disabled="scanning"
+            @click="labelFileInput?.click()"
+          >
+            <span v-if="scanning" class="loading loading-spinner loading-sm" />
+            <AppIcon v-else name="camera" class="w-4 h-4" />
+            {{ scanning ? 'Reading the label…' : 'Scan a Nutrition Facts label' }}
+          </button>
+          <p v-if="scanError" class="text-xs text-error mt-2">{{ scanError }}</p>
+          <p v-if="scanNotice" class="text-xs text-success mt-2">{{ scanNotice }}</p>
+        </div>
+
         <label class="form-control">
           <span class="label-text text-xs mb-1">Name</span>
           <input v-model="form.name" type="text" class="input input-bordered" placeholder="Porridge oats">
@@ -246,6 +352,26 @@ const macroFields = [
             >
           </label>
         </div>
+
+        <!-- Extra nutrients a scanned label mentioned (Calcium, Iron, …). Shown
+             only once a scan finds one; editable like any other field. -->
+        <template v-if="Object.keys(extraNutrients).length">
+          <div class="divider my-0 text-xs opacity-50">Also on the label</div>
+          <div class="grid grid-cols-2 gap-2">
+            <label
+              v-for="key in Object.keys(extraNutrients)"
+              :key="key"
+              class="form-control"
+            >
+              <span class="label-text text-xs mb-1">{{ nutrientLabel(key) }} ({{ nutrientUnit(key) }})</span>
+              <input
+                v-model.number="extraNutrients[key]"
+                type="number" min="0" step="any" inputmode="decimal"
+                class="input input-bordered input-sm w-full"
+              >
+            </label>
+          </div>
+        </template>
 
         <p class="text-xs text-base-content/50">
           Values are for {{ form.basis === 'serving' ? `one ${form.basis_grams} ${unit} serving` : `100 ${unit}` }}.
