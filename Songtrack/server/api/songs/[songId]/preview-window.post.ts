@@ -62,7 +62,7 @@ export default defineEventHandler(async (event) => {
   // very start of a take), so the cut is not always at the midpoint of what plays.
   if (body.clickAtCenter) {
     const clickMs = Math.max(0, Math.round((body.center - start) * 1000))
-    filterParts.push(`sine=frequency=1200:duration=0.03:sample_rate=48000,aformat=sample_rates=48000:channel_layouts=stereo,volume=0.5,adelay=${clickMs}|${clickMs}[click]`)
+    filterParts.push(`sine=frequency=1200:duration=0.025:sample_rate=48000,aformat=sample_rates=48000:channel_layouts=stereo,volume=0.35,adelay=${clickMs}|${clickMs}[click]`)
     filterParts.push(`[${outputLabel}]aformat=sample_rates=48000:channel_layouts=stereo[mainfmt]`)
     filterParts.push('[mainfmt][click]amix=inputs=2:duration=first:normalize=0[mixed]')
     outputLabel = 'mixed'

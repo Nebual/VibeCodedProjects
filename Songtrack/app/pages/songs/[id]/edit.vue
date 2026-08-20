@@ -580,7 +580,6 @@ const hasEdits = computed(() => {
       Drag on the waveform to select a range, then remove it. Drag a region's edge to trim.
     </p>
 
-    <!--
     <div class="flex items-center gap-2">
       <span class="text-sm text-base-content/60 whitespace-nowrap">Preview loudness</span>
       <input
@@ -594,10 +593,6 @@ const hasEdits = computed(() => {
       >
       <span class="text-xs text-base-content/50 tabular-nums">{{ monitorGain.targetLevelDb.value }}dB</span>
     </div>
-    <p class="text-xs text-base-content/50 -mt-2">
-      Boosts every playback on this page to a consistent monitoring level — doesn't affect the saved audio.
-    </p>
-    -->
 
     <!-- Auto-trim -->
     <div class="card bg-base-100 shadow-sm p-4">
@@ -652,6 +647,7 @@ const hasEdits = computed(() => {
     <p v-if="selectingAmbience" class="text-xs text-warning -mt-2">
       Drag on the waveform to set the ambience sample.
     </p>
+    <!-- todo: only show this if there is an amber region -->
     <p v-else class="text-xs text-base-content/50 -mt-2">
       Drag the amber region on the waveform to adjust which part of the recording is sampled as the noise profile.
     </p>

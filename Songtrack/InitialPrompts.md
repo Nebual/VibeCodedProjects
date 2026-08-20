@@ -101,3 +101,31 @@ Canvas still looks blank during recording.
 Having some tests (e2e, vitest) in the repo would be good
 
 Edit page loads now. I can't drag on the timeline where its already green, so I can't add a red (remove) zone to cut out a middle section. Dragging the edges of the green (keep) zone works, and dragging a red zone from outside the green in and hitting apply works.
+
+## Feedback round 3
+
+The audio recording is currently way too quiet on multiple devices. Is there some sort of microphone gain we need to turn up?  
+I'm leaning away from autoGain then - but what can we do about the in-browser playback previews, before the finalize step? Is there anything in-browser we can do about that, or is the loudnorm-like ffmpeg approach fast enough that we could do it for the preview?
+
+The gain boosting/level normalize in the @app/pages/songs/[id]/edit.vue flow should probably be applied to all playbacks on the page, as listening to a non-boosted version isn't helpful to the user. Lets allow the user to adjust the target level.  
+Lets allow the user to customize where the ambience sample is, perhaps add a 'select ambience' button when Noise Reduction is enabled, that allows dragging an area.  
+When applying noise reduction, does it make sense to do the gain boost before the noise reduction step? I'm currently finding the noise reduction not very good (it either does little, or at higher strengths affects the music), so I'm just guessing there.  
+When using 'Listen to whats removed' or 'Preview original' or 'Preview with settings', there needs to be playback controls - seek and pause, which should un-disable the buttons and allow making tweaks without having to hear the whole track.  
+Lets remove the footer playback controls when in the Edit page, its confusing.
+
+When hitting 'Preview start cut', its not clear where the cut is, as it keeps playing past the cut. Should also be able to press it again to stop.
+
+When I first start recording, there's often a loud click as the microphone is first captured. Interestingly, if I pause and resume a recording, there's no click, so its to do with the microphone not being primed, not the tap of the button. Can we discard the first 400ms of microphone if we just started using the microphone?
+
+The marker on the seek bar is in the wrong place if there's not enough audio to pad the sides. If we only trim 1 second off the start, I expect the marker to be at the 1 second mark. Also can we add an audible click at the cut mark in the preview.
+
+The noise reduction doesn't seem to behave any differently whether I select an ambience sample or not, either way it doesn't work well.
+
+# To be sent:
+
+Ambience sample still doesn't seem to have an effect on the previews.
+
+The recording page preview and the edit page's top preview both are still too quiet - on one device they're tolerable (but still 30% quieter than the final -16 LUFS), on another they're better than initially but still too quiet (75% quieter than the final -16 LUFS).
+
+Timing wise, lets replace the '5s ambience lead-in' with a suggestion to capture 5s of ambience at the end of the recording. The suggestion can show above the 'Name this recording' input, in small text, when the seek is at the end.
+
