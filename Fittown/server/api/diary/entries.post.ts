@@ -1,5 +1,6 @@
 import { RECIPE_LOG_SOURCE, RECIPE_SOURCE } from '#shared/recipes'
 import { assertAdjustments } from '../../utils/adjustments'
+import { friendSharesCustomFoods } from '../../utils/friends'
 import { resolveLoggedGrams, snapshotRecipeForLog } from '../../utils/recipes'
 
 /**
@@ -38,14 +39,23 @@ export default defineEventHandler(async (event) => {
 
   return transact((db) => {
     const food = db
-      .prepare(
-        'SELECT id, source, serving_grams FROM foods WHERE id = ? AND (owner_user_id IS NULL OR owner_user_id = ?)',
-      )
-      .get(foodId, user.id) as
-      | { id: number; source: string; serving_grams: number | null }
+      .prepare('SELECT id, source, serving_grams, owner_user_id FROM foods WHERE id = ?')
+      .get(foodId) as
+      | { id: number; source: string; serving_grams: number | null; owner_user_id: number | null }
       | undefined
 
     if (!food) throw createError({ statusCode: 404, statusMessage: 'Food not found' })
+
+    // A food owned by someone else is loggable only if it is a custom food the
+    // owner shares with friends (friendship + the Custom foods toggle). A
+    // friend's *recipe* is not: it has to be copied first, then logged as yours.
+    // Anything else is kept out of reach — same 404 a stranger gets.
+    if (food.owner_user_id !== null && food.owner_user_id !== user.id) {
+      const allowed =
+        food.source === 'custom'
+        && friendSharesCustomFoods(db, user.id, food.owner_user_id)
+      if (!allowed) throw createError({ statusCode: 404, statusMessage: 'Food not found' })
+    }
 
     // A snapshot belongs to exactly one entry, which is what lets deleting the
     // entry delete it outright instead of reference-counting. Logging one a

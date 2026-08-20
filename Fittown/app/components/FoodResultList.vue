@@ -83,6 +83,10 @@ function energyLine(food: FoodRow) {
               class="badge badge-xs badge-neutral align-middle"
             >OFF</span>
             <span
+              v-if="food.owner_name"
+              class="badge badge-xs badge-ghost align-middle"
+            >by {{ food.owner_name }}</span>
+            <span
               v-if="!isRecipe(food) && !food.serving_grams"
               class="badge badge-xs badge-ghost align-middle"
             >no serving size</span>

@@ -16,6 +16,8 @@ export interface FoodRow {
   serving_grams: number | null
   is_liquid: number
   owner_user_id: number | null
+  /** On someone else's food (a friend's shared custom food): the creator's name. */
+  owner_name?: string | null
   nutriscore: string | null
   kcal: number | null
   /** On a frozen meal: the live recipe it came from, if still there. */

@@ -49,6 +49,10 @@ CREATE TABLE IF NOT EXISTS user_goals (
   share_weight    INTEGER NOT NULL DEFAULT 1,
   share_calories  INTEGER NOT NULL DEFAULT 1,
   share_exercise  INTEGER NOT NULL DEFAULT 1,
+  -- Friends may browse and copy the food rows this user made themselves
+  -- (source = 'custom'). OFF foods are shared already; this is the personal
+  -- library. Default on, like the rest — see the note above.
+  share_custom_foods INTEGER NOT NULL DEFAULT 1,
 
   -- Body metrics, used to estimate BMR / maintenance calories. All optional:
   -- the app works without them, it just can't calculate a calorie target.

@@ -117,6 +117,7 @@ describe('schema', () => {
     expect(row.calorie_goal).toBe(2400)
     for (const key of [
       'share_recipes', 'share_diary', 'share_weight', 'share_calories', 'share_exercise',
+      'share_custom_foods',
     ]) {
       expect(row[key], `migration missed ${key}`).toBe(1)
     }
@@ -598,5 +599,107 @@ describe('copying a recipe', () => {
     // serving size with no nutrition under it is a portion the diary would log.
     expect(copy.serving_grams).toBeNull()
     expect(copy.kcal).toBeNull()
+  })
+})
+
+describe('sharing custom foods', () => {
+  it('lets an accepted friend in when the toggle is on, and bars everyone else', async () => {
+    const db = await boot()
+    seedUsers(db)
+    const f = await friends()
+
+    f.establishFriendship(db, 1, 2)
+
+    // Friends who share: in.
+    expect(f.friendSharesCustomFoods(db, 1, 2)).toBe(true)
+    // Your own foods are always yours.
+    expect(f.friendSharesCustomFoods(db, 1, 1)).toBe(true)
+    // A stranger (Carol has no friendship with Alice): out, even though the
+    // toggle is on by default — friendship is the hard gate.
+    expect(f.friendSharesCustomFoods(db, 1, 3)).toBe(false)
+
+    // A friend who turned it off: out.
+    db.prepare('UPDATE user_goals SET share_custom_foods = 0 WHERE user_id = 2').run()
+    expect(f.friendSharesCustomFoods(db, 1, 2)).toBe(false)
+
+    // The other toggles are independent — recipes still flow.
+    expect(f.requireSharedSection(db, 1, 2, 'share_recipes')).toBeDefined()
+  })
+
+  it('lists only a user’s own custom foods', async () => {
+    const db = await boot()
+    seedUsers(db)
+    const { listCustomFoods } = await import('../server/utils/foods')
+
+    const theirs = seedCustomFood(db, 2, 'Mums Sourdough', 260)
+    const pickles = seedCustomFood(db, 2, 'Pickles', 20)
+    // A custom food with no energy recorded, so the list must be able to tell
+    // "not recorded" (null) apart from zero.
+    const gizmoId = Number(
+      db
+        .prepare(
+          "INSERT INTO foods (source, owner_user_id, name, brand, kcal) VALUES ('custom', 2, 'Gizmo', 'Homemade', NULL)",
+        )
+        .run().lastInsertRowid,
+    )
+    // Carol's food must not appear in Bob's list.
+    seedCustomFood(db, 3, 'Carol Chili', 180)
+
+    const rows = listCustomFoods(db, 2)
+    expect(rows.map((r) => Number(r.id)).sort()).toEqual([theirs, pickles, gizmoId].sort())
+    // The bread carries its numbers for the browse row.
+    const bread = rows.find((r) => r.id === theirs)!
+    expect(bread.name).toBe('Mums Sourdough')
+    expect(bread.kcal).toBe(260)
+    // Null stays null on the way to the UI — never coerced to a fake 0.
+    const gizmo = rows.find((r) => r.name === 'Gizmo')!
+    expect(gizmo.kcal).toBeNull()
+  })
+
+  it('copies a friend’s custom food into your own library, indexed and idempotent', async () => {
+    const db = await boot()
+    seedUsers(db)
+    const r = await recipes()
+
+    const source = seedCustomFood(db, 2, 'Mums Sourdough', 260)
+    const first = r.copyCustomFoodInto(db, source, 1)
+    // Copying it again returns the same copy rather than piling up duplicates.
+    const again = r.copyCustomFoodInto(db, source, 1)
+    expect(again).toBe(first)
+
+    const copy = db
+      .prepare('SELECT id, name, owner_user_id, source, kcal, barcode FROM foods WHERE id = ?')
+      .get(first) as {
+        id: number
+        name: string
+        owner_user_id: number
+        source: string
+        kcal: number
+        barcode: string | null
+      }
+    expect(copy.name).toBe('Mums Sourdough')
+    expect(copy.owner_user_id).toBe(1)
+    expect(copy.source).toBe('custom')
+    expect(copy.kcal).toBe(260)
+    // (source, barcode) is unique, so the barcode has to stay behind.
+    expect(copy.barcode).toBeNull()
+
+    // It is immediately searchable — a path that creates a food and forgets to
+    // index it produces one nobody can find.
+    const hits = db
+      .prepare("SELECT rowid FROM foods_fts WHERE foods_fts MATCH 'Sourdough'")
+      .all() as { rowid: number }[]
+    expect(hits.map((h) => h.rowid)).toContain(first)
+
+    // Exactly one copy in Alice's library, none elsewhere.
+    const count = (owner: number) =>
+      (db
+        .prepare(
+          "SELECT COUNT(*) AS c FROM foods WHERE owner_user_id = ? AND source = 'custom' AND name = 'Mums Sourdough'",
+        )
+        .get(owner) as { c: number }).c
+    expect(count(1)).toBe(1)
+    expect(count(2)).toBe(1) // the original is untouched
+    expect(count(3)).toBe(0)
   })
 })

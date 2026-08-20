@@ -1,6 +1,6 @@
 import { prioritizeServingSize } from '#shared/foods'
 import { RECIPE_LOG_SOURCE, RECIPE_SOURCE } from '#shared/recipes'
-import { friendIds } from '../../utils/friends'
+import { friendIds, friendSharesCustomFoods } from '../../utils/friends'
 import { ancestorIds } from '../../utils/recipes'
 import {
   buildFtsQuery,
@@ -54,6 +54,17 @@ export default defineEventHandler(async (event) => {
   const pickingIngredient = recipeId !== null
   const forbidden = recipeId === null ? [] : [recipeId, ...ancestorIds(db, recipeId)]
 
+  // Friends who have turned on sharing their custom foods. Their rows join the
+  // main results (they are directly loggable, unlike a friend's recipe, which
+  // has to be copied first). Interpolated rather than bound: node:sqlite has no
+  // array binding, and the ids are integers we derived ourselves.
+  const customFriendIds = friendIds(db, user.id).filter((id) =>
+    friendSharesCustomFoods(db, user.id, id),
+  )
+  const friendCustomFilter = customFriendIds.length
+    ? ` OR (f.source = 'custom' AND f.owner_user_id IN (${customFriendIds.join(',')}))`
+    : ''
+
   const results = db
     .prepare(
       `WITH scored AS (
@@ -61,7 +72,7 @@ export default defineEventHandler(async (event) => {
          FROM foods_fts
          JOIN foods f ON f.id = foods_fts.rowid
          WHERE foods_fts MATCH $match
-           AND (f.owner_user_id IS NULL OR f.owner_user_id = $userId)
+           AND (f.owner_user_id IS NULL OR f.owner_user_id = $userId ${friendCustomFilter})
            AND f.source != $logSource
            ${forbidden.length ? `AND f.id NOT IN (${forbidden.join(',')})` : ''}
          ORDER BY score DESC
@@ -92,13 +103,36 @@ export default defineEventHandler(async (event) => {
       logSource: RECIPE_LOG_SOURCE,
     })
 
+  const rawResults = prioritizeServingSize(results as { serving_grams: unknown }[])
+
+  // Say who made a food owned by someone else, so the list is honest about a
+  // friend's row sitting in search. Own foods and OFF rows stay unlabelled —
+  // "by you" is noise and nobody owns an OFF product. One query for every
+  // distinct owner on the page rather than one per row.
+  const otherOwners = [
+    ...new Set(
+      rawResults
+        .map((f) => Number((f as { owner_user_id: number | null }).owner_user_id))
+        .filter((id) => Number.isInteger(id) && id > 0 && id !== user.id),
+    ),
+  ]
+  if (otherOwners.length > 0) {
+    const owners = db
+      .prepare(
+        `SELECT id, name, email FROM users
+         WHERE id IN (${otherOwners.join(',')})`,
+      )
+      .all() as { id: number; name: string; email: string }[]
+    const byId = new Map(owners.map((o) => [Number(o.id), o]))
+    for (const food of rawResults) {
+      const ownerId = Number((food as { owner_user_id: number | null }).owner_user_id)
+      const owner = byId.get(ownerId)
+      if (owner) (food as { owner_name?: string | null }).owner_name = owner.name || owner.email
+    }
+  }
+
   return {
-    // A food with no serving size is a worse hit than an equally-ranked one
-    // that has one — see shared/foods.ts. In practice this only ever reorders
-    // plain OFF/custom rows relative to each other: a recipe only lacks
-    // `serving_grams` while it has no ingredients yet, which also makes it
-    // unloggable, so there's nothing to prioritize it away from.
-    results: prioritizeServingSize(results as { serving_grams: unknown }[]),
+    results: rawResults,
     // Nothing to offer when we're picking an ingredient. A friend's recipe is
     // not yours to nest — tapping one offers to copy it, and a copy is what you
     // would have to put in your salad anyway.
