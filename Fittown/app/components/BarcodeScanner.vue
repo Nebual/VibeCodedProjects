@@ -23,8 +23,14 @@ const props = withDefaults(
      * ingredient already has, so swapping its food doesn't reset it.
      */
     extra?: Record<string, string>
+    /**
+     * Capture the code instead of navigating to the food: emit `scanned(code)`
+     * and stop (used by the new-food form, which fills its barcode field and
+     * checks duplicates itself). Default on-points you straight at the food.
+     */
+    capture?: boolean
   }>(),
-  { recipe: null, ingredient: null, extra: () => ({}) },
+  { recipe: null, ingredient: null, extra: () => ({}), capture: false },
 )
 
 /** Where a scanned food goes — a meal, or the recipe we came from. */
@@ -37,7 +43,7 @@ const target = computed(() =>
     extra: props.extra,
   }),
 )
-const emit = defineEmits<{ close: [] }>()
+const emit = defineEmits<{ close: []; scanned: [code: string] }>()
 
 const video = ref<HTMLVideoElement | null>(null)
 const status = ref<'idle' | 'starting' | 'scanning' | 'denied' | 'looking-up'>('idle')
@@ -103,6 +109,13 @@ async function detectLoop() {
 async function lookup(code: string) {
   status.value = 'looking-up'
   notFound.value = null
+  // Capture mode: hand the raw code to the parent (which fills a form field and
+  // checks for duplicates itself) instead of navigating to the food.
+  if (props.capture) {
+    stop()
+    emit('scanned', code.trim())
+    return
+  }
   try {
     const { food } = await $fetch<{ food: FoodRow }>(`/api/foods/barcode/${code}`)
     stop()
@@ -176,12 +189,16 @@ onBeforeUnmount(stop)
           :disabled="manualCode.length < 6 || status === 'looking-up'"
         >
           <span v-if="status === 'looking-up'" class="loading loading-spinner loading-xs" />
-          Look up
+          {{ capture ? 'Use' : 'Look up' }}
         </button>
       </form>
 
       <div class="modal-action">
-        <NuxtLink :to="`/food/new?${target}&barcode=${manualCode || notFound || ''}`" class="btn btn-ghost btn-sm">
+        <NuxtLink
+          v-if="!capture"
+          :to="`/food/new?${target}&barcode=${manualCode || notFound || ''}`"
+          class="btn btn-ghost btn-sm"
+        >
           Create custom food
         </NuxtLink>
         <button class="btn btn-sm" @click="close">Close</button>

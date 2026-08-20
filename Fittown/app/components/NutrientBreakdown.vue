@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { NUTRIENTS, type NutrientTotals } from '#shared/nutrients'
+import { HEADLINE_MACROS, NUTRIENTS, type NutrientTotals } from '#shared/nutrients'
 import type { Goals } from '~/composables/useDiary'
 
 const props = defineProps<{
@@ -31,20 +31,36 @@ function targetFor(key: string, fallback?: number) {
 }
 
 const groups = computed(() =>
-  Object.entries(GROUP_LABELS).map(([group, label]) => ({
-    label,
-    rows: NUTRIENTS.filter((n) => n.group === group && n.key !== 'kcal').map((n) => {
-      // Absent means "Open Food Facts doesn't record this", which is not the
-      // same as zero. Rendering it as 0 would tell someone they got none of a
-      // vitamin when in truth we simply don't know — so it stays unknown.
-      const raw = props.totals[n.key]
-      const known = typeof raw === 'number' && Number.isFinite(raw)
-      const value = known ? raw : null
-      const target = targetFor(n.key, n.rda)
-      const pct = known && target ? Math.round((value! / target) * 100) : null
-      return { ...n, value, target, pct }
-    }),
-  })),
+  Object.entries(GROUP_LABELS).map(([group, label]) => {
+    // The three headline macros lead the macro group in display order — Fat,
+    // Carbs, Protein — with the rest following in catalogue order. Every other
+    // group is displayed as-is.
+    const rows = NUTRIENTS.filter((n) => n.group === group && n.key !== 'kcal')
+      .sort((a, b) => {
+        if (group !== 'macro') return 0
+        const ai = HEADLINE_MACROS.indexOf(a.key as never)
+        const bi = HEADLINE_MACROS.indexOf(b.key as never)
+        if (ai === -1 && bi === -1) return 0
+        if (ai === -1) return 1
+        if (bi === -1) return -1
+        return ai - bi
+      })
+      // Rows whose value is unknown ("not recorded") are dropped entirely rather
+      // than rendered as a dash — a vitamin we don't know about is not a vitamin
+      // they haven't got, and a wall of "not recorded" tells a long story about
+      // nothing. A group that ends up with no rows is hidden by `visibleGroups`.
+      .map((n) => {
+        const raw = props.totals[n.key]
+        const known = typeof raw === 'number' && Number.isFinite(raw)
+        const value = known ? raw : null
+        if (!known) return null
+        const target = targetFor(n.key, n.rda)
+        const pct = target ? Math.round((value / target) * 100) : null
+        return { ...n, value, target, pct }
+      })
+      .filter((row): row is NonNullable<typeof row> => row !== null)
+    return { label, rows }
+  }),
 )
 
 /** Hide groups where nothing at all is known, rather than a wall of dashes. */
@@ -74,7 +90,6 @@ function barClass(limit: boolean | undefined, pct: number | null) {
           v-for="row in group.rows"
           :key="row.key"
           class="grid grid-cols-[1fr_auto] gap-x-3 gap-y-1 items-center text-sm"
-          :class="{ 'opacity-45': row.value === null }"
         >
           <span class="truncate">
             {{ row.label }}
@@ -82,18 +97,13 @@ function barClass(limit: boolean | undefined, pct: number | null) {
           </span>
 
           <span class="tabular text-right text-base-content/70">
-            <template v-if="row.value !== null">
-              {{ row.value.toFixed(row.decimals) }}<span class="text-base-content/40"> {{ row.unit }}</span>
-            </template>
-            <span v-else class="text-base-content/40" title="Not recorded for this food">
-              not recorded
-            </span>
+            {{ row.value.toFixed(row.decimals) }}<span class="text-base-content/40"> {{ row.unit }}</span>
             <span v-if="row.pct !== null" class="ml-2 inline-block w-11 text-right">
               {{ row.pct }}%
             </span>
           </span>
 
-          <div v-if="row.value !== null" class="col-span-2 h-1 rounded-full bg-base-300 overflow-hidden">
+          <div class="col-span-2 h-1 rounded-full bg-base-300 overflow-hidden">
             <div
               class="h-full rounded-full transition-all"
               :class="barClass(row.limit, row.pct)"

@@ -144,6 +144,10 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     recipe_log_note: 'TEXT',
     // Backfilled to the row's own id for existing recipes in useDb(), once.
     recipe_family_id: 'INTEGER',
+    // Whoever flagged this food as inaccurate. Null = never reported. The
+    // page uses it to hide the food and to offer the reporter an Undo. FK is
+    // legal on ADD COLUMN as long as the default is NULL, which it is.
+    reported_by: 'INTEGER REFERENCES users(id) ON DELETE SET NULL',
   },
   // Also created by rebuildRecipeIngredients() below, which ships the whole new
   // shape at once. Listed here anyway: the rebuild is guarded on food_id's

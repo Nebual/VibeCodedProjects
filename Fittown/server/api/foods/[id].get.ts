@@ -12,7 +12,11 @@ export default defineEventHandler(async (event) => {
        WHERE id = ?`,
     )
     .get(id) as
-    | (Record<string, unknown> & { source: string; owner_user_id: number | null })
+    | (Record<string, unknown> & {
+        source: string
+        owner_user_id: number | null
+        reported_by: number | null
+      })
     | undefined
 
   if (!food) throw createError({ statusCode: 404, statusMessage: 'Food not found' })

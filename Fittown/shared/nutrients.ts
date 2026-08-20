@@ -76,8 +76,8 @@ export const NUTRIENTS: NutrientDef[] = [
 export const NUTRIENT_KEYS = NUTRIENTS.map((n) => n.key)
 export const NUTRIENT_BY_KEY = new Map(NUTRIENTS.map((n) => [n.key, n]))
 
-/** The four the diary header always shows. */
-export const HEADLINE_MACROS = ['protein_g', 'carbs_g', 'fat_g'] as const
+/** The macros the diary and the breakdown lead with, in display order (Fat, Carbs, Protein). */
+export const HEADLINE_MACROS = ['fat_g', 'carbs_g', 'protein_g'] as const
 
 export type NutrientTotals = Record<string, number>
 

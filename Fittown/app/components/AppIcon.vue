@@ -18,6 +18,7 @@ const paths: Record<string, string> = {
   search: 'M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16ZM21 21l-4.35-4.35',
   barcode: 'M3 5v14M7 5v14M11 5v10M15 5v14M19 5v14',
   trash: 'M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m3 0v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6',
+  flag: 'M4 21V4h16l-4 4 4 4H4',
   chevronLeft: 'm15 18-6-6 6-6',
   chevronRight: 'm9 18 6-6-6-6',
   chevronUp: 'm18 15-6-6-6 6',

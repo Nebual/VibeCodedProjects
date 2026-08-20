@@ -6,6 +6,7 @@ import {
   buildFtsQuery,
   foodCols,
   foodColsBare,
+  reportedFilter,
   SEARCH_SCAN_LIMIT,
   SEARCH_SCORE,
 } from '../../utils/foods'
@@ -73,6 +74,7 @@ export default defineEventHandler(async (event) => {
          JOIN foods f ON f.id = foods_fts.rowid
          WHERE foods_fts MATCH $match
            AND (f.owner_user_id IS NULL OR f.owner_user_id = $userId ${friendCustomFilter})
+           AND (${reportedFilter('f', '$userId')})
            AND f.source != $logSource
            ${forbidden.length ? `AND f.id NOT IN (${forbidden.join(',')})` : ''}
          ORDER BY score DESC
@@ -173,9 +175,10 @@ function searchFriendRecipes(
          AND f.source = ?
          AND f.serving_grams IS NOT NULL
          AND f.owner_user_id IN (${placeholders})
+         AND (${reportedFilter('f', '?')})
          AND COALESCE(g.share_recipes, 1) = 1
        ORDER BY foods_fts.rank
        LIMIT ?`,
     )
-    .all(match, RECIPE_SOURCE, ...ids, FRIEND_RESULT_LIMIT)
+    .all(match, RECIPE_SOURCE, ...ids, userId, FRIEND_RESULT_LIMIT)
 }

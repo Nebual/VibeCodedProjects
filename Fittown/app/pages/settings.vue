@@ -60,9 +60,9 @@ const macroGap = computed(() => macroCalories.value - (form.calorie_goal ?? 0))
  * add to 100% are exactly a split that uses the whole budget.
  */
 const MACROS = [
-  { key: 'protein_g', label: 'Protein', kcalPerGram: 4, defaultPercent: 20 },
-  { key: 'carbs_g', label: 'Carbs', kcalPerGram: 4, defaultPercent: 50 },
   { key: 'fat_g', label: 'Fat', kcalPerGram: 9, defaultPercent: 30 },
+  { key: 'carbs_g', label: 'Carbs', kcalPerGram: 4, defaultPercent: 50 },
+  { key: 'protein_g', label: 'Protein', kcalPerGram: 4, defaultPercent: 20 },
 ] as const
 
 type MacroKey = (typeof MACROS)[number]['key']

@@ -49,6 +49,47 @@ const derivedKcal = computed(() => {
 const saving = ref(false)
 const error = ref<string | null>(null)
 
+// --- scanning a barcode to fill the field ----------------------------------
+const showScanner = ref(false)
+/** The existing food this barcode already belongs to, if any (info, not a block). */
+const existingMatch = ref<FoodRow | null>(null)
+
+function onScanned(code: string) {
+  form.barcode = code
+  showScanner.value = false
+  checkExisting(code)
+}
+
+const checkTimer = ref<ReturnType<typeof setTimeout> | null>(null)
+
+/** "Does any food I can see already use this barcode?" — shown as an info note. */
+async function checkExisting(code: string) {
+  existingMatch.value = null
+  if (!code || code.length < 6) return
+  try {
+    const { food } = await $fetch<{ food: FoodRow }>(`/api/foods/barcode/${encodeURIComponent(code)}`)
+    existingMatch.value = food
+  } catch {
+    existingMatch.value = null
+  }
+}
+
+// Re-check as they type/paste, but not on every keystroke.
+watch(
+  () => form.barcode,
+  (code) => {
+    if (checkTimer.value) clearTimeout(checkTimer.value)
+    if (!code || code.length < 6) {
+      existingMatch.value = null
+      return
+    }
+    checkTimer.value = setTimeout(() => {
+      checkExisting(code)
+      checkTimer.value = null
+    }, 400)
+  },
+)
+
 const valid = computed(
   () => form.name.trim().length >= 2 && form.basis_grams > 0
     && (form.kcal !== null || derivedKcal.value !== null),
@@ -85,9 +126,9 @@ async function save() {
 }
 
 const macroFields = [
-  { key: 'protein_g', label: 'Protein', unit: 'g' },
-  { key: 'carbs_g', label: 'Carbs', unit: 'g' },
   { key: 'fat_g', label: 'Fat', unit: 'g' },
+  { key: 'carbs_g', label: 'Carbs', unit: 'g' },
+  { key: 'protein_g', label: 'Protein', unit: 'g' },
   { key: 'fiber_g', label: 'Fibre', unit: 'g' },
   { key: 'sugars_g', label: 'Sugars', unit: 'g' },
   { key: 'sat_fat_g', label: 'Saturated fat', unit: 'g' },
@@ -117,9 +158,32 @@ const macroFields = [
             <input v-model="form.brand" type="text" class="input input-bordered w-full">
           </label>
           <label class="form-control flex-1">
-            <span class="label-text text-xs mb-1">Barcode <span class="opacity-50">optional</span></span>
+            <span class="label-text text-xs mb-1">
+              Barcode <span class="opacity-50">optional</span>
+              <button
+                type="button"
+                class="btn btn-ghost btn-xs btn-square align-middle"
+                aria-label="Scan barcode"
+                @click="showScanner = true"
+              >
+                <AppIcon name="barcode" class="w-4 h-4" />
+              </button>
+            </span>
             <input v-model="form.barcode" type="text" inputmode="numeric" class="input input-bordered w-full">
           </label>
+        </div>
+
+        <div v-if="existingMatch" class="alert alert-info text-sm">
+          <span class="flex-1">
+            This barcode already belongs to
+            <NuxtLink
+              :to="`/food/${existingMatch.id}`"
+              target="_blank"
+              rel="noopener"
+              class="link"
+            >{{ existingMatch.brand ? `${existingMatch.brand} ${existingMatch.name}` : existingMatch.name }}</NuxtLink>.
+            You can still create your own.
+          </span>
         </div>
 
         <label class="label cursor-pointer justify-start gap-3">
@@ -194,4 +258,13 @@ const macroFields = [
       Save and choose portion
     </button>
   </div>
+
+  <BarcodeScanner
+    v-if="showScanner"
+    :meal="meal"
+    :date="date"
+    capture
+    @scanned="onScanned"
+    @close="showScanner = false"
+  />
 </template>

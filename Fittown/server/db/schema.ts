@@ -104,6 +104,13 @@ CREATE TABLE IF NOT EXISTS foods (
   -- Custom foods belong to the user who made them; OFF foods are shared (null).
   owner_user_id   INTEGER REFERENCES users(id) ON DELETE CASCADE,
 
+  -- Set when someone flagged this food as inaccurate. Null = never reported.
+  -- A reported food is hidden from search/Frequent/detail for everyone except
+  -- its owner (see shared/reported.ts). The value is the reporter's id so the
+  -- page can offer them an Undo; there is deliberately no notion of "a list of
+  -- who reported what" — one report hides it, and the household keeps it simple.
+  reported_by     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+
   -- Recipes (source = 'recipe') only. Null on every other row.
   -- How many servings the recipe makes; sets serving_grams when logged.
   recipe_servings       REAL,
@@ -515,4 +522,8 @@ CREATE INDEX IF NOT EXISTS idx_foods_recipe_family
 -- from, and deleting a recipe has to find its snapshots to null them out.
 CREATE INDEX IF NOT EXISTS idx_foods_logged_from
   ON foods(logged_from_food_id) WHERE logged_from_food_id IS NOT NULL;
+-- Reported foods are filtered out of every browse list; the owner exception
+-- is applied in SQL, so this only needs to make those filters fast.
+CREATE INDEX IF NOT EXISTS idx_foods_reported
+  ON foods(reported_by) WHERE reported_by IS NOT NULL;
 `

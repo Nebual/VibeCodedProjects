@@ -1,4 +1,4 @@
-Create a new web app called NShoppingList, using Nuxt v4 with Tailwind v4 and DaisyUI. Use pnpm and have nvm set node 24.
+Create a new web app called Fittown, using Nuxt v4 with Tailwind v4 and DaisyUI. Use pnpm and have nvm set node 24.
 The web app is a calorie/nutrition/workout tracking app, similar to Chronometer or MyFitnessPal (I'm just making this for personal use, non-commercial). Mobile view is important, though also working on Desktop is useful.
 
 It should have a Diary of food eaten today, water, and fitness.
@@ -85,5 +85,12 @@ Did you say the same barcode pointed at multiple products? Would it be helpful t
 
 Are there any indexes we should add to speed up the Add Food search?
 
+Allow users to see custom foods from others. Lets show the user who created the custom food next to the pill, like the 'no serving size'
 
+Allow marking a food (if its not USDA-FDN, and not a custom food by this user) as 'Report as Inaccurate' which hides it from display (except if its a custom food, its owner can always still see it). Lets move the Report as Inaccurate button to be at the bottom of the nutrition section, and make it btn-sm. Hide the helper text.
 
+When creating custom food, allow scanning barcode to fill in that field. If the barcode already exists in the db, state that (as info) with links (open in new tab) to that food entry. The BarcodeScanner modal: replace the 'Look up' button text with 'Use' and hide the 'Create custom food' button when the modal is opened from the custom-food create page. When a food is marked inaccurate, it should still be able to be navigated to directly by url.
+
+When switching portion type (eg. To grams) auto focus and select the amount so you don't have to delete 3 times to clear it.
+
+When viewing a food or recipe, lets hide Vitamins, Minerals, and Other when they're 'not recorded'. Lets reorder macros to display as 'Fat', then 'Carbs', then Protein. Both in NutrientBreakdown and when adding custom foods.

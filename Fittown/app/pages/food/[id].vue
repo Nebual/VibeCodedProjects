@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { scaleNutrients } from '#shared/nutrients'
+import { canReportFood, reportedFoodHidden } from '#shared/reported'
 import {
   WHOLE_RECIPE_LABEL,
   applyAdjustments,
@@ -52,6 +53,57 @@ const { data, error } = await useFetch<{ food: FoodRow; servings: FoodServing[] 
 
 const food = computed(() => data.value?.food)
 useHead({ title: () => `${food.value?.name ?? 'Food'} · Fittown` })
+
+// --- report as inaccurate --------------------------------------------------
+// A reported food leaves search for the household; the owner of a custom food
+// still sees their own. The button must not appear where the action is refused
+// (a USDA Foundation Food, or your own custom food). A reported food is still
+// reachable by its direct URL, so the page has to handle a food somebody else
+// already flagged (notice, no action) as well as one you flagged (undo).
+const { user: sessionUser } = useUserSession()
+const userId = computed(() => sessionUser.value?.id ?? 0)
+const reportable = computed(
+  () => !!food.value && canReportFood(food.value as never, userId.value),
+)
+/** A custom food's owner viewing their own flagged food: show the notice, not a report button. */
+const ownerReportedNotice = computed(
+  () =>
+    !!food.value
+    && !reportable.value
+    && food.value.source === 'custom'
+    && food.value.owner_user_id === userId.value
+    && reportedFoodHidden(food.value as never, userId.value),
+)
+const reportBusy = ref(false)
+const reportError = ref<string | null>(null)
+/** Someone has flagged this food; the page offers Undo to anyone who visits. */
+const reported = ref(Boolean(data.value?.food?.reported_by))
+
+async function report() {
+  reportBusy.value = true
+  reportError.value = null
+  try {
+    await $fetch(`/api/foods/${foodId.value}/report`, { method: 'POST' })
+    reported.value = true
+  } catch (err) {
+    reportError.value = (err as { statusMessage?: string }).statusMessage ?? 'Could not report this food'
+  } finally {
+    reportBusy.value = false
+  }
+}
+
+async function unreport() {
+  reportBusy.value = true
+  reportError.value = null
+  try {
+    await $fetch(`/api/foods/${foodId.value}/report`, { method: 'DELETE' })
+    reported.value = false
+  } catch (err) {
+    reportError.value = (err as { statusMessage?: string }).statusMessage ?? 'Could not undo that report'
+  } finally {
+    reportBusy.value = false
+  }
+}
 
 // The unit preference only decides which option is selected first — every
 // option stays available, because a recipe mixes units freely.
@@ -448,6 +500,38 @@ async function saveAsVariant() {
           </span>
         </div>
         <NutrientBreakdown :totals="preview" />
+
+        <!-- Report as inaccurate. A subdued action on the place you're already
+             reading the numbers; right-aligned so it never crowds the breakdown. -->
+        <div
+          v-if="reportable || ownerReportedNotice"
+          class="flex items-center justify-end gap-2 pt-1"
+        >
+          <span
+            v-if="ownerReportedNotice"
+            class="text-xs text-base-content/60"
+          >Reported — hidden from everyone else</span>
+          <template v-else-if="reportable">
+            <button
+              v-if="!reported"
+              class="btn btn-outline btn-error btn-sm gap-1.5"
+              :disabled="reportBusy"
+              @click="report"
+            >
+              <AppIcon name="flag" class="w-3.5 h-3.5" />
+              Report as inaccurate
+            </button>
+            <div v-else class="flex items-center gap-2">
+              <span class="text-xs text-base-content/60">Hidden from search</span>
+              <button
+                class="btn btn-ghost btn-sm"
+                :disabled="reportBusy"
+                @click="unreport"
+              >Undo report</button>
+            </div>
+          </template>
+        </div>
+        <p v-if="reportError" class="text-xs text-error text-right">{{ reportError }}</p>
       </div>
     </section>
   </div>

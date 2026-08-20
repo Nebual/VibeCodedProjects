@@ -18,6 +18,8 @@ export interface FoodRow {
   owner_user_id: number | null
   /** On someone else's food (a friend's shared custom food): the creator's name. */
   owner_name?: string | null
+  /** Set when someone flagged this food as inaccurate; null otherwise. */
+  reported_by?: number | null
   nutriscore: string | null
   kcal: number | null
   /** On a frozen meal: the live recipe it came from, if still there. */

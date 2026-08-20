@@ -6,6 +6,7 @@ const FOOD_FIELDS = [
   'id', 'source', 'barcode', 'name', 'brand', 'quantity', 'categories',
   'image_url', 'serving_size_text', 'serving_grams', 'is_liquid',
   'owner_user_id', 'nutriscore', 'nova_group', 'popularity',
+  'reported_by',
   // Recipe fields travel with the food so that search results, the diary and
   // the portion picker can all apply the "no yield, no gram portions" rule
   // without a second query. Null for everything that isn't a recipe.
@@ -92,6 +93,17 @@ export const SEARCH_SCORE = `
  */
 export const SEARCH_SCAN_LIMIT = 600
 
+/**
+ * `WHERE` fragment that keeps a reported food out of the caller's view, unless
+ * the caller is the custom food's owner (the one exemption in shared/reported.ts).
+ *
+ * `ownerExpr` is the SQL expression naming the current viewer, e.g. `$userId`,
+ * `?` or `d.user_id`. Must be the same value the rest of the query binds it to.
+ */
+export function reportedFilter(alias: string, ownerExpr: string): string {
+  return `${alias}.reported_by IS NULL OR (${alias}.source = 'custom' AND ${alias}.owner_user_id = ${ownerExpr})`
+}
+
 /** Unqualified column list, for selecting back out of a CTE. */
 export function foodColsBare(): string {
   return FOOD_FIELDS.join(', ')
@@ -173,6 +185,7 @@ export function listFrequentFoods(
        -- pointer is ON DELETE SET NULL). There is nothing to offer then, so the
        -- row drops out rather than resurfacing a meal that can't be logged.
        WHERE d.user_id = ? AND f.source != ? ${mealFilter} ${excludeFilter}
+         AND (${reportedFilter('f', 'd.user_id')})
        GROUP BY f.id
        ORDER BY times_logged DESC, last_logged DESC
        LIMIT ${Number(limit) || 40}`,

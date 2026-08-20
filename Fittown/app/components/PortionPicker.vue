@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { nextTick, ref } from 'vue'
 import { roundGrams } from '#shared/portions'
 import type { PortionPickerState } from '~/composables/usePortionOptions'
 
@@ -10,7 +11,22 @@ import type { PortionPickerState } from '~/composables/usePortionOptions'
  * page, because the page renders a nutrition preview from the same grams and
  * has to have them before it renders. See the note in that composable.
  */
-defineProps<{ picker: PortionPickerState }>()
+const props = defineProps<{ picker: PortionPickerState }>()
+
+/**
+ * Switching portion type (e.g. to grams) drops in a default amount. Grab the
+ * amount field and select it so the next keystroke replaces the whole number
+ * instead of the user deleting it char by char.
+ */
+const amountField = ref<HTMLInputElement | null>(null)
+
+async function onPortionChange() {
+  props.picker.onPortionChange()
+  // Let the reset default land in the DOM before selecting it.
+  await nextTick()
+  amountField.value?.focus()
+  amountField.value?.select()
+}
 </script>
 
 <template>
@@ -19,6 +35,7 @@ defineProps<{ picker: PortionPickerState }>()
       <label class="form-control flex-1">
         <span class="label-text text-xs mb-1">Amount</span>
         <input
+          ref="amountField"
           v-model.number="picker.amount"
           type="number"
           min="0"
@@ -33,7 +50,7 @@ defineProps<{ picker: PortionPickerState }>()
         <select
           v-model="picker.selectedKey"
           class="select select-bordered w-full"
-          @change="picker.onPortionChange()"
+          @change="onPortionChange"
         >
           <option v-for="option in picker.options" :key="option.key" :value="option.key">
             {{ picker.optionLabel(option) }}
