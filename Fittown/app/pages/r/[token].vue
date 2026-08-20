@@ -16,7 +16,8 @@ definePageMeta({ layout: 'public' })
 const route = useRoute()
 const router = useRouter()
 const { loggedIn } = useUserSession()
-const today = useToday()
+// Logging a shared recipe after midnight should land on yesterday's page.
+const diaryDay = useDiaryDay()
 
 const token = computed(() => String(route.params.token))
 
@@ -55,7 +56,7 @@ async function logIt() {
   const id = await copyRecipe()
   if (!id) return
   const params = new URLSearchParams({ meal: 'snack' })
-  if (today.value) params.set('d', today.value)
+  if (diaryDay.value) params.set('d', diaryDay.value)
   await router.push(`/food/${id}?${params}`)
 }
 </script>

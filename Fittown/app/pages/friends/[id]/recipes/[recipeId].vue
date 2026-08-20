@@ -14,14 +14,15 @@ import type { RecipeDetail } from '~/composables/useRecipes'
 
 const route = useRoute()
 const router = useRouter()
-const today = useToday()
+// Logging a friend's recipe after midnight should land on yesterday's page.
+const diaryDay = useDiaryDay()
 
 const friendId = computed(() => Number(route.params.id))
 const recipeId = computed(() => Number(route.params.recipeId))
 
 /** Carried through from search so "Log food" lands in the meal you came from. */
 const meal = computed(() => (route.query.meal as string) || 'snack')
-const date = computed(() => (route.query.d as string) || today.value)
+const date = computed(() => (route.query.d as string) || diaryDay.value)
 
 const { data, error } = await useFetch<RecipeDetail & { friend: FriendPerson }>(
   () => `/api/friends/${friendId.value}/recipes/${recipeId.value}`,

@@ -7,9 +7,11 @@ import { friendDisplayName } from '#shared/friends'
 
 const route = useRoute()
 const meal = computed(() => (route.query.meal as MealName) || 'snack')
-const today = useToday()
+// Logging food after midnight belongs on yesterday's page — same late-night
+// rule as the diary itself.
+const diaryDay = useDiaryDay()
 
-const date = computed(() => (route.query.d as string) || today.value)
+const date = computed(() => (route.query.d as string) || diaryDay.value)
 
 /**
  * Set when this screen is picking an *ingredient* for a recipe rather than

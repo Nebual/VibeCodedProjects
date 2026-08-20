@@ -6,8 +6,10 @@ useHead({ title: 'New food · Fittown' })
 const route = useRoute()
 const router = useRouter()
 const meal = computed(() => (route.query.meal as MealName) || 'snack')
-const today = useToday()
-const date = computed(() => (route.query.d as string) || today.value)
+// Logging food after midnight belongs on yesterday's page — same late-night
+// rule as the diary itself.
+const diaryDay = useDiaryDay()
+const date = computed(() => (route.query.d as string) || diaryDay.value)
 /** Set when this food is being invented to go into a recipe. */
 const recipeId = computed(() => (route.query.recipe ? Number(route.query.recipe) : null))
 

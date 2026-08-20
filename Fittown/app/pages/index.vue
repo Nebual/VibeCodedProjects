@@ -7,11 +7,16 @@ const route = useRoute()
 const router = useRouter()
 
 const today = useToday()
+// The day the diary *defaults* to — yesterday between midnight and 3am, so a
+// 2am bowl of cereal lands on the day it belongs to. `today` stays the real
+// calendar day for the goal suggestion and the DateNav "Today" jump.
+const diaryDay = useDiaryDay()
 
 // The date lives in the URL so a day is linkable and the back button works.
-// Falls back to `today`, which is null until the browser's timezone is known.
+// Falls back to the effective diary day, which is null until the browser's
+// timezone is known.
 const date = computed({
-  get: () => (route.query.d as string) || today.value,
+  get: () => (route.query.d as string) || diaryDay.value,
   set: (value: string | null) => {
     if (value) router.replace({ query: { ...route.query, d: value } })
   },

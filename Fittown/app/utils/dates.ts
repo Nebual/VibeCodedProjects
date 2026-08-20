@@ -42,9 +42,10 @@ export function todayIn(timeZone: string, now: Date = new Date()): string {
 
 /** "Today", "Yesterday", or e.g. "Sat 14 Jun", relative to a known today. */
 export function humanDate(iso: string, today: string): string {
-  if (iso === today) return 'Today'
-  if (iso === addDays(today, -1)) return 'Yesterday'
-  if (iso === addDays(today, 1)) return 'Tomorrow'
+  const weekday = fromLocalDate(iso).toLocaleDateString(undefined, { weekday: 'short' })
+  if (iso === today) return `Today (${weekday})`
+  if (iso === addDays(today, -1)) return `Yesterday (${weekday})`
+  if (iso === addDays(today, 1)) return `Tomorrow (${weekday})`
 
   const d = fromLocalDate(iso)
   const sameYear = d.getFullYear() === new Date().getFullYear()
@@ -54,4 +55,27 @@ export function humanDate(iso: string, today: string): string {
     month: 'short',
     ...(sameYear ? {} : { year: 'numeric' }),
   })
+}
+
+/** The hour (0–23) right now in an explicit IANA timezone. */
+export function hourIn(timeZone: string, now: Date = new Date()): number {
+  try {
+    return Number(
+      new Intl.DateTimeFormat('en-US', { timeZone, hour: 'numeric', hourCycle: 'h23' }).format(now),
+    )
+  } catch {
+    return now.getHours()
+  }
+}
+
+/**
+ * The day the diary *means* by "today".
+ *
+ * Between midnight and 3am someone finishing their evening isn't starting a new
+ * day yet — they're logging food that belongs on yesterday's page. So during
+ * that window the effective diary day is yesterday; otherwise it is today.
+ */
+export function diaryDayIn(timeZone: string, now: Date = new Date()): string {
+  const today = todayIn(timeZone, now)
+  return hourIn(timeZone, now) < 3 ? addDays(today, -1) : today
 }

@@ -1,4 +1,4 @@
-import { todayIn } from '~/utils/dates'
+import { diaryDayIn, todayIn } from '~/utils/dates'
 
 const TZ_COOKIE = 'fittown_tz'
 
@@ -31,4 +31,18 @@ export function useClientTimezone() {
 export function useToday(): ComputedRef<string | null> {
   const tz = useClientTimezone()
   return computed(() => (tz.value ? todayIn(tz.value) : null))
+}
+
+/**
+ * The day the diary should land on: the effective diary day, which is yesterday
+ * between midnight and 3am in the user's timezone (see `diaryDayIn`).
+ *
+ * This is what "today" means for a fresh diary view or when starting to log a
+ * food — the *real* calendar day is still available via `useToday()` for things
+ * that genuinely need it, like the goal suggestion. Same null-before-the-zone-is-
+ * known contract as `useToday()`.
+ */
+export function useDiaryDay(): ComputedRef<string | null> {
+  const tz = useClientTimezone()
+  return computed(() => (tz.value ? diaryDayIn(tz.value) : null))
 }

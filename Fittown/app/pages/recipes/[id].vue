@@ -13,7 +13,9 @@ import type { RecipeDetail, RecipeIngredient } from '~/composables/useRecipes'
 
 const route = useRoute()
 const router = useRouter()
-const today = useToday()
+// "Log a serving" should land on the diary's effective day, so a late-night
+// log goes on yesterday's page rather than a brand-new today.
+const diaryDay = useDiaryDay()
 
 const id = computed(() => Number(route.params.id))
 
@@ -495,7 +497,7 @@ async function remove() {
 }
 
 const logLink = computed(
-  () => `/food/${id.value}?meal=dinner${today.value ? `&d=${today.value}` : ''}`,
+  () => `/food/${id.value}?meal=dinner${diaryDay.value ? `&d=${diaryDay.value}` : ''}`,
 )
 </script>
 

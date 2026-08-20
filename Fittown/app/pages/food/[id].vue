@@ -20,8 +20,10 @@ const route = useRoute()
 const router = useRouter()
 
 const foodId = computed(() => Number(route.params.id))
-const today = useToday()
-const date = computed(() => (route.query.d as string) || today.value)
+// Logging food after midnight belongs on yesterday's page — same late-night
+// rule as the diary itself.
+const diaryDay = useDiaryDay()
+const date = computed(() => (route.query.d as string) || diaryDay.value)
 /** Present when editing an existing diary row rather than adding a new one. */
 const entryId = computed(() => (route.query.entry ? Number(route.query.entry) : null))
 
