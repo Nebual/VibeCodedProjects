@@ -2,7 +2,12 @@
 import { friendDisplayName, friendInitial } from '#shared/friends'
 import { sharesNothing } from '#shared/sharing'
 import { MEAL_LABELS, type MealName } from '~/composables/useDiary'
-import type { FriendProfile, FriendRecipeList } from '~/composables/useFriends'
+import {
+  type FriendCustomFoodList,
+  type FriendProfile,
+  type FriendRecipeList,
+  apiError,
+} from '~/composables/useFriends'
 import type { NutrientTotals } from '#shared/nutrients'
 import { roundGrams } from '#shared/portions'
 
@@ -34,12 +39,13 @@ const showsTrends = computed(
       || permissions.value.share_exercise),
 )
 
-type Tab = 'trends' | 'recipes' | 'diary'
+type Tab = 'trends' | 'recipes' | 'foods' | 'diary'
 
 const tabs = computed(() => {
   const out: { key: Tab; label: string }[] = []
   if (showsTrends.value) out.push({ key: 'trends', label: 'Trends' })
   if (permissions.value?.share_recipes) out.push({ key: 'recipes', label: 'Recipes' })
+  if (permissions.value?.share_custom_foods) out.push({ key: 'foods', label: 'Foods' })
   if (permissions.value?.share_diary) out.push({ key: 'diary', label: 'Diary' })
   return out
 })
@@ -61,6 +67,34 @@ const { data: recipeData, execute: loadRecipes } = await useFetch<FriendRecipeLi
     immediate: false,
   },
 )
+
+// --- custom foods -----------------------------------------------------------
+
+const { data: foodsData, execute: loadFoods } = await useFetch<FriendCustomFoodList>(
+  () => `/api/friends/${id.value}/custom-foods`,
+  {
+    default: () => ({ foods: [] }) as unknown as FriendCustomFoodList,
+    immediate: false,
+  },
+)
+
+const copyingFoodId = ref<number | null>(null)
+const copyError = ref<string | null>(null)
+
+async function copyFood(foodId: number) {
+  copyingFoodId.value = foodId
+  copyError.value = null
+  try {
+    await $fetch<{ id: number }>('/api/foods/copy', {
+      method: 'POST',
+      body: { friend_id: id.value, food_id: foodId },
+    })
+  } catch (err) {
+    copyError.value = apiError(err, 'Could not copy that food')
+  } finally {
+    copyingFoodId.value = null
+  }
+}
 
 // --- diary ------------------------------------------------------------------
 
@@ -111,6 +145,7 @@ const { data: dayData, execute: loadDay } = await useFetch<FriendDay>(
  * are only worth fetching for the tab someone actually taps.
  */
 const loadedRecipes = ref(false)
+const loadedFoods = ref(false)
 
 watch(
   [tab, date],
@@ -118,6 +153,10 @@ watch(
     if (current === 'recipes' && !loadedRecipes.value) {
       loadedRecipes.value = true
       loadRecipes()
+    }
+    if (current === 'foods' && !loadedFoods.value) {
+      loadedFoods.value = true
+      loadFoods()
     }
     if (current === 'diary' && date.value) loadDay()
   },
@@ -212,6 +251,41 @@ function portionText(entry: FriendDiaryEntry) {
         </ul>
         <p v-else class="p-6 text-center text-sm text-base-content/50">
           {{ name }} hasn’t written any recipes yet.
+        </p>
+      </div>
+
+      <!-- Custom foods -------------------------------------------------------->
+      <div v-else-if="tab === 'foods'" class="card bg-base-100 shadow-sm overflow-hidden">
+        <p v-if="copyError" class="px-4 pt-3 text-xs text-error">{{ copyError }}</p>
+        <ul v-if="foodsData?.foods.length" class="divide-y divide-base-200">
+          <li
+            v-for="food in foodsData.foods"
+            :key="food.id"
+            class="flex items-center gap-3 px-3 py-2.5"
+          >
+            <div class="flex-1 min-w-0">
+              <div class="font-medium text-sm truncate">
+                <template v-if="food.brand">{{ food.brand }} · {{ food.name }}</template>
+                <template v-else>{{ food.name }}</template>
+              </div>
+              <div class="text-xs text-base-content/60 truncate tabular">
+                <template v-if="food.kcal !== null">{{ Math.round(food.kcal) }} kcal / 100 {{ food.is_liquid ? 'ml' : 'g' }}</template>
+                <template v-else>Nutrition not recorded</template>
+              </div>
+            </div>
+            <button
+              class="btn btn-outline btn-sm gap-1.5 shrink-0"
+              :disabled="copyingFoodId === food.id"
+              @click="copyFood(food.id)"
+            >
+              <span v-if="copyingFoodId === food.id" class="loading loading-spinner loading-xs" />
+              <AppIcon v-else name="plus" class="w-4 h-4" />
+              <span class="hidden sm:inline">Add to mine</span>
+            </button>
+          </li>
+        </ul>
+        <p v-else class="p-6 text-center text-sm text-base-content/50">
+          {{ name }} hasn’t made any custom foods yet.
         </p>
       </div>
 

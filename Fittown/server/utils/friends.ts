@@ -156,6 +156,26 @@ export function friendIds(db: DatabaseSync, userId: number): number[] {
   ).map((row) => Number(row.id))
 }
 
+/**
+ * May `viewer` read one of `owner`'s own (custom) foods?
+ *
+ * The one predicate behind "friends can see each other's custom foods", used by
+ * search (to include them), the food detail page (to draw one) and the diary
+ * (to log one). Friendship plus the `share_custom_foods` toggle — the same
+ * shape as every other friend-scoped read. Callers still check
+ * `source = 'custom'` and `owner != viewer` themselves; this only answers the
+ * friendship+consent half of the question.
+ */
+export function friendSharesCustomFoods(
+  db: DatabaseSync,
+  viewerId: number,
+  ownerId: number,
+): boolean {
+  if (viewerId === ownerId) return true
+  if (!areFriends(db, viewerId, ownerId)) return false
+  return friendPermissions(db, ownerId)['share_custom_foods']
+}
+
 export interface FriendListEntry extends FriendUser {
   /** Row id of the friendship, so the UI can act on it without re-deriving. */
   friendship_id: number

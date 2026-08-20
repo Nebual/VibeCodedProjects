@@ -119,6 +119,7 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     share_weight: 'INTEGER NOT NULL DEFAULT 1',
     share_calories: 'INTEGER NOT NULL DEFAULT 1',
     share_exercise: 'INTEGER NOT NULL DEFAULT 1',
+    share_custom_foods: 'INTEGER NOT NULL DEFAULT 1',
   },
   exercises: {
     met_light: 'REAL',

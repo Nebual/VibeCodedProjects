@@ -98,6 +98,30 @@ export function foodColsBare(): string {
 }
 
 /**
+ * A user's own (source = 'custom') foods, alphabetical — what a friend's Custom
+ * foods tab shows, and what the owner's own food library is built from.
+ *
+ * `kcal` and `serving_grams` are null on a food that has no nutrition recorded
+ * yet; the UI must render "not recorded" rather than treating a null as 0.
+ */
+export function listCustomFoods(
+  db: DatabaseSync,
+  userId: number,
+): (Record<string, unknown> & { serving_grams: number | null; kcal: number | null })[] {
+  return db
+    .prepare(
+      `SELECT ${foodCols()}
+       FROM foods f
+       WHERE f.owner_user_id = ? AND f.source = 'custom'
+       ORDER BY f.name COLLATE NOCASE`,
+    )
+    .all(userId) as (Record<string, unknown> & {
+    serving_grams: number | null
+    kcal: number | null
+  })[]
+}
+
+/**
  * Foods this user logs most, newest-first among equals.
  *
  * Lives here rather than in the route because of the join below, which is the

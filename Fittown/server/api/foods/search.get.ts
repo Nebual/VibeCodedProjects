@@ -1,6 +1,6 @@
 import { prioritizeServingSize } from '#shared/foods'
 import { RECIPE_LOG_SOURCE, RECIPE_SOURCE } from '#shared/recipes'
-import { friendIds } from '../../utils/friends'
+import { friendIds, friendSharesCustomFoods } from '../../utils/friends'
 import { ancestorIds } from '../../utils/recipes'
 import {
   buildFtsQuery,
@@ -54,6 +54,17 @@ export default defineEventHandler(async (event) => {
   const pickingIngredient = recipeId !== null
   const forbidden = recipeId === null ? [] : [recipeId, ...ancestorIds(db, recipeId)]
 
+  // Friends who have turned on sharing their custom foods. Their rows join the
+  // main results (they are directly loggable, unlike a friend's recipe, which
+  // has to be copied first). Interpolated rather than bound: node:sqlite has no
+  // array binding, and the ids are integers we derived ourselves.
+  const customFriendIds = friendIds(db, user.id).filter((id) =>
+    friendSharesCustomFoods(db, user.id, id),
+  )
+  const friendCustomFilter = customFriendIds.length
+    ? ` OR (f.source = 'custom' AND f.owner_user_id IN (${customFriendIds.join(',')}))`
+    : ''
+
   const results = db
     .prepare(
       `WITH scored AS (
@@ -61,7 +72,7 @@ export default defineEventHandler(async (event) => {
          FROM foods_fts
          JOIN foods f ON f.id = foods_fts.rowid
          WHERE foods_fts MATCH $match
-           AND (f.owner_user_id IS NULL OR f.owner_user_id = $userId)
+           AND (f.owner_user_id IS NULL OR f.owner_user_id = $userId ${friendCustomFilter})
            AND f.source != $logSource
            ${forbidden.length ? `AND f.id NOT IN (${forbidden.join(',')})` : ''}
          ORDER BY score DESC

@@ -150,12 +150,20 @@ describe('sharing switches', () => {
   })
 
   it('counts what is on', () => {
-    expect(sharedCount(sharePermissions({}))).toBe(5)
+    expect(sharedCount(sharePermissions({}))).toBe(6)
     expect(sharesNothing(sharePermissions({}))).toBe(false)
 
     const off = Object.fromEntries(SHARE_KEYS.map((key) => [key, 0]))
     expect(sharedCount(sharePermissions(off))).toBe(0)
     expect(sharesNothing(sharePermissions(off))).toBe(true)
+  })
+
+  it('has a Custom foods switch that defaults on', () => {
+    expect(sharePermissions({}).share_custom_foods).toBe(true)
+    expect(sharePermissions({ share_custom_foods: 0 }).share_custom_foods).toBe(false)
+    // Listed *between* the food-ish switches so Settings reads naturally.
+    const toggle = SHARE_TOGGLES.find((t) => t.key === 'share_custom_foods')
+    expect(toggle?.label).toBe('Custom foods')
   })
 
   it('has a label and an explanation for every switch it stores', () => {

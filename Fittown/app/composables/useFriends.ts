@@ -45,6 +45,28 @@ export interface FriendRecipeList {
   recipes: RecipeSummary[]
 }
 
+/**
+ * A friend's custom foods — plain food rows (with owner_user_id = that friend),
+ * listed for browsing and copying. The kilo/macros are null when they haven't
+ * been recorded on a food; absent means unknown, not zero.
+ */
+export interface FriendCustomFood {
+  id: number
+  name: string
+  brand: string | null
+  is_liquid: number
+  serving_grams: number | null
+  kcal: number | null
+  protein_g: number | null
+  carbs_g: number | null
+  fat_g: number | null
+}
+
+export interface FriendCustomFoodList {
+  friend: FriendPerson
+  foods: FriendCustomFood[]
+}
+
 /** A friend's recipe as it appears in food search — theirs, with a name on it. */
 export interface FriendRecipeResult {
   id: number
