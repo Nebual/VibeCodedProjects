@@ -115,6 +115,7 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     // Per-category sharing with friends. Default 1 so an existing household
     // that adds friends after upgrading behaves the same as a new one.
     share_recipes: 'INTEGER NOT NULL DEFAULT 1',
+    share_custom_foods: 'INTEGER NOT NULL DEFAULT 1',
     share_diary: 'INTEGER NOT NULL DEFAULT 1',
     share_weight: 'INTEGER NOT NULL DEFAULT 1',
     share_calories: 'INTEGER NOT NULL DEFAULT 1',

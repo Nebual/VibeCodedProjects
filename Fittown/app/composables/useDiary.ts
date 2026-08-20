@@ -31,6 +31,10 @@ export interface FoodRow {
    * which is what takes gram portions off the picker — see shared/recipes.ts.
    */
   recipe_final_weight_g: number | null
+  /** For foods from friends: the owner's name (for display) */
+  owner_name?: string | null
+  /** For foods from friends: the owner's email (for display) */
+  owner_email?: string | null
   [nutrient: string]: unknown
 }
 
@@ -65,6 +69,7 @@ export interface Goals {
   goal_rate_kg_per_week: number | null
   // What accepted friends may see. 0/1, defaulting to on — see shared/sharing.ts.
   share_recipes: number
+  share_custom_foods: number
   share_diary: number
   share_weight: number
   share_calories: number

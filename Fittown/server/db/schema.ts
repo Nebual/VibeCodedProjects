@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS user_goals (
   -- nothing at all reads as a broken page rather than as a private one.
   -- Enforced in server/api/friends/**, not just hidden in the UI.
   share_recipes   INTEGER NOT NULL DEFAULT 1,
+  share_custom_foods INTEGER NOT NULL DEFAULT 1,
   share_diary     INTEGER NOT NULL DEFAULT 1,
   share_weight    INTEGER NOT NULL DEFAULT 1,
   share_calories  INTEGER NOT NULL DEFAULT 1,

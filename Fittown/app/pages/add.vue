@@ -2,7 +2,7 @@
 import type { FoodRow } from '~/composables/useDiary'
 import { MEAL_LABELS, type MealName } from '~/composables/useDiary'
 import type { RecipeSummary } from '~/composables/useRecipes'
-import type { FriendRecipeResult } from '~/composables/useFriends'
+import type { FriendRecipeResult, FriendCustomFoodResult } from '~/composables/useFriends'
 import { friendDisplayName } from '#shared/friends'
 
 const route = useRoute()
@@ -71,6 +71,7 @@ onBeforeUnmount(() => clearTimeout(timer))
 const { data: searchData, pending: searching } = await useFetch<{
   results: FoodRow[]
   friend_results: FriendRecipeResult[]
+  friend_custom_foods: FriendCustomFoodResult[]
 }>('/api/foods/search', {
   // `for_recipe` says "I'm picking an ingredient for this one", which lets the
   // server leave out the recipe itself and anything that already contains it —
@@ -82,7 +83,7 @@ const { data: searchData, pending: searching } = await useFetch<{
   // already in the box is the exception, and the watcher won't fire for a value
   // that was set before it existed.
   immediate: !!debounced.value,
-  default: () => ({ results: [], friend_results: [] }),
+  default: () => ({ results: [], friend_results: [], friend_custom_foods: [] }),
 })
 
 const { data: mealRecentData } = await useFetch<{ results: FoodRow[] }>('/api/foods/recent', {
@@ -129,17 +130,6 @@ const recipes = computed(() =>
   (recipeData.value?.recipes ?? []).filter((f) => matches(debounced.value, f)),
 )
 
-/** What a query already surfaced above — raw search results never repeat it. */
-const shownIds = computed(() => {
-  const ids = new Set(frequent.value.map((f) => f.id))
-  for (const r of recipes.value) ids.add(r.id)
-  return ids
-})
-
-const searchResults = computed(() =>
-  (searchData.value?.results ?? []).filter((f) => !shownIds.value.has(f.id)),
-)
-
 /**
  * Friends' recipes, under everything of your own.
  *
@@ -149,12 +139,33 @@ const searchResults = computed(() =>
  */
 const friendResults = computed(() => searchData.value?.friend_results ?? [])
 
+/**
+ * Friends' custom foods, under recipes.
+ *
+ * These are directly loggable, but they're shown separately from your own
+ * custom foods so you can tell where they came from.
+ */
+const friendCustomFoods = computed(() => searchData.value?.friend_custom_foods ?? [])
+
+/** What a query already surfaced above — raw search results never repeat it. */
+const shownIds = computed(() => {
+  const ids = new Set(frequent.value.map((f) => f.id))
+  for (const r of recipes.value) ids.add(r.id)
+  for (const c of friendCustomFoods.value) ids.add(c.id)
+  return ids
+})
+
+const searchResults = computed(() =>
+  (searchData.value?.results ?? []).filter((f) => !shownIds.value.has(f.id)),
+)
+
 const nothingFound = computed(
   () =>
     !frequent.value.length
     && !recipes.value.length
     && !searchResults.value.length
     && !friendResults.value.length
+    && !friendCustomFoods.value.length
     && !searching.value,
 )
 
@@ -163,6 +174,13 @@ function friendRecipeLink(recipe: FriendRecipeResult) {
   const params = new URLSearchParams({ meal: meal.value })
   if (date.value) params.set('d', date.value)
   return `/friends/${recipe.owner_id}/recipes/${recipe.id}?${params}`
+}
+
+/** Opens the friend's custom food detail page, carrying the meal so "Log food" lands right. */
+function friendCustomFoodLink(food: FoodRow & { owner_id?: number }) {
+  const params = new URLSearchParams({ meal: meal.value })
+  if (date.value) params.set('d', date.value)
+  return `/food/${food.id}?${foodLinkQuery({ meal: meal.value, d: date.value })}`
 }
 
 const newFoodLink = computed(
@@ -284,7 +302,7 @@ function handleBack() {
           class="px-3 pt-2.5 pb-1 text-xs font-semibold text-base-content/50 uppercase tracking-wide"
           :class="{ 'border-t border-base-200 mt-1': frequent.length || recipes.length || searchResults.length }"
         >
-          From friends
+          Recipes from friends
         </header>
         <ul class="flex flex-col divide-y divide-base-200">
           <li v-for="recipe in friendResults" :key="`friend-${recipe.id}`">
@@ -308,6 +326,23 @@ function handleBack() {
             </NuxtLink>
           </li>
         </ul>
+      </template>
+
+      <template v-if="friendCustomFoods.length">
+        <header
+          class="px-3 pt-2.5 pb-1 text-xs font-semibold text-base-content/50 uppercase tracking-wide"
+          :class="{ 'border-t border-base-200 mt-1': frequent.length || recipes.length || searchResults.length || friendResults.length }"
+        >
+          Custom foods from friends
+        </header>
+        <FoodResultList
+          :foods="(friendCustomFoods as unknown as FoodRow[])"
+          :meal="meal"
+          :date="date"
+          :recipe="recipeId"
+          :ingredient="ingredientId"
+          :extra="carriedPortion"
+        />
       </template>
 
       <p v-if="nothingFound" class="p-6 text-center text-sm text-base-content/50">

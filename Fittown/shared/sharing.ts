@@ -14,7 +14,7 @@
 
 export interface ShareToggle {
   /** Column on `user_goals`. */
-  key: 'share_recipes' | 'share_diary' | 'share_weight' | 'share_calories' | 'share_exercise'
+  key: 'share_recipes' | 'share_diary' | 'share_weight' | 'share_calories' | 'share_exercise' | 'share_custom_foods'
   label: string
   /** What the toggle actually governs, in the words the friend view uses. */
   description: string
@@ -32,6 +32,11 @@ export const SHARE_TOGGLES: readonly ShareToggle[] = [
     key: 'share_recipes',
     label: 'Recipes',
     description: 'Friends can read your recipes, copy them, and find them when searching foods.',
+  },
+  {
+    key: 'share_custom_foods',
+    label: 'Custom foods',
+    description: 'Friends can find and copy your custom foods when searching.',
   },
   {
     key: 'share_diary',

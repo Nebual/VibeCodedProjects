@@ -101,8 +101,14 @@ export default defineEventHandler(async (event) => {
     results: prioritizeServingSize(results as { serving_grams: unknown }[]),
     // Nothing to offer when we're picking an ingredient. A friend's recipe is
     // not yours to nest — tapping one offers to copy it, and a copy is what you
-    // would have to put in your salad anyway.
+    // would have to put in your salad anyway. Custom foods are directly loggable,
+    // so they come back in `results` rather than a separate list.
     friend_results: pickingIngredient ? [] : searchFriendRecipes(db, user.id, match),
+    // Friends' custom foods come back in their own list — the UI shows them
+    // under a separate heading below your own results. They are directly
+    // loggable, but not nestable (you copy them into your recipe instead of
+    // nesting), so they don't have the same exclusion rule as recipes.
+    friend_custom_foods: pickingIngredient ? [] : searchFriendCustomFoods(db, user.id, match),
   }
 })
 
@@ -144,4 +150,40 @@ function searchFriendRecipes(
        LIMIT ?`,
     )
     .all(match, RECIPE_SOURCE, ...ids, FRIEND_RESULT_LIMIT)
+}
+
+/**
+ * Matching custom foods belonging to friends who share theirs.
+ *
+ * `COALESCE(g.share_custom_foods, 1)` because a user who has never opened Settings
+ * may predate the column; absent means shared, matching the column default and
+ * `sharePermissions()` on the client.
+ */
+function searchFriendCustomFoods(
+  db: ReturnType<typeof useDb>,
+  userId: number,
+  match: string,
+) {
+  const ids = friendIds(db, userId)
+  if (ids.length === 0) return []
+
+  const placeholders = ids.map(() => '?').join(',')
+
+  return db
+    .prepare(
+      `SELECT f.id, f.name, f.source, f.brand, f.is_liquid, f.kcal,
+              f.serving_grams, f.protein_g, f.carbs_g, f.fat_g,
+              u.id AS owner_id, u.name AS owner_name, u.email AS owner_email
+       FROM foods_fts
+       JOIN foods f ON f.id = foods_fts.rowid
+       JOIN users u ON u.id = f.owner_user_id
+       LEFT JOIN user_goals g ON g.user_id = u.id
+       WHERE foods_fts MATCH ?
+         AND f.source = ?
+         AND f.owner_user_id IN (${placeholders})
+         AND COALESCE(g.share_custom_foods, 1) = 1
+       ORDER BY foods_fts.rank
+       LIMIT ?`,
+    )
+    .all(match, 'custom', ...ids, 30)
 }

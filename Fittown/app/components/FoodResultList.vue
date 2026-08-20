@@ -89,6 +89,9 @@ function energyLine(food: FoodRow) {
           </div>
           <div class="text-xs text-base-content/60 truncate">
             <span v-if="food.brand">{{ food.brand }} · </span>{{ energyLine(food) }}
+            <span v-if="food.owner_name" class="text-base-content/40">
+              · <span class="italic">{{ food.owner_name }}</span>
+            </span>
           </div>
         </div>
 

@@ -61,6 +61,23 @@ export interface FriendRecipeResult {
   owner_email: string
 }
 
+/** A friend's custom food as it appears in food search — theirs, with a name on it. */
+export interface FriendCustomFoodResult {
+  id: number
+  name: string
+  source: string
+  brand: string | null
+  is_liquid: number
+  kcal: number | null
+  serving_grams: number | null
+  protein_g: number | null
+  carbs_g: number | null
+  fat_g: number | null
+  owner_id: number
+  owner_name: string
+  owner_email: string
+}
+
 /** Pull a readable message out of a failed $fetch. */
 export function apiError(err: unknown, fallback: string): string {
   const message = (err as { statusMessage?: string; data?: { statusMessage?: string } })
