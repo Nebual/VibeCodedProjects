@@ -135,6 +135,35 @@ export function roundGrams(grams: number): number {
   return grams >= 10 ? Math.round(grams) : Math.round(grams * 10) / 10
 }
 
+/**
+ * The amount — in a unit of `unitSize` base units — that reproduces
+ * `targetGrams` as closely as the unit lets us, rounded to as few decimals as
+ * remain honest.
+ *
+ * Used when switching portion types: the amount is re-expressed from a weight
+ * that was already on screen, and re-expressing it should not add spurious
+ * precision. 3 oz of something is 85.05 g; switching to grams and showing
+ * "85.05 g" hides the point — 85 g is within a gram, so round to the nearest
+ * gram. But never coarser than the weight deserves: "90 g" switching to oz
+ * stays 3.2 oz (90.7 g), because 3 oz would be 85 g and that is 5 g off. A
+ * small total (a ~15 g serving or less) needs a finer grain, where a whole
+ * gram is a big fraction — there 0.1 g is the coarsest honest step.
+ *
+ * Never more than two decimals, whatever the conversion.
+ */
+export function portionAmount(targetGrams: number, unitSize: number): number {
+  const exact = targetGrams / unitSize
+  // A small total keeps a tenth of a gram; anything bigger can fall back to
+  // whole grams where the tolerance allows.
+  const coarsest = targetGrams > 15 ? 0 : 1
+  for (let decimals = coarsest; decimals <= 2; decimals++) {
+    const factor = 10 ** decimals
+    const rounded = Math.round(exact * factor) / factor
+    if (Math.abs(rounded * unitSize - targetGrams) <= 1) return rounded
+  }
+  return Math.round(exact * 100) / 100
+}
+
 /** "2 × oz = 57 g" — the sentence that makes a non-base unit trustworthy. */
 export function conversionText(
   amount: number,

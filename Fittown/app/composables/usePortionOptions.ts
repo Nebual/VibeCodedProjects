@@ -1,7 +1,9 @@
+import { computed, reactive, ref, watchEffect } from 'vue'
 import {
   baseUnit,
   defaultAmount,
   defaultUnitKey,
+  portionAmount,
   portionUnits,
   roundGrams,
   VOLUME_UNITS,
@@ -196,11 +198,23 @@ export function usePortionOptions(
   })
 
   /**
-   * Switching between "1 serving", "100 g" and "4 oz" needs a sane starting
-   * amount — leaving `1` behind after a switch to grams is a 1 g portion.
+   * Switching between "1 serving", "100 g" and "4 oz" keeps however much is
+   * already typed, re-expressed in the new unit, so the logged weight doesn't
+   * silently change under the portion you happened to pick. "2 × 90 g serving"
+   * switching to grams lands on 180; "1 × 100 g" switching to a 90 g serving
+   * lands on 1.1 (99 g, within a gram). `previousGrams` is the weight that was
+   * on screen before the switch — the caller captures it, because by the time
+   * this runs the selection has already moved. Only with nothing to preserve
+   * does it fall back to the sensible starting amount.
    */
-  function onPortionChange() {
-    if (selected.value) amount.value = defaultAmount(selected.value)
+  function onPortionChange(previousGrams?: number) {
+    const option = selected.value
+    if (!option) return
+    if (previousGrams !== undefined) {
+      amount.value = portionAmount(previousGrams, option.size)
+    } else {
+      amount.value = defaultAmount(option)
+    }
   }
 
   /** Exactly what the diary and a recipe ingredient both store. */

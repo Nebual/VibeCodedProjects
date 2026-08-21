@@ -46,8 +46,12 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onDocumentPoin
  * focus it triggers is honoured and the keypad comes up for the amount field.
  */
 function selectOption(option: PortionOption) {
+  // Capture the weight on screen before the selection moves. Switching
+  // portion types should re-express that weight in the new unit, not reset
+  // the amount — "2 × 90 g serving" to grams means 180 g, not a 1 g portion.
+  const previousGrams = props.picker.grams
   props.picker.selectedKey = option.key
-  props.picker.onPortionChange()
+  props.picker.onPortionChange(previousGrams)
   open.value = false
   amountField.value?.focus()
   amountField.value?.select()
