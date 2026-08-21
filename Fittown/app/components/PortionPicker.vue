@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { roundGrams } from '#shared/portions'
-import type { PortionPickerState } from '~/composables/usePortionOptions'
+import type { PortionOption, PortionPickerState } from '~/composables/usePortionOptions'
 
 /**
  * "How much of this?" — used both when logging a food and when putting one into
@@ -13,26 +13,44 @@ import type { PortionPickerState } from '~/composables/usePortionOptions'
  */
 const props = defineProps<{ picker: PortionPickerState }>()
 
-/**
- * Switching portion type (e.g. to grams) drops in a default amount. Grab the
- * amount field and select it so the next keystroke replaces the whole number
- * instead of the user deleting it char by char.
- */
+/** The amount field that should gain focus when a portion option is picked. */
 const amountField = ref<HTMLInputElement | null>(null)
 
-function onPortionChange() {
+/** The in-page portion dropdown is open. */
+const open = ref(false)
+
+/** Anchor for the dropdown + its trigger, so a tap outside closes it. */
+const portionColumn = ref<HTMLDivElement | null>(null)
+
+function onDocumentPointerDown(event: PointerEvent) {
+  if (
+    open.value
+    && portionColumn.value
+    && !portionColumn.value.contains(event.target as Node)
+  ) {
+    open.value = false
+  }
+}
+
+onMounted(() => document.addEventListener('pointerdown', onDocumentPointerDown))
+onBeforeUnmount(() => document.removeEventListener('pointerdown', onDocumentPointerDown))
+
+/**
+ * Picking a portion option.
+ *
+ * This is deliberately NOT a native <select>. Firefox on Android never raises
+ * the soft keyboard for a programmatic focus that follows a native picker — the
+ * real touch is consumed by the OS selection control, so no timing trick (sync,
+ * microtask, or macrotask) gives the focus genuine user activation. Making the
+ * options real page buttons means the tap below is an authentic click, so the
+ * focus it triggers is honoured and the keypad comes up for the amount field.
+ */
+function selectOption(option: PortionOption) {
+  props.picker.selectedKey = option.key
   props.picker.onPortionChange()
-  // Firefox on Android will not raise the soft keyboard if the focus lands in
-  // the same task (or a microtask) as the native <select>'s change — the picker
-  // is still closing and still owns the gesture, so it swallows the focus.
-  // Deferring to a macrotask lets the native control finish and release, after
-  // which a programmatic focus is honoured and the keypad appears. (Chrome/Safari
-  // tolerate a synchronous focus; Firefox does not.) The DOM already holds the
-  // reset default by the time the timeout runs, so select() grabs the fresh value.
-  setTimeout(() => {
-    amountField.value?.focus()
-    amountField.value?.select()
-  }, 0)
+  open.value = false
+  amountField.value?.focus()
+  amountField.value?.select()
 }
 </script>
 
@@ -52,17 +70,37 @@ function onPortionChange() {
         >
       </label>
 
-      <label class="form-control flex-1">
+      <label class="form-control flex-1 relative">
         <span class="label-text text-xs mb-1">Portion</span>
-        <select
-          v-model="picker.selectedKey"
-          class="select select-bordered w-full"
-          @change="onPortionChange"
-        >
-          <option v-for="option in picker.options" :key="option.key" :value="option.key">
-            {{ picker.optionLabel(option) }}
-          </option>
-        </select>
+        <div ref="portionColumn" class="relative">
+          <button
+            type="button"
+            class="btn btn-outline w-full justify-between"
+            :aria-expanded="open"
+            @click="open = !open"
+          >
+            <span class="truncate">
+              {{ picker.selected ? picker.optionLabel(picker.selected) : '' }}
+            </span>
+            <AppIcon name="chevronDown" class="w-4 h-4 shrink-0 opacity-60" />
+          </button>
+
+          <div
+            v-if="open"
+            class="absolute right-0 z-10 mt-1 w-60 max-h-64 overflow-auto rounded-lg bg-base-100 border border-base-300 shadow-lg py-1"
+          >
+            <button
+              v-for="option in picker.options"
+              :key="option.key"
+              type="button"
+              class="w-full text-left px-3 py-2 text-sm hover:bg-base-200"
+              :class="{ 'bg-base-200': option.key === picker.selectedKey }"
+              @click="selectOption(option)"
+            >
+              {{ picker.optionLabel(option) }}
+            </button>
+          </div>
+        </div>
       </label>
     </div>
 
