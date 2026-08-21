@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { friendDisplayName } from '#shared/friends'
 import { apiError, type FriendPerson } from '~/composables/useFriends'
+import type { Goals } from '~/composables/useDiary'
 import type { RecipeDetail } from '~/composables/useRecipes'
 
 /**
@@ -27,6 +28,11 @@ const date = computed(() => (route.query.d as string) || diaryDay.value)
 const { data, error } = await useFetch<RecipeDetail & { friend: FriendPerson }>(
   () => `/api/friends/${friendId.value}/recipes/${recipeId.value}`,
 )
+
+// The recipe breakdown renders against the viewer's own goals, so a configured
+// sugar limit applies here as it does on the viewer's own recipe pages.
+const { data: goalsData } = await useFetch<{ goals: Goals }>('/api/goals')
+const goals = computed(() => goalsData.value?.goals)
 
 const ownerName = computed(() => (data.value?.friend ? friendDisplayName(data.value.friend) : null))
 useHead({ title: () => `${data.value?.recipe?.name ?? 'Recipe'} · Fittown` })
@@ -79,7 +85,7 @@ async function logIt() {
       <span v-if="busy" class="loading loading-spinner loading-sm" />
     </header>
 
-    <RecipeReadOnly :detail="data" :owner-name="ownerName">
+    <RecipeReadOnly :detail="data" :owner-name="ownerName" :goals="goals">
       <template #actions>
         <div class="flex flex-col gap-2">
           <p v-if="copyError" class="text-xs text-error">{{ copyError }}</p>

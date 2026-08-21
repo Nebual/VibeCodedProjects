@@ -204,6 +204,15 @@ function atwaterKcal(protein, carbs, fat) {
 const SODIUM_TO_SALT = 2.5 / 1000
 
 /**
+ * Pure added sweeteners: foods whose entire sugar content is added sugar by
+ * definition. FDC's Foundation Foods doesn't usually record added sugars
+ * (nutrient 1235) for them, so the importer would otherwise leave added
+ * sugars "unknown" for exactly the food that is nothing but added sugar.
+ * 334247 / 746784 are the two FDC submissions of 'Sugars, granulated'.
+ */
+const PURE_ADDED_SUGAR_IDS = new Set(['334247', '746784'])
+
+/**
  * USDA's food_category is a coarse 29-way food-group grouping, not a
  * per-item tag like OFF's — "Fruits and Fruit Juices" covers both a raw
  * banana and actual juice, so it would otherwise make `isLiquid` (which
@@ -467,7 +476,15 @@ for (const food of foundationFoods) {
   ]
   for (const col of NUTRIENT_COLS) {
     const { ids, max } = NUTRIENT_MAP[col]
-    values.push(sumNutrient(amounts, ids, max))
+    let v = sumNutrient(amounts, ids, max)
+    // A pure added sweetener has no intrinsic sugar — every gram it reports
+    // is added sugar, so its total sugars ARE its added sugars. FDC rarely
+    // records 1235 for these; falling back to total sugars is the honest
+    // answer for them, not an invented one (see `null ≠ zero`).
+    if (col === 'added_sugars_g' && v === null && PURE_ADDED_SUGAR_IDS.has(food.fdc_id)) {
+      v = sumNutrient(amounts, NUTRIENT_MAP.sugars_g.ids, NUTRIENT_MAP.sugars_g.max)
+    }
+    values.push(v)
   }
   const sodium = sumNutrient(amounts, NUTRIENT_MAP.sodium_mg.ids, NUTRIENT_MAP.sodium_mg.max)
   values.push(sodium === null ? null : sane(sodium * SODIUM_TO_SALT, 100))

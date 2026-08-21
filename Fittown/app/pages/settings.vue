@@ -331,9 +331,19 @@ async function applyPlan(plan: {
   macros?: { protein_g: number; carbs_g: number; fat_g: number }
   water_goal_ml?: number
 }) {
+  // A sugar limit that tracked one of the % presets follows the calorie goal:
+  // lowering the target should drop the sugar budget with it (e.g. 2000 kcal →
+  // 50 g is 10%, so 1800 kcal becomes 45 g). A limit set by hand in grams — one
+  // that matches no preset — is the user's own number and is left alone.
+  const oldCalories = form.calorie_goal ?? 0
+  const oldSugar = form.sugar_limit_g
+  const sugarPercent = sugarPercentOf(oldCalories, oldSugar)
   form.calorie_goal = plan.calorie_goal
   form.goal_weight_kg = plan.goal_weight_kg
   form.goal_rate_kg_per_week = plan.goal_rate_kg_per_week
+  if (sugarPercent !== null && plan.calorie_goal !== oldCalories) {
+    setSugarPercent(sugarPercent)
+  }
   if (plan.macros) Object.assign(form, plan.macros)
   if (plan.water_goal_ml !== undefined) form.water_goal_ml = plan.water_goal_ml
   calculatorOpen.value = false
@@ -382,12 +392,54 @@ async function signOut() {
   await navigateTo('/login')
 }
 
-/** The macros get their own editor below; these are the plain numbers. */
-const goalFields = [
-  { key: 'calorie_goal', label: 'Daily calories', unit: 'kcal', step: 10 },
-  { key: 'fiber_g', label: 'Fibre', unit: 'g', step: 1 },
-  { key: 'water_goal_ml', label: 'Water', unit: 'ml', step: 50 },
-] as const
+/**
+ * The sugar goal is an *upper* limit ("stay under"), set as a percentage of
+ * calorie intake — the FDA's 10% DV figure, with 5% as the stricter option.
+ * Sugar is ~4 kcal/g, so 10% of 2000 kcal is 50 g. Stored as grams; the
+ * preset buttons just re-derive the grams from the current calorie goal.
+ */
+const SUGAR_KCAL_PER_G = 4
+const SUGAR_PERCENT_OPTIONS = [10, 5] as const
+function setSugarPercent(percent: number) {
+  const goal = form.calorie_goal ?? 0
+  if (!goal) return
+  form.sugar_limit_g = Math.round((goal * (percent / 100)) / SUGAR_KCAL_PER_G)
+}
+
+/**
+ * Which preset a stored sugar limit corresponds to, if any — the value the 10%
+ * or 5% button would produce for the given calorie goal. Gram rounding means a
+ * preset can read back a few tenths off the exact percentage (0.5 g up to
+ * ~0.2 pp), so the match is tolerant. Used to decide whether a sugar limit
+ * should follow the calorie goal when the target calculator changes it.
+ */
+function sugarPercentOf(calories: number, grams: number | null | undefined): number | null {
+  if (!calories || !grams || !Number.isFinite(grams)) return null
+  const pct = (grams * SUGAR_KCAL_PER_G * 100) / calories
+  for (const option of SUGAR_PERCENT_OPTIONS) {
+    if (Math.abs(pct - option) < 0.75) return option
+  }
+  return null
+}
+
+/**
+ * The sugar limit as a % of the calorie goal, for the little indicator under
+ * the field: if it lines up with the 10% / 5% preset, that button is
+ * underlined; otherwise a faint "= X%" shows what the grams actually work out
+ * to, so the number is never a mystery.
+ */
+const sugarCurrent = computed(() => {
+  const goal = form.calorie_goal ?? 0
+  const grams = form.sugar_limit_g
+  if (!goal || !grams || !Number.isFinite(grams)) return null
+  const pct = (grams * SUGAR_KCAL_PER_G * 100) / goal
+  return { pct, preset: sugarPercentOf(goal, grams) }
+})
+const sugarLabel = computed(() => {
+  if (!sugarCurrent.value) return null
+  const rounded = Math.round(sugarCurrent.value.pct * 10) / 10
+  return `${String(rounded)}%`
+})
 </script>
 
 <template>
@@ -545,12 +597,56 @@ const goalFields = [
       <div class="card-body p-4 gap-3">
         <h2 class="font-semibold">Daily goals</h2>
 
-        <div class="grid grid-cols-2 gap-2">
-          <label v-for="f in goalFields" :key="f.key" class="form-control">
-            <span class="label-text text-xs mb-1">{{ f.label }} ({{ f.unit }})</span>
+        <div class="flex flex-col gap-2">
+          <label class="form-control">
+            <span class="label-text text-xs mb-1">Daily calories (kcal)</span>
             <input
-              v-model.number="form[f.key]"
-              type="number" min="0" :step="f.step" inputmode="numeric"
+              v-model.number="form.calorie_goal"
+              type="number" min="0" step="10" inputmode="numeric"
+              class="input input-bordered input-sm w-full"
+            >
+          </label>
+
+          <!-- Fibre and Sugar side by side: both diet-shape numbers people track. -->
+          <div class="grid grid-cols-2 gap-2">
+            <label class="form-control">
+              <span class="label-text text-xs mb-1">Fibre (g)</span>
+              <input
+                v-model.number="form.fiber_g"
+                type="number" min="0" step="1" inputmode="numeric"
+                class="input input-bordered input-sm w-full"
+              >
+            </label>
+            <div class="form-control">
+              <span class="label-text text-xs mb-1 flex items-center gap-1">
+                Sugar (g)
+                <button
+                  v-for="p in SUGAR_PERCENT_OPTIONS"
+                  :key="p"
+                  type="button"
+                  class="btn btn-ghost btn-xs min-h-0 h-4 px-1 text-[10px] font-medium"
+                  :class="{ 'underline underline-offset-2 decoration-base-content/70': sugarCurrent?.preset === p }"
+                  :disabled="!form.calorie_goal"
+                  :title="`${p}% of your ${form.calorie_goal ?? 0} kcal goal (sugar ≈ 4 kcal/g)`"
+                  @click="setSugarPercent(p)"
+                >{{ p }}%</button>
+                <span v-if="sugarCurrent && sugarCurrent.preset === null" class="text-base-content/50 ml-2 text-[10px]">
+                  = {{ sugarLabel }}
+                </span>
+              </span>
+              <input
+                v-model.number="form.sugar_limit_g"
+                type="number" min="0" step="1" inputmode="numeric"
+                class="input input-bordered input-sm w-full"
+              >
+            </div>
+          </div>
+
+          <label class="form-control">
+            <span class="label-text text-xs mb-1">Water (ml)</span>
+            <input
+              v-model.number="form.water_goal_ml"
+              type="number" min="0" step="50" inputmode="numeric"
               class="input input-bordered input-sm w-full"
             >
           </label>

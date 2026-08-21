@@ -10,6 +10,7 @@ import {
   isResolved,
 } from '~/utils/ingredients'
 import type { RecipeDetail, RecipeIngredient } from '~/composables/useRecipes'
+import type { Goals } from '~/composables/useDiary'
 
 const route = useRoute()
 const router = useRouter()
@@ -20,6 +21,11 @@ const diaryDay = useDiaryDay()
 const id = computed(() => Number(route.params.id))
 
 const { data, error, refresh } = await useFetch<RecipeDetail>(() => `/api/recipes/${id.value}`)
+
+// The recipe's own nutrient breakdown renders against the viewer's goals, so
+// a configured sugar limit shows up here too.
+const { data: goalsData } = await useFetch<{ goals: Goals }>('/api/goals')
+const goals = computed(() => goalsData.value?.goals)
 
 const recipe = computed(() => data.value?.recipe)
 useHead({ title: () => `${recipe.value?.name ?? 'Recipe'} · Fittown` })
@@ -942,7 +948,7 @@ const logLink = computed(
           </button>
         </div>
 
-        <NutrientBreakdown :totals="totals" />
+        <NutrientBreakdown :totals="totals" :goals="goals" />
 
         <p class="text-xs text-base-content/50">
           Meals you have already logged keep the version you logged them with —

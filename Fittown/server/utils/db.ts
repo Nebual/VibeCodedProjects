@@ -120,6 +120,9 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     share_calories: 'INTEGER NOT NULL DEFAULT 1',
     share_exercise: 'INTEGER NOT NULL DEFAULT 1',
     share_custom_foods: 'INTEGER NOT NULL DEFAULT 1',
+    // Upper limit for (added) sugar in grams. Default 50 = 10% of the default
+    // 2000 kcal. Reads as shared default for pre-existing rows.
+    sugar_limit_g: 'REAL NOT NULL DEFAULT 50',
   },
   exercises: {
     met_light: 'REAL',

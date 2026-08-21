@@ -26,6 +26,7 @@ function targetFor(key: string, fallback?: number) {
     carbs_g: goals.carbs_g,
     fat_g: goals.fat_g,
     fiber_g: goals.fiber_g,
+    sugars_g: goals.sugar_limit_g,
   }
   return overrides[key] ?? fallback
 }

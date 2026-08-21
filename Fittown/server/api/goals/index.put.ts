@@ -8,6 +8,7 @@ const NUMERIC_GOALS: Record<string, { min: number; max: number }> = {
   carbs_g: { min: 0, max: 2000 },
   fat_g: { min: 0, max: 1000 },
   fiber_g: { min: 0, max: 300 },
+  sugar_limit_g: { min: 0, max: 300 },
   water_goal_ml: { min: 0, max: 20000 },
   height_cm: { min: 50, max: 260 },
   birth_year: { min: 1900, max: 2100 },

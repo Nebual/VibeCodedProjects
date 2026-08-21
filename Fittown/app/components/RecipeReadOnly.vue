@@ -2,6 +2,7 @@
 import { baseUnit, roundGrams } from '#shared/portions'
 import { showsGramPortions } from '#shared/recipes'
 import { ingredientDetail, ingredientName, isNestedRecipe, isResolved } from '~/utils/ingredients'
+import type { Goals } from '~/composables/useDiary'
 import type { RecipeDetail } from '~/composables/useRecipes'
 
 /**
@@ -17,6 +18,9 @@ defineProps<{
   detail: RecipeDetail
   /** Whose recipe this is, shown as provenance. */
   ownerName?: string | null
+  /** The viewer's goals, so budget-style nutrients (e.g. added sugar) render
+   *  against a real limit. Omitted for signed-out share links, who have none. */
+  goals?: Goals
 }>()
 
 const view = ref<'serving' | 'whole'>('serving')
@@ -160,7 +164,10 @@ const view = ref<'serving' | 'whole'>('serving')
           </button>
         </div>
 
-        <NutrientBreakdown :totals="view === 'serving' ? detail.per_serving : detail.totals" />
+        <NutrientBreakdown
+          :totals="view === 'serving' ? detail.per_serving : detail.totals"
+          :goals="goals"
+        />
       </div>
     </section>
   </div>

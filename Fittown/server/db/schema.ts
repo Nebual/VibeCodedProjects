@@ -28,6 +28,10 @@ CREATE TABLE IF NOT EXISTS user_goals (
   fat_g           REAL NOT NULL DEFAULT 67,
   fiber_g         REAL NOT NULL DEFAULT 30,
   water_goal_ml   REAL NOT NULL DEFAULT 2500,
+  -- Upper limit for (added) sugar, in grams, a user stays under — rendered as
+  -- a budget, not a target. 50 g = 10% of the default 2000 kcal (sugar ~4 kcal/g);
+  -- Settings offers 10% / 5% buttons that re-derive it from the calorie goal.
+  sugar_limit_g   REAL NOT NULL DEFAULT 50,
   -- 'kg' | 'lb' — display only; weights are always stored in kg.
   weight_unit     TEXT NOT NULL DEFAULT 'kg',
   -- 'ml' | 'floz' — display only; water is always stored in ml.

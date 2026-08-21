@@ -501,7 +501,7 @@ async function saveAsVariant() {
             <span class="text-sm font-normal text-base-content/60">kcal</span>
           </span>
         </div>
-        <NutrientBreakdown :totals="preview" />
+        <NutrientBreakdown :totals="preview" :goals="settings?.goals" />
 
         <!-- Report as inaccurate. A subdued action on the place you're already
              reading the numbers; right-aligned so it never crowds the breakdown. -->
