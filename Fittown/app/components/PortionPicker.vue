@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, ref } from 'vue'
+import { ref } from 'vue'
 import { roundGrams } from '#shared/portions'
 import type { PortionPickerState } from '~/composables/usePortionOptions'
 
@@ -20,12 +20,19 @@ const props = defineProps<{ picker: PortionPickerState }>()
  */
 const amountField = ref<HTMLInputElement | null>(null)
 
-async function onPortionChange() {
+function onPortionChange() {
   props.picker.onPortionChange()
-  // Let the reset default land in the DOM before selecting it.
-  await nextTick()
-  amountField.value?.focus()
-  amountField.value?.select()
+  // Firefox on Android will not raise the soft keyboard if the focus lands in
+  // the same task (or a microtask) as the native <select>'s change — the picker
+  // is still closing and still owns the gesture, so it swallows the focus.
+  // Deferring to a macrotask lets the native control finish and release, after
+  // which a programmatic focus is honoured and the keypad appears. (Chrome/Safari
+  // tolerate a synchronous focus; Firefox does not.) The DOM already holds the
+  // reset default by the time the timeout runs, so select() grabs the fresh value.
+  setTimeout(() => {
+    amountField.value?.focus()
+    amountField.value?.select()
+  }, 0)
 }
 </script>
 
