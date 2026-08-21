@@ -125,7 +125,11 @@ const otherFrequent = computed(() =>
     .filter((f) => matches(debounced.value, f)),
 )
 
-const frequent = computed(() => [...mealFrequent.value, ...otherFrequent.value])
+const frequent = computed(() =>
+  [...mealFrequent.value, ...otherFrequent.value].filter(
+    (f) => f.name.toLowerCase() !== 'quick add',
+  ),
+)
 
 const recipes = computed(() =>
   (recipeData.value?.recipes ?? []).filter((f) => matches(debounced.value, f)),
