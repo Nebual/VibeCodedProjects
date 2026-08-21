@@ -32,6 +32,7 @@ import { pipeline } from 'node:stream/promises'
 import { dirname, join, resolve } from 'node:path'
 import { isLiquid } from './lib/liquid.mjs'
 import { parseCsvRecords } from './lib/csv.mjs'
+import { isPureAddedSugar } from './lib/pureSugar.mjs'
 
 // FDC publishes a new Foundation Foods release every few months at a URL
 // that embeds the release date. There is no "latest" alias, so this needs
@@ -208,9 +209,12 @@ const SODIUM_TO_SALT = 2.5 / 1000
  * definition. FDC's Foundation Foods doesn't usually record added sugars
  * (nutrient 1235) for them, so the importer would otherwise leave added
  * sugars "unknown" for exactly the food that is nothing but added sugar.
- * 334247 / 746784 are the two FDC submissions of 'Sugars, granulated'.
+ *
+ * Driven by the shared `isPureAddedSugar()` rule (name/category) rather than
+ * a hardcoded list of FDC ids, so a newer FDC release that adds another pure
+ * sweetener (brown/powdered/turbinado sugar, ...) is caught without a code
+ * change. Today this flags 'Sugars, granulated' (FDC 334247 / 746784).
  */
-const PURE_ADDED_SUGAR_IDS = new Set(['334247', '746784'])
 
 /**
  * USDA's food_category is a coarse 29-way food-group grouping, not a
@@ -481,7 +485,7 @@ for (const food of foundationFoods) {
     // is added sugar, so its total sugars ARE its added sugars. FDC rarely
     // records 1235 for these; falling back to total sugars is the honest
     // answer for them, not an invented one (see `null ≠ zero`).
-    if (col === 'added_sugars_g' && v === null && PURE_ADDED_SUGAR_IDS.has(food.fdc_id)) {
+    if (col === 'added_sugars_g' && v === null && isPureAddedSugar(categories, name)) {
       v = sumNutrient(amounts, NUTRIENT_MAP.sugars_g.ids, NUTRIENT_MAP.sugars_g.max)
     }
     values.push(v)

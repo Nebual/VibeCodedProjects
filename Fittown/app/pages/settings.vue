@@ -393,10 +393,11 @@ async function signOut() {
 }
 
 /**
- * The sugar goal is an *upper* limit ("stay under"), set as a percentage of
- * calorie intake — the FDA's 10% DV figure, with 5% as the stricter option.
- * Sugar is ~4 kcal/g, so 10% of 2000 kcal is 50 g. Stored as grams; the
- * preset buttons just re-derive the grams from the current calorie goal.
+ * The *added sugar* goal is an upper limit ("stay under"), set as a percentage
+ * of calorie intake — the FDA's 10% DV figure, with 5% as the stricter option.
+ * Sugar is ~4 kcal/g, so 10% of 2000 kcal is 50 g. Stored as grams; the preset
+ * buttons just re-derive the grams from the current calorie goal. It applies
+ * to *added* sugar only, never to naturally-occurring total sugars.
  */
 const SUGAR_KCAL_PER_G = 4
 const SUGAR_PERCENT_OPTIONS = [10, 5] as const
@@ -607,7 +608,7 @@ const sugarLabel = computed(() => {
             >
           </label>
 
-          <!-- Fibre and Sugar side by side: both diet-shape numbers people track. -->
+          <!-- Fibre and Added sugar side by side: both diet-shape numbers people track. -->
           <div class="grid grid-cols-2 gap-2">
             <label class="form-control">
               <span class="label-text text-xs mb-1">Fibre (g)</span>
@@ -619,7 +620,7 @@ const sugarLabel = computed(() => {
             </label>
             <div class="form-control">
               <span class="label-text text-xs mb-1 flex items-center gap-1">
-                Sugar (g)
+                Added sugar (g)
                 <button
                   v-for="p in SUGAR_PERCENT_OPTIONS"
                   :key="p"

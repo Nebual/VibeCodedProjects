@@ -24,6 +24,7 @@ import { pipeline } from 'node:stream/promises'
 import { createInterface } from 'node:readline'
 import { dirname, resolve } from 'node:path'
 import { isLiquid } from './lib/liquid.mjs'
+import { isPureAddedSugar, PURE_SUGAR_MIN_SUGARS } from './lib/pureSugar.mjs'
 
 const DUMP_URL =
   'https://static.openfoodfacts.org/data/en.openfoodfacts.org.products.csv.gz'
@@ -341,6 +342,13 @@ for await (const line of rl) {
     continue
   }
 
+  const categories = cleanText(get('categories_en'))
+  const totalSugars = sane(num(get('sugars_100g')), 100)
+  const pureAddedSugar =
+    isPureAddedSugar(categories, name) &&
+    totalSugars !== null &&
+    totalSugars >= PURE_SUGAR_MIN_SUGARS
+
   const protein = sane(num(get('proteins_100g')), 100)
   const carbs = sane(num(get('carbohydrates_100g')), 100)
   const fat = sane(num(get('fat_100g')), 100)
@@ -359,7 +367,7 @@ for await (const line of rl) {
     name.slice(0, 200),
     cleanText(get('brands'))?.slice(0, 120) ?? null,
     cleanText(get('quantity'))?.slice(0, 60) ?? null,
-    cleanText(get('categories_en'))?.slice(0, 300) ?? null,
+    categories?.slice(0, 300) ?? null,
     cleanText(get('image_small_url')),
     cleanText(get('serving_size'))?.slice(0, 60) ?? null,
     sane(num(get('serving_quantity')), 5000),
@@ -369,7 +377,22 @@ for await (const line of rl) {
 
   for (const col of NUTRIENT_COLS) {
     const [offCol, scale, max] = NUTRIENTS[col]
-    const raw = num(get(offCol))
+    let raw = num(get(offCol))
+    // A pure added sugar has no intrinsic sugar — every gram it reports IS
+    // added sugar, so its total sugars are its added sugars. OFF often omits
+    // `added-sugars_100g` for the sugar aisles; falling back to total sugars
+    // is the honest answer for these, not an invented one (see `null ≠ 0`),
+    // and mirrors the USDA Foundation importer's treatment of "Sugars,
+    // granulated". Guarded by `isPureAddedSugar()` AND a high total-sugars
+    // floor so multi-component foods are never caught.
+    if (
+      col === 'added_sugars_g' &&
+      raw === null &&
+      pureAddedSugar &&
+      totalSugars !== null
+    ) {
+      raw = totalSugars
+    }
     // Scale into our storage unit first, then judge plausibility in that unit.
     values.push(raw === null ? null : sane(raw * scale, max))
   }

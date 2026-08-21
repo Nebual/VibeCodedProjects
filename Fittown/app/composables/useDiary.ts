@@ -54,7 +54,7 @@ export interface Goals {
   fat_g: number
   fiber_g: number
   water_goal_ml: number
-  /** Upper limit for sugar, in grams, the user stays under. */
+  /** Upper limit for *added* sugar, in grams, the user stays under. */
   sugar_limit_g: number
   weight_unit: WeightUnit
   volume_unit: 'ml' | 'floz'

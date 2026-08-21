@@ -26,7 +26,10 @@ function targetFor(key: string, fallback?: number) {
     carbs_g: goals.carbs_g,
     fat_g: goals.fat_g,
     fiber_g: goals.fiber_g,
-    sugars_g: goals.sugar_limit_g,
+    // Only *Added* sugars is a budget the user stays under. Total sugars
+    // (sugars_g) deliberately gets no limit — it includes naturally-occurring
+    // sugar, so gauging it against the added-sugar goal would be misleading.
+    added_sugars_g: goals.sugar_limit_g,
   }
   return overrides[key] ?? fallback
 }
