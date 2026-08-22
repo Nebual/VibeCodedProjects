@@ -1,0 +1,26 @@
+@import 'tailwindcss';
+@plugin 'daisyui' {
+  themes: dark --default, light;
+}
+
+/*
+ * daisyUI focuses .input by setting --input-color to base-content, which on a
+ * dark theme is a harsh white ring. These rules are deliberately unlayered so
+ * they outrank the @layer daisyui originals.
+ */
+.input:focus,
+.input:focus-within {
+  outline: none;
+  --input-color: color-mix(in oklab, var(--color-base-content) 30%, transparent);
+}
+
+/* The per-aspect target inputs are only a few characters wide; spinners don't fit. */
+input.no-spinner {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+input.no-spinner::-webkit-outer-spin-button,
+input.no-spinner::-webkit-inner-spin-button {
+  appearance: none;
+  margin: 0;
+}
