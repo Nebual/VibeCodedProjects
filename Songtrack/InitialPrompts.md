@@ -125,7 +125,12 @@ I don't think the 'Preview loudness' is affecting anything.
 
 The recording page preview and the edit page's top preview both are still too quiet - on one device they're tolerable (but still 30% quieter than the final -16 LUFS), on another they're 75% quieter than the final -16 LUFS.
 
-
-# To be sent:
-
 Ambience sample doesn't seem to have an effect on the previews. Is the FFMPeg syntax right?
+
+## Zoom
+
+Lets add a way to Zoom in when editing waveform for precision. Maybe have a bar touching the bottom of the waveform where clicking it zooms in at the spot clicked, and a zoom out button. Or some other ui?
+
+Lets have the most zoomed be ~4s. Also is pinch to zoom an option on mobile?
+
+On desktop, it zooms in very quickly, one notch only shows 14s. Lets make it more gradual - each zoom is 50% smaller than before (so if the whole video is 8m long, one zoom level becomes 4m, 2m, 60s, 30s, 15s, 8s, 4s).

@@ -2,7 +2,8 @@
 import WaveSurfer from 'wavesurfer.js'
 import RegionsPlugin from 'wavesurfer.js/plugins/regions'
 import type { Region } from 'wavesurfer.js/plugins/regions'
-import { ArrowUturnLeftIcon, ArrowUturnRightIcon, ScissorsIcon } from '@heroicons/vue/24/outline'
+import ZoomPlugin from 'wavesurfer.js/plugins/zoom'
+import { ArrowUturnLeftIcon, ArrowUturnRightIcon, MagnifyingGlassMinusIcon, ScissorsIcon } from '@heroicons/vue/24/outline'
 import type { EditFilter, EditList, NoiseRegion } from '#shared/types'
 import type { ResolvedSegment, TimelineTake } from '#shared/utils/timeline'
 
@@ -39,11 +40,16 @@ if (!song.value) {
   throw createError({ statusCode: 404, statusMessage: 'Song not found' })
 }
 
+const MAX_ZOOM_VISIBLE_SECONDS = 4
+
 const containerRef = useTemplateRef<HTMLDivElement>('waveformContainer')
 let ws: WaveSurfer | null = null
 let regionsPlugin: RegionsPlugin | null = null
 let disableDragSelection: (() => void) | null = null
+let disableWheelZoom: (() => void) | null = null
 let marqueeRegion: Region | null = null
+/** Halving zoom ladder in px/sec, from the full-duration fit down to MAX_ZOOM_VISIBLE_SECONDS. Populated once duration is known. */
+let zoomLevels: number[] = []
 
 const monitorGain = useMonitorGain()
 let masterGainNode: GainNode | null = null
@@ -53,6 +59,69 @@ const isReady = ref(false)
 const isPlaying = ref(false)
 const currentTime = ref(0)
 const loadError = ref<string | null>(null)
+const currentPxPerSec = ref(0)
+const isZoomed = computed(() => currentPxPerSec.value > 0)
+
+function zoomOut() {
+  ws?.zoom(0)
+}
+
+function computeZoomLevels(durationS: number, containerWidthPx: number): number[] {
+  const levels: number[] = []
+  let visibleSeconds = durationS
+  while (true) {
+    levels.push(containerWidthPx / Math.max(visibleSeconds, MAX_ZOOM_VISIBLE_SECONDS))
+    if (visibleSeconds <= MAX_ZOOM_VISIBLE_SECONDS) break
+    visibleSeconds /= 2
+  }
+  return levels
+}
+
+function closestZoomLevelIndex(pxPerSec: number): number {
+  if (pxPerSec <= 0 || zoomLevels.length === 0) return 0
+  let closest = 0
+  let closestDiff = Infinity
+  zoomLevels.forEach((level, i) => {
+    const diff = Math.abs(level - pxPerSec)
+    if (diff < closestDiff) { closestDiff = diff; closest = i }
+  })
+  return closest
+}
+
+/**
+ * The Zoom plugin's own wheel handling scales continuously with scroll distance, which on a
+ * regular mouse wheel jumps from the full overview to near-max zoom in a single tick (its
+ * `deltaThreshold` is set to Infinity below to neutralize that path). Stepping through the
+ * halving ladder instead — one step per wheel "notch", anchored under the cursor — keeps zoom
+ * gradual and predictable regardless of input device. Pinch-zoom (mobile) still goes through
+ * the plugin's own continuous scaling, which is the natural feel for that gesture.
+ */
+function setupWheelZoomStepping(wavesurfer: WaveSurfer): () => void {
+  const container = wavesurfer.getWrapper().parentElement as HTMLElement
+  const WHEEL_STEP_THRESHOLD = 50
+  let accumulatedDeltaY = 0
+
+  function onWheel(e: WheelEvent) {
+    if (zoomLevels.length <= 1 || Math.abs(e.deltaX) >= Math.abs(e.deltaY)) return
+    e.preventDefault()
+    accumulatedDeltaY += e.deltaY
+    if (Math.abs(accumulatedDeltaY) < WHEEL_STEP_THRESHOLD) return
+    const direction = accumulatedDeltaY < 0 ? 1 : -1
+    accumulatedDeltaY = 0
+
+    const targetIndex = Math.max(0, Math.min(zoomLevels.length - 1, closestZoomLevelIndex(currentPxPerSec.value) + direction))
+    const targetPxPerSec = zoomLevels[targetIndex]!
+    const rect = container.getBoundingClientRect()
+    const anchorOffset = e.clientX - rect.left
+    const anchorTime = (container.scrollLeft + anchorOffset) / (currentPxPerSec.value || zoomLevels[0]!)
+
+    wavesurfer.zoom(targetIndex === 0 ? 0 : targetPxPerSec)
+    container.scrollLeft = anchorTime * targetPxPerSec - anchorOffset
+  }
+
+  container.addEventListener('wheel', onWheel, { passive: false })
+  return () => container.removeEventListener('wheel', onWheel)
+}
 
 const baseSegments = ref<ResolvedSegment[]>(song.value.editList.segments)
 const keepRanges = ref<KeepRange[]>([])
@@ -256,7 +325,27 @@ function setupCustomDragSelection(wavesurfer: WaveSurfer, regions: RegionsPlugin
     renderRegions()
   }
 
+  function abortActiveDrag() {
+    if (dragStartTime === null) return
+    window.removeEventListener('pointermove', onPointerMove)
+    window.removeEventListener('pointermove', onAmbiencePointerMove)
+    window.removeEventListener('pointerup', onPointerUp)
+    window.removeEventListener('pointerup', onAmbiencePointerUp)
+    ambienceDragRegion?.remove()
+    ambienceDragRegion = null
+    clearMarquee()
+    dragStartTime = null
+  }
+
+  // A 2-finger pinch (handled by the Zoom plugin) still delivers a pointerdown for the
+  // second finger. Ignoring non-primary pointers, and abandoning any drag already in
+  // progress once a second touch lands, keeps pinch-zoom from also drawing a marquee.
+  function onTouchStartDuringDrag(e: TouchEvent) {
+    if (e.touches.length >= 2) abortActiveDrag()
+  }
+
   function onPointerDown(e: PointerEvent) {
+    if (!e.isPrimary) return
     if (selectingAmbience.value) {
       e.preventDefault()
       e.stopPropagation()
@@ -296,7 +385,11 @@ function setupCustomDragSelection(wavesurfer: WaveSurfer, regions: RegionsPlugin
   }
 
   wrapper.addEventListener('pointerdown', onPointerDown, { capture: true })
-  return () => wrapper.removeEventListener('pointerdown', onPointerDown, { capture: true })
+  wrapper.addEventListener('touchstart', onTouchStartDuringDrag, { capture: true })
+  return () => {
+    wrapper.removeEventListener('pointerdown', onPointerDown, { capture: true })
+    wrapper.removeEventListener('touchstart', onTouchStartDuringDrag, { capture: true })
+  }
 }
 
 onMounted(() => {
@@ -322,6 +415,16 @@ onMounted(() => {
       regionsPlugin = ws.registerPlugin(RegionsPlugin.create())
       disableDragSelection = setupCustomDragSelection(ws, regionsPlugin)
 
+      // Pinch-to-zoom (mobile), centered on the gesture's position. maxZoom is in px/sec,
+      // derived from the container width to cap zoom at MAX_ZOOM_VISIBLE_SECONDS of audio
+      // visible at once, whatever the screen size. Desktop wheel-zoom is handled separately
+      // (setupWheelZoomStepping) so it steps gradually instead of this plugin's continuous
+      // scroll-distance scaling; deltaThreshold: Infinity disables just that wheel path.
+      const maxZoom = containerRef.value!.clientWidth / MAX_ZOOM_VISIBLE_SECONDS
+      ws.registerPlugin(ZoomPlugin.create({ maxZoom, deltaThreshold: Number.POSITIVE_INFINITY }))
+      ws.on('zoom', (minPxPerSec) => { currentPxPerSec.value = minPxPerSec })
+      disableWheelZoom = setupWheelZoomStepping(ws)
+
       regionsPlugin.on('region-updated', (region) => {
         if (region.id.startsWith('keep-')) syncKeepRangesFromRegions()
         if (region.id === 'noise-profile') noiseRegionRef.value = { start: region.start, end: region.end }
@@ -329,6 +432,7 @@ onMounted(() => {
 
       ws.on('ready', (dur) => {
         masterDuration.value = dur
+        zoomLevels = computeZoomLevels(dur, containerRef.value!.clientWidth)
         keepRanges.value = [{ start: 0, end: dur }]
         pushHistory()
         renderRegions()
@@ -374,6 +478,7 @@ watch(monitorGain.targetLevelDb, () => {
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown)
   disableDragSelection?.()
+  disableWheelZoom?.()
   ws?.destroy()
 })
 
@@ -575,12 +680,16 @@ const hasEdits = computed(() => {
         aria-label="Preview loudness target"
       >
       <span class="text-sm text-base-content/60 tabular-nums">{{ formatDuration(currentTime) }}</span>
+      <button v-if="isZoomed" class="btn btn-sm btn-circle" aria-label="Zoom out" @click="zoomOut">
+        <MagnifyingGlassMinusIcon class="w-4 h-4" />
+      </button>
       <button v-if="hasMarquee" class="btn btn-sm btn-error gap-1 ml-auto" @click="removeSelection">
         <ScissorsIcon class="w-4 h-4" /> Remove selection
       </button>
     </div>
     <p class="text-xs text-base-content/50 -mt-2">
       Drag on the waveform to select a range, then remove it. Drag a region's edge to trim.
+      Scroll or pinch on the waveform to zoom in for more precision.
     </p>
 
     <!-- Auto-trim -->
