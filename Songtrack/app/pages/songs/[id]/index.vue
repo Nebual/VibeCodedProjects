@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { PauseIcon, PlayIcon } from '@heroicons/vue/24/solid'
+import { PauseIcon, PlayIcon, PencilIcon } from '@heroicons/vue/24/solid'
 
 interface SongDetail {
   id: string
@@ -109,10 +109,14 @@ async function deleteSong() {
         <PauseIcon v-if="player.currentSong.value?.id === song.id && player.isPlaying.value" class="w-5 h-5" />
         <PlayIcon v-else class="w-5 h-5" />
       </button>
-      <div>
+      <div class="flex-1">
         <h1 class="text-xl font-semibold">{{ song.title }}</h1>
         <p v-if="song.durationS" class="text-sm text-base-content/60">{{ formatDuration(song.durationS) }}</p>
       </div>
+      <NuxtLink :to="`/songs/${songId}/edit`" class="btn btn-sm btn-primary">
+        <PencilIcon class="w-3.5 h-3.5 mr-0.5" />
+        Edit
+      </NuxtLink>
     </div>
 
     <div class="grid grid-cols-2 gap-3">
@@ -153,7 +157,6 @@ async function deleteSong() {
     <div class="divider" />
 
     <div class="flex flex-wrap items-center gap-2">
-      <NuxtLink :to="`/songs/${songId}/edit`" class="btn btn-sm btn-outline">Edit</NuxtLink>
       <a :href="downloadUrl('mp3')" class="btn btn-sm btn-outline">Download MP3</a>
       <a :href="downloadUrl('ogg')" class="btn btn-sm btn-outline">Download OGG</a>
       <button class="btn btn-sm" :disabled="sharing" @click="toggleShare">

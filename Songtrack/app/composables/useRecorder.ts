@@ -17,8 +17,10 @@ export interface RecordedTake {
 }
 
 export const BUCKET_RATE = 10 // waveform buckets per second
-/** Length of the "hold still" room-tone capture at the start of a fresh recording. */
+/** Length of the room-tone sample captured at the tail of a recording. */
 export const AMBIENCE_LEAD_IN_S = 5
+/** Below this average RMS (of the raw analyser buckets, 0-1 scale), the tail is assumed to be quiet room tone. */
+const QUIET_RMS_THRESHOLD = 0.02
 
 /**
  * Static gain to apply to the review-playback buffer, estimated from the
@@ -91,11 +93,11 @@ export function useRecorder() {
   const isPreviewReady = ref(false)
   const error = ref<string | null>(null)
   const recoverableSessionId = ref<string | null>(null)
-  /** User-facing toggle, read once when `start()` begins the very first take. */
-  const ambienceEnabled = ref(true)
-  /** Set once, from the first take's opening seconds, if the ambience lead-in ran. */
+  /** Room-tone span to feed the denoiser, in absolute timeline seconds. Auto-guessed from a quiet
+   *  tail on pause, or explicitly set by `recordAmbientNoise()`. */
   const noiseRegion = ref<NoiseRegion | null>(null)
-  let firstTakeId: string | null = null
+  /** Once the user has explicitly captured ambience via `recordAmbientNoise()`, stop overwriting it with guesses. */
+  const ambienceManuallySet = ref(false)
 
   let stream: MediaStream | null = null
   let mediaRecorder: MediaRecorder | null = null
@@ -141,12 +143,6 @@ export function useRecorder() {
   const punchInWarning = computed(() => {
     if (state.value !== 'paused') return 0
     return punchInOverwriteAmount(timelineTakes.value, reviewPosition.value)
-  })
-
-  /** Seconds left in the ambience lead-in countdown; 0 once past it, on a punch-in, or if it wasn't used. */
-  const leadInRemaining = computed(() => {
-    if (!noiseRegion.value || state.value !== 'recording' || currentTakeId.value !== firstTakeId) return 0
-    return Math.max(0, noiseRegion.value.end - displayDuration.value)
   })
 
   /** Last ~10s of RMS buckets for the take currently being recorded. */
@@ -321,11 +317,22 @@ export function useRecorder() {
       await acquireWakeLock()
       setMediaSessionRecording(true)
       await beginTake(0)
-      firstTakeId = currentTakeId.value
-      noiseRegion.value = ambienceEnabled.value ? { start: 0, end: AMBIENCE_LEAD_IN_S } : null
       state.value = 'recording'
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Could not access the microphone.'
+    }
+  }
+
+  /** If the last AMBIENCE_LEAD_IN_S of the timeline are quiet, guess it's room tone. Never
+   *  overwrites a region the user explicitly captured via `recordAmbientNoise()`. */
+  function maybeGuessAmbience() {
+    if (ambienceManuallySet.value) return
+    const tailBuckets = Math.round(AMBIENCE_LEAD_IN_S * BUCKET_RATE)
+    const tail = reviewWaveform.value.slice(-tailBuckets)
+    if (tail.length < tailBuckets) return
+    const avg = tail.reduce((sum, v) => sum + v, 0) / tail.length
+    if (avg < QUIET_RMS_THRESHOLD) {
+      noiseRegion.value = { start: Math.max(0, elapsedTotal.value - AMBIENCE_LEAD_IN_S), end: elapsedTotal.value }
     }
   }
 
@@ -337,6 +344,7 @@ export function useRecorder() {
     reviewPosition.value = elapsedTotal.value
     isPreviewReady.value = false
     await rebuildMergedBuffer()
+    maybeGuessAmbience()
   }
 
   async function resume() {
@@ -345,6 +353,17 @@ export function useRecorder() {
     setMediaSessionRecording(true)
     await beginTake(reviewPosition.value)
     state.value = 'recording'
+  }
+
+  /** Records a deliberate AMBIENCE_LEAD_IN_S room-tone sample at the current (end-of-timeline)
+   *  position, then pauses again and locks the result in as `noiseRegion`. */
+  async function recordAmbientNoise() {
+    const startPos = reviewPosition.value
+    ambienceManuallySet.value = true
+    await resume()
+    await new Promise(resolve => setTimeout(resolve, AMBIENCE_LEAD_IN_S * 1000))
+    await pause()
+    noiseRegion.value = { start: startPos, end: elapsedTotal.value }
   }
 
   /**
@@ -583,8 +602,8 @@ export function useRecorder() {
     isPreviewReady,
     punchInWarning,
     recoverableSessionId,
-    ambienceEnabled,
-    leadInRemaining,
+    noiseRegion,
+    ambienceManuallySet,
     start,
     pause,
     resume,
@@ -594,6 +613,7 @@ export function useRecorder() {
     pauseReview,
     seekReview,
     seekToEnd,
+    recordAmbientNoise,
     checkForOrphanedSession,
     recoverSession,
     discardOrphanedSession,

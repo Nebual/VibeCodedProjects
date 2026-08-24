@@ -19,18 +19,9 @@ const {
   isPreviewReady,
   punchInWarning,
   recoverableSessionId,
-  ambienceEnabled,
-  leadInRemaining,
+  noiseRegion,
+  ambienceManuallySet,
 } = recorder
-
-// Brief "Go!" flash the instant the ambience countdown finishes.
-const showGoSignal = ref(false)
-watch(leadInRemaining, (curr, prev) => {
-  if (prev > 0 && curr === 0) {
-    showGoSignal.value = true
-    setTimeout(() => { showGoSignal.value = false }, 600)
-  }
-})
 
 const router = useRouter()
 
@@ -61,6 +52,13 @@ const tagPickerRef = useTemplateRef<{ commitPending: () => void }>('tagPicker')
 
 async function openSaveSheet() {
   if (state.value === 'recording') await recorder.pause()
+  // A name typed into the inline field already covers the one required field in
+  // the sheet — skip straight to saving instead of asking for it a second time.
+  // Tags can still be added afterward from the song page.
+  if (saveTitle.value.trim()) {
+    await confirmSave()
+    return
+  }
   showSaveSheet.value = true
 }
 
@@ -133,11 +131,6 @@ const hasContent = computed(() => state.value !== 'idle' || takes.value.length >
 
     <p v-if="error" class="alert alert-error text-sm">{{ error }}</p>
 
-    <label v-if="state === 'idle' && takes.length === 0" class="label cursor-pointer justify-center gap-3">
-      <span class="label-text">5s ambience lead-in</span>
-      <input v-model="ambienceEnabled" type="checkbox" class="toggle toggle-sm toggle-primary">
-    </label>
-
     <div class="text-center text-5xl font-mono font-semibold tabular-nums my-4">
       {{ formatDuration(displayDuration) }}
     </div>
@@ -153,16 +146,6 @@ const hasContent = computed(() => state.value !== 'idle' || takes.value.length >
         :buckets="rollingWaveform"
         :color="isClipping ? 'oklch(65% 0.2 25)' : undefined"
       />
-      <!-- Overlays the still-live waveform rather than replacing it — seeing
-           the mic actually respond matters just as much during the ambience
-           sample as it does once the music starts. -->
-      <div v-if="leadInRemaining > 0" class="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-base-300/80">
-        <span class="text-sm text-base-content/70">Hold still — sampling the room</span>
-        <span class="text-3xl font-mono tabular-nums">{{ Math.ceil(leadInRemaining) }}</span>
-      </div>
-      <div v-else-if="showGoSignal" class="absolute inset-0 flex items-center justify-center bg-base-300/80">
-        <span class="text-3xl font-semibold text-success">Go!</span>
-      </div>
     </div>
 
     <div v-if="state === 'paused'" class="flex flex-col gap-2">
@@ -231,6 +214,16 @@ const hasContent = computed(() => state.value !== 'idle' || takes.value.length >
       {{ formatDuration(punchInWarning) }} of existing audio
     </p>
 
+    <div v-if="state === 'paused' && reviewPosition >= elapsedTotal - 0.05" class="flex items-center justify-between gap-2">
+      <span v-if="!noiseRegion" class="text-xs text-base-content/60">
+        Tip: hit record for 5s of silence here to sample room ambience.
+      </span>
+      <span v-else class="flex-1" />
+      <button class="btn btn-xs" @click="recorder.recordAmbientNoise">
+        {{ ambienceManuallySet ? 'Re-record ambient' : 'Record ambient noise' }}
+      </button>
+    </div>
+
     <input
       v-if="state === 'paused'"
       v-model="saveTitle"
@@ -242,9 +235,11 @@ const hasContent = computed(() => state.value !== 'idle' || takes.value.length >
     <button
       v-if="hasContent"
       class="btn btn-outline w-full"
+      :disabled="saving"
       @click="openSaveSheet"
     >
-      Save
+      <span v-if="saving" class="loading loading-spinner loading-sm" />
+      {{ saving ? 'Saving…' : 'Save' }}
     </button>
 
     <!-- Cancel confirmation -->
