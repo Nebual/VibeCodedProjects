@@ -4,7 +4,7 @@
  * sample past -0.2 dBFS (clip-safe). Used to drive preview-only monitoring
  * boosts — never applied to what actually gets recorded/exported.
  */
-export function computeNormalizeGain(buffer: AudioBuffer, targetRms: number, maxGain = 6): number {
+export function computeNormalizeGain(buffer: AudioBuffer, targetRms: number, maxGain = 50): number {
   const STRIDE = 8 // sampling stride keeps this cheap even for multi-minute buffers
   let sumSquares = 0
   let sampleCount = 0
@@ -33,7 +33,7 @@ export function computeNormalizeGain(buffer: AudioBuffer, targetRms: number, max
  * lets the main master waveform get a gain estimate without decoding the
  * whole file client-side.
  */
-export function computeNormalizeGainFromPeaks(peaks: Float32Array, targetRms: number, maxGain = 6): number {
+export function computeNormalizeGainFromPeaks(peaks: Float32Array, targetRms: number, maxGain = 50): number {
   let sumSquares = 0
   let peak = 0
   for (let i = 0; i < peaks.length; i++) {

@@ -30,7 +30,7 @@ export const AMBIENCE_LEAD_IN_S = 5
  */
 function computePreviewGain(buffer: AudioBuffer): number {
   const TARGET_RMS = 0.1
-  const MAX_GAIN = 6
+  const MAX_GAIN = 50
   const STRIDE = 8 // sampling stride keeps this cheap even for multi-minute takes
   let sumSquares = 0
   let sampleCount = 0

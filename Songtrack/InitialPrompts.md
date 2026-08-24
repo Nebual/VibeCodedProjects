@@ -121,11 +121,13 @@ The marker on the seek bar is in the wrong place if there's not enough audio to 
 
 The noise reduction doesn't seem to behave any differently whether I select an ambience sample or not, either way it doesn't work well.
 
+I don't think the 'Preview loudness' is affecting anything.
+
 # To be sent:
 
-Ambience sample still doesn't seem to have an effect on the previews.
+Ambience sample doesn't seem to have an effect on the previews. Is the FFMPeg syntax right?
 
-The recording page preview and the edit page's top preview both are still too quiet - on one device they're tolerable (but still 30% quieter than the final -16 LUFS), on another they're better than initially but still too quiet (75% quieter than the final -16 LUFS).
+The recording page preview and the edit page's top preview both are still too quiet - on one device they're tolerable (but still 30% quieter than the final -16 LUFS), on another they're 75% quieter than the final -16 LUFS.
 
 Timing wise, lets replace the '5s ambience lead-in' with a suggestion to capture 5s of ambience at the end of the recording. The suggestion can show above the 'Name this recording' input, in small text, when the seek is at the end.
 
