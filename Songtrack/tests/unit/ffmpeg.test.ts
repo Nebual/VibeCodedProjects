@@ -63,13 +63,35 @@ describe('buildFilterGraph', () => {
     expect(graph.filterComplex).not.toContain('asendcmd')
   })
 
-  it('wires a learned noise profile via asendcmd sn start/stop when a noise region is given', () => {
+  it('wires a learned noise profile by priming afftdn with the region prepended, then trimming the prefix back off', () => {
+    // afftdn is forward-only: a profile learned via sn start/stop can only clean audio that comes
+    // after it in the processed stream. Since the region can sit anywhere in the timeline (in
+    // practice, at the tail — after the real content, not before it), the region's own audio is
+    // self-extracted from the already-complete chain and concatenated in *front* of it, trained on
+    // at [0, duration], then that synthetic prefix is trimmed back off the output.
     const list = editList({ filters: [{ type: 'afftdn', nr: 10, gs: 6, noiseRegion: { start: 0.2, end: 4.8 } }] })
     const graph = buildFilterGraph(SOURCES, list)
+    expect(graph.filterComplex).toContain('asplit=2[nssrc0][nssplit0]')
+    expect(graph.filterComplex).toContain('[nssplit0]atrim=start=0.2:end=4.8,asetpts=PTS-STARTPTS[nstrain0]')
+    expect(graph.filterComplex).toContain('[nstrain0][nssrc0]concat=n=2:v=0:a=1[nsprimed0]')
     expect(graph.filterComplex).toContain(
-      `asendcmd=c='0.2-4.8 [enter] afftdn@f0 sn start,[leave] afftdn@f0 sn stop',afftdn@f0=nr=10:gs=6[filt0]`,
+      `asendcmd=c='0-4.6 [enter] afftdn@f0 sn start,[leave] afftdn@f0 sn stop',afftdn@f0=nr=10:gs=6[nsfiltered0]`,
     )
+    expect(graph.filterComplex).toContain('[nsfiltered0]atrim=start=4.6,asetpts=PTS-STARTPTS[nstrimmed0]')
     expect(graph.filterComplex).not.toContain(':tn=1')
+    expect(graph.outputLabel).toBe('nstrimmed0')
+  })
+
+  it('uses a caller-supplied training input instead of self-splitting when one is provided', () => {
+    // e.g. a short preview window that isn't guaranteed to contain the region itself — the caller
+    // reads the region's audio as a separate input and hands it in by label.
+    const list = editList({ filters: [{ type: 'afftdn', nr: 10, gs: 6, noiseRegion: { start: 20, end: 25 } }] })
+    const graph = buildFilterGraph(SOURCES, list, { noiseTrainingLabel: '1:a' })
+    expect(graph.filterComplex).not.toContain('asplit')
+    expect(graph.filterComplex).toContain('[1:a][seg0]concat=n=2:v=0:a=1[nsprimed0]')
+    expect(graph.filterComplex).toContain(
+      `asendcmd=c='0-5 [enter] afftdn@f0 sn start,[leave] afftdn@f0 sn stop',afftdn@f0=nr=10:gs=6[nsfiltered0]`,
+    )
   })
 
   it('renders a notch filter as chained high-Q equalizer cuts, one per frequency', () => {

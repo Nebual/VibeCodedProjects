@@ -124,10 +124,10 @@ export interface RenderSource {
 
 /**
  * `afftdn` learns a much better noise profile from a timed sample of real
- * room tone (the ambience lead-in, or a hand-picked quiet region) than from
- * its own blind noise-floor guess. `asendcmd` fires `sn start`/`sn stop` at
- * the region's edges, targeting this filter instance by name so multiple
- * afftdn filters in one graph (audition mode aside) never cross-talk.
+ * room tone (a hand-picked or auto-guessed quiet region) than from its own
+ * blind noise-floor guess. `asendcmd` fires `sn start`/`sn stop` at the
+ * region's edges, targeting this filter instance by name so multiple afftdn
+ * filters in one graph (audition mode aside) never cross-talk.
  * Falls back to `tn=1` (continuous floor tracking) when there's no region —
  * the plan's documented fallback for when AGC has polluted a fixed profile.
  */
@@ -140,6 +140,57 @@ function afftdnLink(chain: string, next: string, f: AfftdnFilter, index: number,
   return `[${chain}]asendcmd=c='${cmd}',${expr}[${next}]`
 }
 
+/**
+ * `afftdn` is a forward-only streaming filter: a profile learned via `sn
+ * start`/`sn stop` can only clean audio that comes *after* it in the
+ * processed stream, never audio already emitted before that point. Since the
+ * ambience sample is captured at the *tail* of a recording (after the real
+ * content, not before it), wiring `sn` directly at the region's own absolute
+ * position would train a profile only in time to apply to the ambience
+ * itself — none of the actual recording would ever benefit.
+ *
+ * Instead, this synthesizes a "primed" stream: the region's own audio
+ * (`trainingLabel` if the caller already has it as a separate input, e.g. a
+ * short preview window that may not otherwise contain the region — or
+ * self-extracted via `asplit`+`atrim` from `chain` itself when the caller's
+ * chain is already the complete, self-contained timeline the region was
+ * captured against) is concatenated in *front* of the real content, so `sn`
+ * always has a chance to learn before any real audio needs cleaning. The
+ * synthetic prefix is trimmed back off the processed output afterward.
+ */
+function wireAfftdnWithRegion(
+  filterParts: string[],
+  chain: string,
+  f: AfftdnFilter,
+  index: number,
+  trainingLabel: string | undefined,
+  om?: 'n',
+): string {
+  const region = f.noiseRegion!
+  const trainingDuration = region.end - region.start
+
+  let train = trainingLabel
+  let main = chain
+  if (!train) {
+    const splitMain = `nssrc${index}`
+    const splitTrain = `nssplit${index}`
+    filterParts.push(`[${chain}]asplit=2[${splitMain}][${splitTrain}]`)
+    train = `nstrain${index}`
+    filterParts.push(`[${splitTrain}]atrim=start=${region.start}:end=${region.end},asetpts=PTS-STARTPTS[${train}]`)
+    main = splitMain
+  }
+
+  const primed = `nsprimed${index}`
+  filterParts.push(`[${train}][${main}]concat=n=2:v=0:a=1[${primed}]`)
+
+  const filtered = `nsfiltered${index}`
+  filterParts.push(afftdnLink(primed, filtered, { ...f, noiseRegion: { start: 0, end: trainingDuration } }, index, om))
+
+  const trimmed = `nstrimmed${index}`
+  filterParts.push(`[${filtered}]atrim=start=${trainingDuration},asetpts=PTS-STARTPTS[${trimmed}]`)
+  return trimmed
+}
+
 export interface RenderOptions {
   /**
    * "Listen to what's being removed": outputs only the material afftdn
@@ -147,6 +198,15 @@ export interface RenderOptions {
    * A/B guard against over-processing. Throws if there's no afftdn filter.
    */
   audition?: boolean
+  /**
+   * Label of an extra input the caller has already seeked/trimmed to exactly
+   * the noiseRegion's own audio span — needed when `startChain` isn't
+   * guaranteed to contain that span itself (e.g. a short preview window that
+   * may fall anywhere relative to the region). Omit when `startChain` is
+   * already the complete timeline the region was captured against; the
+   * training clip is then self-extracted from it instead.
+   */
+  noiseTrainingLabel?: string
 }
 
 export interface FilterGraph {
@@ -177,6 +237,10 @@ function appendFilterChain(
     const afftdnFilters = filters.filter((f): f is AfftdnFilter => f.type === 'afftdn')
     if (afftdnFilters.length === 0) throw new Error('No noise-reduction filter to audition')
     afftdnFilters.forEach((f, i) => {
+      if (f.noiseRegion) {
+        chain = wireAfftdnWithRegion(filterParts, chain, f, i, opts.noiseTrainingLabel, 'n')
+        return
+      }
       const next = `filt${i}`
       filterParts.push(afftdnLink(chain, next, f, i, 'n'))
       chain = next
@@ -195,6 +259,10 @@ function appendFilterChain(
   }
 
   filters.forEach((f, i) => {
+    if (f.type === 'afftdn' && f.noiseRegion) {
+      chain = wireAfftdnWithRegion(filterParts, chain, f, i, opts.noiseTrainingLabel)
+      return
+    }
     const next = `filt${i}`
     if (f.type === 'afftdn') {
       filterParts.push(afftdnLink(chain, next, f, i))

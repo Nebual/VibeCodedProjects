@@ -1,29 +1,7 @@
 import { readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { nanoid } from 'nanoid'
-import type { EditFilter, EditList } from '#shared/types'
-
-/**
- * `noiseRegion` is recorded in absolute master-timeline seconds (wherever the user dragged it
- * on the full waveform), but this endpoint always hands afftdn a short, `-ss`-shifted window
- * whose own internal clock restarts at 0 — so the region's sn-start/stop timestamps need
- * rebasing to that window's local time, or they'd almost never land inside such a short clip
- * and the learned-profile training would silently never fire (making "with ambience sample"
- * and "without" sound identical, regardless of strength/smoothing settings).
- */
-function localizeFilters(filters: EditFilter[], windowStart: number, windowDuration: number): EditFilter[] {
-  return filters.map((f) => {
-    if (f.type !== 'afftdn' || !f.noiseRegion) return f
-    const localStart = Math.max(0, f.noiseRegion.start - windowStart)
-    const localEnd = Math.min(windowDuration, f.noiseRegion.end - windowStart)
-    if (localEnd <= localStart) {
-      // The sampled ambience doesn't fall within this window at all — fall back to continuous
-      // floor-tracking for this preview, same as the "no region" case.
-      return { type: 'afftdn', nr: f.nr, gs: f.gs }
-    }
-    return { ...f, noiseRegion: { start: localStart, end: localEnd } }
-  })
-}
+import type { AfftdnFilter, EditFilter, EditList } from '#shared/types'
 
 export default defineEventHandler(async (event) => {
   const actor = await requireActor(event)
@@ -50,8 +28,21 @@ export default defineEventHandler(async (event) => {
     if (body.audition && !body.filters.some(f => f.type === 'afftdn')) {
       throw createError({ statusCode: 400, statusMessage: 'No noise-reduction filter to audition' })
     }
-    const localizedFilters = localizeFilters(body.filters, start, duration)
-    const graph = buildFiltersOnlyGraph('0:a', localizedFilters, body.gain, { audition: body.audition })
+    // afftdn's learned-profile training can only ever apply to audio that comes *after* it in the
+    // processed stream — never to what already played before. The ambience region can fall
+    // anywhere relative to this short window (typically nowhere near it, since it's captured at
+    // the tail of a recording), so its training clip is read from the master a second time here
+    // and handed to the filter graph separately, rather than assumed to already be present in the
+    // windowed input.
+    const afftdnWithRegion = body.filters.find((f): f is AfftdnFilter =>
+      f.type === 'afftdn' && !!f.noiseRegion && f.noiseRegion.end > f.noiseRegion.start)
+    let noiseTrainingLabel: string | undefined
+    if (afftdnWithRegion?.noiseRegion) {
+      const { start: regionStart, end: regionEnd } = afftdnWithRegion.noiseRegion
+      inputArgs.push('-ss', String(regionStart), '-t', String(regionEnd - regionStart), '-i', song.masterPath)
+      noiseTrainingLabel = '1:a'
+    }
+    const graph = buildFiltersOnlyGraph('0:a', body.filters, body.gain, { audition: body.audition, noiseTrainingLabel })
     filterParts.push(graph.filterComplex)
     outputLabel = graph.outputLabel
   }
