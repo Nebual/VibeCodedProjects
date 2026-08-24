@@ -123,9 +123,9 @@ The noise reduction doesn't seem to behave any differently whether I select an a
 
 I don't think the 'Preview loudness' is affecting anything.
 
+The recording page preview and the edit page's top preview both are still too quiet - on one device they're tolerable (but still 30% quieter than the final -16 LUFS), on another they're 75% quieter than the final -16 LUFS.
+
+
 # To be sent:
 
 Ambience sample doesn't seem to have an effect on the previews. Is the FFMPeg syntax right?
-
-The recording page preview and the edit page's top preview both are still too quiet - on one device they're tolerable (but still 30% quieter than the final -16 LUFS), on another they're 75% quieter than the final -16 LUFS.
-

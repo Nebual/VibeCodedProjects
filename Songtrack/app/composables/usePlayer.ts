@@ -14,6 +14,11 @@ const playbackRate = ref(1)
 const loop = ref(false)
 
 let audioEl: HTMLAudioElement | null = null
+// Preview-loudness normalization, shared with the Edit page's monitorGain — moving either slider
+// updates the same targetLevelDb, and both recompute gain from this song's own peaks.
+const monitorGain = useMonitorGain()
+let masterGainNode: GainNode | null = null
+let currentPeaks: Float32Array | null = null
 
 function ensureAudioEl(): HTMLAudioElement {
   if (!audioEl) {
@@ -23,8 +28,15 @@ function ensureAudioEl(): HTMLAudioElement {
     audioEl.addEventListener('play', () => { isPlaying.value = true })
     audioEl.addEventListener('pause', () => { isPlaying.value = false })
     audioEl.addEventListener('ended', () => { isPlaying.value = false })
+    masterGainNode = monitorGain.wrapElement(audioEl)
   }
   return audioEl
+}
+
+if (import.meta.client) {
+  watch(monitorGain.targetLevelDb, () => {
+    if (masterGainNode && currentPeaks) masterGainNode.gain.value = monitorGain.gainForPeaks(currentPeaks)
+  })
 }
 
 export function usePlayer() {
@@ -35,6 +47,15 @@ export function usePlayer() {
       el.src = `/api/songs/${song.id}/audio`
       el.playbackRate = playbackRate.value
       el.loop = loop.value
+      // Reset to unity until this song's own peaks resolve, so the previous song's gain
+      // never briefly gets applied to different material.
+      currentPeaks = null
+      if (masterGainNode) masterGainNode.gain.value = 1
+      $fetch<{ data: number[] }>(`/api/songs/${song.id}/peaks`).then((peaks) => {
+        if (currentSong.value?.id !== song.id) return // superseded by another song already
+        currentPeaks = peaksToFloatArray(peaks.data)
+        if (masterGainNode) masterGainNode.gain.value = monitorGain.gainForPeaks(currentPeaks)
+      }).catch(() => {}) // peaks not generated yet — play at unity gain
     }
     el.play().catch(() => {})
   }

@@ -121,12 +121,6 @@ function subtractRange(ranges: KeepRange[], cut: KeepRange): KeepRange[] {
   return result.filter(r => r.end - r.start > 0.05)
 }
 
-function peaksToFloatArray(data: number[]): Float32Array {
-  const arr = new Float32Array(data.length)
-  for (let i = 0; i < data.length; i++) arr[i] = data[i]! / 128
-  return arr
-}
-
 function regionColorFor(index: number): string {
   const colors = ['rgba(34,197,94,0.25)', 'rgba(59,130,246,0.25)', 'rgba(168,85,247,0.25)']
   return colors[index % colors.length]!
@@ -571,6 +565,15 @@ const hasEdits = computed(() => {
       <button class="btn btn-sm btn-circle" :disabled="!isReady" @click="togglePlay">
         {{ isPlaying ? '⏸' : '▶' }}
       </button>
+      <input
+        v-model.number="monitorGain.targetLevelDb.value"
+        type="range"
+        class="w-20 accent-primary"
+        :min="monitorGain.minTargetDb"
+        :max="monitorGain.maxTargetDb"
+        step="1"
+        aria-label="Preview loudness target"
+      >
       <span class="text-sm text-base-content/60 tabular-nums">{{ formatDuration(currentTime) }}</span>
       <button v-if="hasMarquee" class="btn btn-sm btn-error gap-1 ml-auto" @click="removeSelection">
         <ScissorsIcon class="w-4 h-4" /> Remove selection
@@ -579,20 +582,6 @@ const hasEdits = computed(() => {
     <p class="text-xs text-base-content/50 -mt-2">
       Drag on the waveform to select a range, then remove it. Drag a region's edge to trim.
     </p>
-
-    <div class="flex items-center gap-2">
-      <span class="text-sm text-base-content/60 whitespace-nowrap">Preview loudness</span>
-      <input
-        v-model.number="monitorGain.targetLevelDb.value"
-        type="range"
-        class="range range-xs w-32"
-        min="-30"
-        max="-6"
-        step="1"
-        aria-label="Preview loudness target"
-      >
-      <span class="text-xs text-base-content/50 tabular-nums">{{ monitorGain.targetLevelDb.value }}dB</span>
-    </div>
 
     <!-- Auto-trim -->
     <div class="card bg-base-100 shadow-sm p-4">

@@ -27,6 +27,13 @@ export function computeNormalizeGain(buffer: AudioBuffer, targetRms: number, max
   return Math.min(targetGain, peakSafeGain)
 }
 
+/** Decodes the 8-bit signed peaks envelope returned by the waveform peaks API into -1..1 floats. */
+export function peaksToFloatArray(data: number[]): Float32Array {
+  const arr = new Float32Array(data.length)
+  for (let i = 0; i < data.length; i++) arr[i] = data[i]! / 128
+  return arr
+}
+
 /**
  * Same idea as `computeNormalizeGain` but over an 8-bit min/max peaks
  * envelope (as returned by the waveform peaks API) instead of full PCM —
