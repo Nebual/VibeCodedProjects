@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { buildFilterGraph, buildFiltersOnlyGraph } from '../../server/utils/ffmpeg'
-import type { EditList } from '../../shared/types'
+import { buildFilterGraph, buildFiltersOnlyGraph, resolveNoiseTrainingSource } from '../../server/utils/ffmpeg'
+import type { EditFilter, EditList } from '../../shared/types'
 
 const SOURCES = [
   { id: 'take-1', path: '/data/take-1.ogg' },
@@ -68,18 +68,62 @@ describe('buildFilterGraph', () => {
     // after it in the processed stream. Since the region can sit anywhere in the timeline (in
     // practice, at the tail — after the real content, not before it), the region's own audio is
     // self-extracted from the already-complete chain and concatenated in *front* of it, trained on
-    // at [0, duration], then that synthetic prefix is trimmed back off the output.
+    // at [0, duration], then that synthetic prefix is trimmed back off the output. The join itself
+    // is a short crossfade (not a hard concat) so the trim point isn't a raw discontinuity.
     const list = editList({ filters: [{ type: 'afftdn', nr: 10, gs: 6, noiseRegion: { start: 0.2, end: 4.8 } }] })
     const graph = buildFilterGraph(SOURCES, list)
     expect(graph.filterComplex).toContain('asplit=2[nssrc0][nssplit0]')
     expect(graph.filterComplex).toContain('[nssplit0]atrim=start=0.2:end=4.8,asetpts=PTS-STARTPTS[nstrain0]')
-    expect(graph.filterComplex).toContain('[nstrain0][nssrc0]concat=n=2:v=0:a=1[nsprimed0]')
+    expect(graph.filterComplex).toContain('[nstrain0][nssrc0]acrossfade=d=0.02[nsprimed0]')
     expect(graph.filterComplex).toContain(
       `asendcmd=c='0-4.6 [enter] afftdn@f0 sn start,[leave] afftdn@f0 sn stop',afftdn@f0=nr=10:gs=6[nsfiltered0]`,
     )
-    expect(graph.filterComplex).toContain('[nsfiltered0]atrim=start=4.6,asetpts=PTS-STARTPTS[nstrimmed0]')
+    expect(graph.filterComplex).toContain('[nsfiltered0]atrim=start=4.58,asetpts=PTS-STARTPTS[nstrimmed0]')
     expect(graph.filterComplex).not.toContain(':tn=1')
     expect(graph.outputLabel).toBe('nstrimmed0')
+  })
+
+  it('clamps the crossfade to the training duration when the ambience region is shorter than the crossfade window', () => {
+    const list = editList({ filters: [{ type: 'afftdn', nr: 10, gs: 6, noiseRegion: { start: 0, end: 0.01 } }] })
+    const graph = buildFilterGraph(SOURCES, list)
+    expect(graph.filterComplex).toContain('[nstrain0][nssrc0]acrossfade=d=0.01[nsprimed0]')
+    expect(graph.filterComplex).toContain('[nsfiltered0]atrim=start=0,asetpts=PTS-STARTPTS[nstrimmed0]')
+  })
+
+  it('adds a dedicated input for an explicit noise-training source, bypassing self-extraction', () => {
+    // The region is captured against the full original take, but editList.segments here is a
+    // subset (a crop) of it — self-extracting from the chain itself would grab whatever audio
+    // happens to sit at [0.2, 4.8] in the *cropped* render, not the actual ambience sample. An
+    // explicit noiseTrainingSource sidesteps that by reading the true span directly from the take.
+    // The extra input is read in full and trimmed via atrim (not -ss/-t container seeking), since
+    // container-level seeking is unreliable on some formats (e.g. browser-recorded webm).
+    const list = editList({ filters: [{ type: 'afftdn', nr: 10, gs: 6, noiseRegion: { start: 0.2, end: 4.8 } }] })
+    const graph = buildFilterGraph(SOURCES, list, {
+      noiseTrainingSource: { path: '/data/take-1.ogg', start: 20, duration: 4.6 },
+    })
+    expect(graph.inputArgs).toEqual(['-i', '/data/take-1.ogg', '-i', '/data/take-1.ogg'])
+    expect(graph.filterComplex).not.toContain('asplit')
+    expect(graph.filterComplex).toContain('[1:a]atrim=start=20:end=24.6,asetpts=PTS-STARTPTS[nstrainsrc]')
+    expect(graph.filterComplex).toContain('[nstrainsrc][seg0]acrossfade=d=0.02[nsprimed0]')
+    expect(graph.filterComplex).toContain(
+      `asendcmd=c='0-4.6 [enter] afftdn@f0 sn start,[leave] afftdn@f0 sn stop',afftdn@f0=nr=10:gs=6[nsfiltered0]`,
+    )
+  })
+
+  it('indexes the training input after all unique segment sources, even with multiple takes', () => {
+    const list = editList({
+      segments: [
+        { source: 'take-1', start: 0, end: 5 },
+        { source: 'take-2', start: 0, end: 5 },
+      ],
+      filters: [{ type: 'afftdn', nr: 10, gs: 6, noiseRegion: { start: 0, end: 2 } }],
+    })
+    const graph = buildFilterGraph(SOURCES, list, {
+      noiseTrainingSource: { path: '/data/take-2.ogg', start: 30, duration: 2 },
+    })
+    expect(graph.inputArgs).toEqual(['-i', '/data/take-1.ogg', '-i', '/data/take-2.ogg', '-i', '/data/take-2.ogg'])
+    expect(graph.filterComplex).toContain('[2:a]atrim=start=30:end=32,asetpts=PTS-STARTPTS[nstrainsrc]')
+    expect(graph.filterComplex).toContain('[nstrainsrc][cf1]acrossfade=d=0.02[nsprimed0]')
   })
 
   it('uses a caller-supplied training input instead of self-splitting when one is provided', () => {
@@ -88,7 +132,7 @@ describe('buildFilterGraph', () => {
     const list = editList({ filters: [{ type: 'afftdn', nr: 10, gs: 6, noiseRegion: { start: 20, end: 25 } }] })
     const graph = buildFilterGraph(SOURCES, list, { noiseTrainingLabel: '1:a' })
     expect(graph.filterComplex).not.toContain('asplit')
-    expect(graph.filterComplex).toContain('[1:a][seg0]concat=n=2:v=0:a=1[nsprimed0]')
+    expect(graph.filterComplex).toContain('[1:a][seg0]acrossfade=d=0.02[nsprimed0]')
     expect(graph.filterComplex).toContain(
       `asendcmd=c='0-5 [enter] afftdn@f0 sn start,[leave] afftdn@f0 sn stop',afftdn@f0=nr=10:gs=6[nsfiltered0]`,
     )
@@ -118,13 +162,13 @@ describe('buildFilterGraph', () => {
     expect(graph.filterComplex).toContain('afade=t=out:st=8.8:d=1.2')
   })
 
-  it('applies loudnorm before the noise-reduction filters, so afftdn analyzes properly-leveled audio', () => {
+  it('applies loudnorm after the noise-reduction filters, so afftdn analyzes the original noise floor', () => {
     const list = editList({
       filters: [{ type: 'afftdn', nr: 12, gs: 6 }],
       gain: { mode: 'loudnorm', targetLufs: -16 },
     })
     const graph = buildFilterGraph(SOURCES, list)
-    expect(graph.filterComplex.indexOf('loudnorm=I=-16')).toBeLessThan(graph.filterComplex.indexOf('afftdn@f0'))
+    expect(graph.filterComplex.indexOf('afftdn@f0')).toBeLessThan(graph.filterComplex.indexOf('loudnorm=I=-16'))
   })
 
   it('ends the graph on the final label, mapped by the caller', () => {
@@ -177,8 +221,44 @@ describe('buildFiltersOnlyGraph', () => {
     expect(graph.filterComplex).toContain('om=n')
   })
 
-  it('threads gain through as a pre-filter loudnorm step', () => {
+  it('threads gain through as a post-filter loudnorm step', () => {
     const graph = buildFiltersOnlyGraph('0:a', [{ type: 'highpass', freq: 35 }], { mode: 'loudnorm', targetLufs: -18 })
-    expect(graph.filterComplex.indexOf('loudnorm=I=-18')).toBeLessThan(graph.filterComplex.indexOf('highpass'))
+    expect(graph.filterComplex.indexOf('highpass')).toBeLessThan(graph.filterComplex.indexOf('loudnorm=I=-18'))
+  })
+})
+
+describe('resolveNoiseTrainingSource', () => {
+  // A single take spanning the whole 0-30s original timeline — the ambience region (10-14s) sits
+  // well within it, but well outside whatever a caller's cropped editList.segments might cover.
+  const baseSegments = [{ source: 'take-1', start: 0, end: 30 }]
+
+  it('returns undefined when there is no afftdn filter', () => {
+    const filters: EditFilter[] = [{ type: 'highpass', freq: 35 }]
+    expect(resolveNoiseTrainingSource(filters, baseSegments, SOURCES)).toBeUndefined()
+  })
+
+  it('returns undefined when the afftdn filter has no noise region', () => {
+    const filters: EditFilter[] = [{ type: 'afftdn', nr: 10, gs: 6 }]
+    expect(resolveNoiseTrainingSource(filters, baseSegments, SOURCES)).toBeUndefined()
+  })
+
+  it('resolves the region to a take path + local time span', () => {
+    const filters: EditFilter[] = [{ type: 'afftdn', nr: 10, gs: 6, noiseRegion: { start: 10, end: 14 } }]
+    expect(resolveNoiseTrainingSource(filters, baseSegments, SOURCES)).toEqual({
+      path: '/data/take-1.ogg',
+      start: 10,
+      duration: 4,
+    })
+  })
+
+  it('returns undefined when the region falls outside every base segment', () => {
+    const filters: EditFilter[] = [{ type: 'afftdn', nr: 10, gs: 6, noiseRegion: { start: 100, end: 104 } }]
+    expect(resolveNoiseTrainingSource(filters, baseSegments, SOURCES)).toBeUndefined()
+  })
+
+  it('returns undefined when the resolved take has no matching source path', () => {
+    const filters: EditFilter[] = [{ type: 'afftdn', nr: 10, gs: 6, noiseRegion: { start: 10, end: 14 } }]
+    const segments = [{ source: 'missing-take', start: 0, end: 30 }]
+    expect(resolveNoiseTrainingSource(filters, segments, SOURCES)).toBeUndefined()
   })
 })

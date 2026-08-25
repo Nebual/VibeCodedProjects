@@ -22,7 +22,7 @@ test('global player shortcuts: space toggles play/pause, arrows skip 10s', async
   await page.keyboard.press('Space')
   await expect(page.getByRole('button', { name: 'Play' }).first()).toBeVisible()
 
-  const seekBar = playerBar.locator('input[type="range"]')
+  const seekBar = playerBar.getByRole('slider', { name: 'Seek' })
   const before = Number(await seekBar.inputValue())
   await page.keyboard.press('ArrowRight')
   await expect.poll(async () => Number(await seekBar.inputValue())).toBeGreaterThan(before + 5)

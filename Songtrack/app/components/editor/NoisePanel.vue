@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import type { EditFilter, EditList, NoiseRegion } from '#shared/types'
+import type { ResolvedSegment } from '#shared/utils/timeline'
 
 const props = defineProps<{
   songId: string
+  /** The current full/original take stack, resolved to segments — where windowed previews read audio from. */
+  segments: ResolvedSegment[]
   noiseRegion: NoiseRegion | null
   /** Where windowed 15s previews should center — the current playhead, typically. */
   previewCenter: number
@@ -78,7 +81,7 @@ async function detectNotches() {
   try {
     const res = await $fetch<{ frequencies: number[] }>(`/api/songs/${props.songId}/auto-notch`, {
       method: 'POST',
-      body: { region: props.noiseRegion },
+      body: { segments: props.segments, region: props.noiseRegion },
     })
     notchCandidates.value = res.frequencies
   } finally {
@@ -94,7 +97,7 @@ const previewPlayer = usePreviewPlayer()
 async function fetchWindowBlob(previewFilters: EditFilter[] | undefined, previewGain: EditList['gain'] | undefined, audition: boolean): Promise<Blob> {
   return await $fetch<Blob>(`/api/songs/${props.songId}/preview-window`, {
     method: 'POST',
-    body: { center: props.previewCenter, padding: 7.5, filters: previewFilters, gain: previewGain, audition },
+    body: { segments: props.segments, center: props.previewCenter, padding: 7.5, filters: previewFilters, gain: previewGain, audition },
   })
 }
 
@@ -140,7 +143,7 @@ async function playPreview(kind: 'processed' | 'original' | 'removed') {
 
       <div class="flex flex-col gap-1">
         <label class="text-sm flex justify-between"><span>Strength</span><span>{{ nr }}dB</span></label>
-        <input v-model.number="nr" type="range" class="range range-sm" min="6" max="24" step="1" aria-label="Noise reduction strength">
+        <input v-model.number="nr" type="range" class="range range-sm" min="6" max="32" step="1" aria-label="Noise reduction strength">
         <div class="flex justify-between text-xs text-base-content/50"><span>Gentle</span><span>Strong</span></div>
       </div>
 

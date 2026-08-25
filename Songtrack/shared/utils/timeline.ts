@@ -1,3 +1,5 @@
+import type { KeepRange } from '#shared/types'
+
 export interface TimelineTake {
   id: string
   timelineStart: number
@@ -91,9 +93,27 @@ export function punchInOverwriteAmount(takes: TimelineTake[], scrubPosition: num
   return Math.max(0, total - scrubPosition)
 }
 
-export interface KeepRange {
-  start: number
-  end: number
+/**
+ * Which segment covers a position in the concatenated (master-time) timeline a `ResolvedSegment[]`
+ * renders to, and where within that segment's own source take. Mirrors `activeTakeAt`, but over
+ * already-resolved segments rather than a raw take stack — used to map a UI position (e.g. an
+ * ambience-region or cursor position, expressed in the full timeline shown to the user) back onto
+ * the actual take file + local offset a server-side render needs to read from.
+ */
+export function resolveSegmentPosition(segments: ResolvedSegment[], position: number): { source: string, localTime: number } | null {
+  let cursor = 0
+  for (const seg of segments) {
+    const len = seg.end - seg.start
+    if (position >= cursor && position < cursor + len) {
+      return { source: seg.source, localTime: seg.start + (position - cursor) }
+    }
+    cursor += len
+  }
+  const last = segments[segments.length - 1]
+  if (last && Math.abs(cursor - position) < 0.001) {
+    return { source: last.source, localTime: last.end }
+  }
+  return null
 }
 
 /** Total duration a segment list renders to (sum of each segment's own length). */

@@ -1,0 +1,1 @@
+ALTER TABLE `songs` ADD `edit_settings` text;

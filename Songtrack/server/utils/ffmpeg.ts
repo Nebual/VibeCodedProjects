@@ -1,13 +1,33 @@
 import { spawn } from 'node:child_process'
+import { resolveSegmentPosition } from '../../shared/utils/timeline'
 import type { AfftdnFilter, EditFilter, EditList } from '#shared/types'
+import type { ResolvedSegment } from '../../shared/utils/timeline'
+
+/** Crossfade duration used to smooth every audio splice this module creates — segment joins and the afftdn training-clip splice alike — so cuts never leave an audible click. */
+const SEGMENT_CROSSFADE_S = 0.02
+
+/**
+ * ffmpeg's stderr carries warnings (e.g. "could not seek", malformed-packet notices) even on a
+ * successful (exit 0) run — exactly the run that later trips something else up (an ffprobe on its
+ * output failing, a 0-byte file) with no other trace of why. Logging it here, unconditionally,
+ * means that context is already in the server console by the time any downstream failure surfaces,
+ * instead of being silently discarded because *this* process technically succeeded.
+ */
+function logFfmpegRun(args: string[], code: number | null, stderr: string) {
+  if (!stderr.trim()) return
+  const log = code === 0 ? console.log : console.error
+  log(`[ffmpeg]${code === 0 ? '' : ` exit ${code}`} ffmpeg ${args.join(' ')}\n${stderr}`)
+}
 
 export function runFfmpeg(args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
-    const proc = spawn('ffmpeg', ['-y', ...args], { stdio: ['ignore', 'ignore', 'pipe'] })
+    const fullArgs = ['-y', '-hide_banner', ...args]
+    const proc = spawn('ffmpeg', fullArgs, { stdio: ['ignore', 'ignore', 'pipe'] })
     let stderr = ''
     proc.stderr.on('data', d => (stderr += d.toString()))
     proc.on('error', reject)
     proc.on('close', (code) => {
+      logFfmpegRun(fullArgs, code, stderr)
       if (code === 0) resolve()
       else reject(new Error(`ffmpeg exited with code ${code}: ${stderr.slice(-2000)}`))
     })
@@ -16,13 +36,15 @@ export function runFfmpeg(args: string[]): Promise<void> {
 
 function runFfmpegCapture(args: string[]): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    const proc = spawn('ffmpeg', ['-y', ...args], { stdio: ['ignore', 'pipe', 'pipe'] })
+    const fullArgs = ['-y', '-hide_banner', ...args]
+    const proc = spawn('ffmpeg', fullArgs, { stdio: ['ignore', 'pipe', 'pipe'] })
     const chunks: Buffer[] = []
     let stderr = ''
     proc.stdout.on('data', d => chunks.push(d))
     proc.stderr.on('data', d => (stderr += d.toString()))
     proc.on('error', reject)
     proc.on('close', (code) => {
+      logFfmpegRun(fullArgs, code, stderr)
       if (code === 0) resolve(Buffer.concat(chunks))
       else reject(new Error(`ffmpeg exited with code ${code}: ${stderr.slice(-2000)}`))
     })
@@ -37,7 +59,10 @@ export interface ProbeResult {
 
 export function ffprobe(path: string): Promise<ProbeResult> {
   return new Promise((resolve, reject) => {
-    const proc = spawn('ffprobe', ['-v', 'quiet', '-print_format', 'json', '-show_format', '-show_streams', path])
+    // '-v error' (not 'quiet'): quiet suppresses ffprobe's own error diagnostics too, which is
+    // exactly the detail needed when this rejects — a corrupt/empty input otherwise fails with no
+    // information about why at all.
+    const proc = spawn('ffprobe', ['-v', 'error', '-print_format', 'json', '-show_format', '-show_streams', path])
     let stdout = ''
     let stderr = ''
     proc.stdout.on('data', d => (stdout += d.toString()))
@@ -123,6 +148,27 @@ export interface RenderSource {
 }
 
 /**
+ * Resolves an afftdn filter's noise region — captured against the full, uncropped take timeline —
+ * to the actual take file + local-time span it corresponds to, for use as `RenderOptions.noiseTrainingSource`.
+ * Returns undefined when there's no afftdn filter, no region set, or the region can't be resolved
+ * against the given `baseSegments`/`sources` (in which case the caller should render without the
+ * region rather than risk self-extracting the wrong audio from a possibly-cropped chain).
+ */
+export function resolveNoiseTrainingSource(
+  filters: EditFilter[],
+  baseSegments: ResolvedSegment[],
+  sources: RenderSource[],
+): { path: string, start: number, duration: number } | undefined {
+  const afftdn = filters.find((f): f is AfftdnFilter => f.type === 'afftdn' && !!f.noiseRegion)
+  if (!afftdn?.noiseRegion) return undefined
+  const resolved = resolveSegmentPosition(baseSegments, afftdn.noiseRegion.start)
+  if (!resolved) return undefined
+  const source = sources.find(s => s.id === resolved.source)
+  if (!source) return undefined
+  return { path: source.path, start: resolved.localTime, duration: afftdn.noiseRegion.end - afftdn.noiseRegion.start }
+}
+
+/**
  * `afftdn` learns a much better noise profile from a timed sample of real
  * room tone (a hand-picked or auto-guessed quiet region) than from its own
  * blind noise-floor guess. `asendcmd` fires `sn start`/`sn stop` at the
@@ -180,14 +226,19 @@ function wireAfftdnWithRegion(
     main = splitMain
   }
 
+  // A hard concat splice between the training clip and the real content is an abrupt waveform
+  // discontinuity, and afftdn's FFT-based processing rings for a few frames after a discontinuity
+  // like that — audible as a blip right where the real content begins, which is exactly the point
+  // the atrim below cuts back to. A short crossfade smooths the splice instead.
+  const overlap = Math.min(SEGMENT_CROSSFADE_S, trainingDuration)
   const primed = `nsprimed${index}`
-  filterParts.push(`[${train}][${main}]concat=n=2:v=0:a=1[${primed}]`)
+  filterParts.push(`[${train}][${main}]acrossfade=d=${overlap}[${primed}]`)
 
   const filtered = `nsfiltered${index}`
   filterParts.push(afftdnLink(primed, filtered, { ...f, noiseRegion: { start: 0, end: trainingDuration } }, index, om))
 
   const trimmed = `nstrimmed${index}`
-  filterParts.push(`[${filtered}]atrim=start=${trainingDuration},asetpts=PTS-STARTPTS[${trimmed}]`)
+  filterParts.push(`[${filtered}]atrim=start=${trainingDuration - overlap},asetpts=PTS-STARTPTS[${trimmed}]`)
   return trimmed
 }
 
@@ -207,6 +258,15 @@ export interface RenderOptions {
    * training clip is then self-extracted from it instead.
    */
   noiseTrainingLabel?: string
+  /**
+   * Explicit take + local-time span to extract the noise-training clip from, added as its own
+   * ffmpeg input by `buildFilterGraph` itself. Needed whenever the region's absolute position was
+   * captured against the full, uncropped take timeline (as ambience selection always is) but
+   * `editList.segments` — the chain actually being rendered — may be a cropped subset of it, so
+   * self-extracting from that chain could silently grab the wrong audio, or none at all if the
+   * crop removed that span entirely.
+   */
+  noiseTrainingSource?: { path: string, start: number, duration: number }
 }
 
 export interface FilterGraph {
@@ -248,16 +308,6 @@ function appendFilterChain(
     return chain
   }
 
-  // Normalizing before the noise-reduction filters (rather than after, as this used to) gives
-  // afftdn properly-leveled audio to analyze — its noise-floor/profile estimation has absolute-
-  // level-dependent behavior, so feeding it a too-quiet signal makes its `nr`/`gs` controls behave
-  // inconsistently (too weak at low strengths, chewing into program material at higher ones).
-  if (gain?.mode === 'loudnorm') {
-    const next = `gain_${chain}`
-    filterParts.push(`[${chain}]loudnorm=I=${gain.targetLufs}:TP=-1.5:LRA=11[${next}]`)
-    chain = next
-  }
-
   filters.forEach((f, i) => {
     if (f.type === 'afftdn' && f.noiseRegion) {
       chain = wireAfftdnWithRegion(filterParts, chain, f, i, opts.noiseTrainingLabel)
@@ -276,6 +326,17 @@ function appendFilterChain(
     }
     chain = next
   })
+
+  // Denoising before normalizing (rather than after) keeps afftdn looking at the recording's
+  // original, un-boosted noise floor. Its noise-floor/residual-floor defaults are fixed absolute
+  // dB values (-50dB/-38dB) — loudnorm's gain to reach a target LUFS can be 30dB+ on a quiet
+  // recording, which lifts the noise floor above those thresholds and makes afftdn treat the
+  // (now much louder) hiss as program material instead of noise, largely undoing the reduction.
+  if (gain?.mode === 'loudnorm') {
+    const next = `gain_${chain}`
+    filterParts.push(`[${chain}]loudnorm=I=${gain.targetLufs}:TP=-1.5:LRA=11[${next}]`)
+    chain = next
+  }
 
   if (fades && totalDuration != null) {
     const next = `fade_${chain}`
@@ -311,6 +372,22 @@ export function buildFilterGraph(sources: RenderSource[], editList: EditList, op
   })
 
   const filterParts: string[] = []
+
+  // Reads the whole file as a plain input (no -ss/-t container-level seek) and trims to the
+  // needed span via the atrim filter instead, after decode — container-level seeking is
+  // unreliable on some formats (e.g. browser-recorded webm with no seek index), which can corrupt
+  // or fail the read. Self-extraction from an already-decoded chain never had this problem, for
+  // the same reason: it only ever trims post-decode too.
+  let chainOpts = opts
+  if (opts.noiseTrainingSource) {
+    const { path, start, duration } = opts.noiseTrainingSource
+    const trainIndex = uniqueSourceIds.length
+    inputArgs.push('-i', path)
+    const trainLabel = 'nstrainsrc'
+    filterParts.push(`[${trainIndex}:a]atrim=start=${start}:end=${start + duration},asetpts=PTS-STARTPTS[${trainLabel}]`)
+    chainOpts = { ...opts, noiseTrainingLabel: trainLabel }
+  }
+
   const segLabels: string[] = []
   editList.segments.forEach((seg, i) => {
     const idx = inputIndex.get(seg.source)!
@@ -322,15 +399,14 @@ export function buildFilterGraph(sources: RenderSource[], editList: EditList, op
   })
 
   let chain = segLabels[0]!
-  const crossfadeS = 0.02
   for (let i = 1; i < segLabels.length; i++) {
     const next = `cf${i}`
-    filterParts.push(`[${chain}][${segLabels[i]}]acrossfade=d=${crossfadeS}[${next}]`)
+    filterParts.push(`[${chain}][${segLabels[i]}]acrossfade=d=${SEGMENT_CROSSFADE_S}[${next}]`)
     chain = next
   }
 
   const totalDuration = editList.segments.reduce((sum, s) => sum + (s.end - s.start), 0)
-  chain = appendFilterChain(filterParts, chain, editList.filters, editList.gain, editList.fades, totalDuration, opts)
+  chain = appendFilterChain(filterParts, chain, editList.filters, editList.gain, editList.fades, totalDuration, chainOpts)
 
   return { inputArgs, filterComplex: filterParts.join(';'), outputLabel: chain }
 }

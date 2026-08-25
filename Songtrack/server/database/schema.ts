@@ -1,5 +1,5 @@
 import { sqliteTable, text, integer, real, uniqueIndex, index } from 'drizzle-orm/sqlite-core'
-import type { EditList, NoiseRegion } from '../../shared/types'
+import type { EditList, EditSettings, NoiseRegion } from '../../shared/types'
 
 export const users = sqliteTable('users', {
   id: text('id').primaryKey(),
@@ -45,6 +45,8 @@ export const songs = sqliteTable('songs', {
   channels: integer('channels'),
   noiseRegion: text('noise_region', { mode: 'json' }).$type<NoiseRegion | null>(),
   editList: text('edit_list', { mode: 'json' }).$type<EditList>().notNull(),
+  /** The editor controls' state (crop selection + enabled takes) as of last Save — lets re-opening the editor restore "what you had before Save" against the full original, not just what got rendered into editList. */
+  editSettings: text('edit_settings', { mode: 'json' }).$type<EditSettings | null>(),
   shareToken: text('share_token').unique(),
   /** SHA-256 of the source file for bulk-imported songs, so re-running the importer is a no-op. */
   importHash: text('import_hash'),

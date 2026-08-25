@@ -40,6 +40,7 @@ function onSeek(e: Event) {
         :max="duration || 0"
         step="0.1"
         :value="currentTime"
+        aria-label="Seek"
         @input="onSeek"
       >
     </div>

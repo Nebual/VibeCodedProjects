@@ -134,3 +134,16 @@ Lets add a way to Zoom in when editing waveform for precision. Maybe have a bar 
 Lets have the most zoomed be ~4s. Also is pinch to zoom an option on mobile?
 
 On desktop, it zooms in very quickly, one notch only shows 14s. Lets make it more gradual - each zoom is 50% smaller than before (so if the whole video is 8m long, one zoom level becomes 4m, 2m, 60s, 30s, 15s, 8s, 4s).
+
+## Noise reduction fixes
+
+I've been trying a few things with afftdn but they seem to have very little effect so far, even in a simple case of 'record 5 seconds of speech, then 5 seconds of silence. Use the silence as the ambience sample to cleanup the whole clip' seems to leave the hiss in during the whole clip. 'test9.ogg' is this sample if you want to try.
+
+data\audio\BNEr9XNKhJehXGK-45IT5\Ijapwd9Ey6diXzPiem8Sa is a song I edited. Now when I look at the edit page for it, it only shows me the most recent version, so I can't undo my previous edits - the original take file is still there, but inaccessible in the UI. Lets keep using the take/edit stack on subsequent edits - the 'Save' should moreso just export a playback version to be used outside of the Edit window.  
+Also, the editing (I used crop, noise reduction, and normalize level) resulted in a blip being added to the first 0.3 seconds of the track, can we avoid that?
+
+Export into the main folder a version with nr=32, as I'm not able to hear a difference via the UI - there's still a lot of noise even in the last 5 seconds.
+
+That sounds way cleaner than anything I've heard through the UI - turns out, our 'Normalize level' loudness was amplifying the noise again (or fighting the noise reduction?). Can you see if thats something we've done wrong?
+
+The Edit waveform is too compressed to see, do we need to amplify it before drawing?

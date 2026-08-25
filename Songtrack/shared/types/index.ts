@@ -42,6 +42,21 @@ export interface NoiseRegion {
   end: number
 }
 
+export interface KeepRange {
+  start: number
+  end: number
+}
+
+/**
+ * The literal state of the editor's controls at last Save — crop selection and which takes are
+ * turned on — kept separate from `EditList` so re-opening the editor can restore "what you had
+ * before Save" against the full original recording, not just what got rendered.
+ */
+export interface EditSettings {
+  keepRanges: KeepRange[]
+  enabledTakeIds: string[]
+}
+
 export interface PeaksData {
   version: 1
   sampleRate: number

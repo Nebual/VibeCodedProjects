@@ -4,7 +4,7 @@ import RegionsPlugin from 'wavesurfer.js/plugins/regions'
 import type { Region } from 'wavesurfer.js/plugins/regions'
 import ZoomPlugin from 'wavesurfer.js/plugins/zoom'
 import { ArrowUturnLeftIcon, ArrowUturnRightIcon, MagnifyingGlassMinusIcon, ScissorsIcon } from '@heroicons/vue/24/outline'
-import type { EditFilter, EditList, NoiseRegion } from '#shared/types'
+import type { EditFilter, EditList, EditSettings, KeepRange, NoiseRegion } from '#shared/types'
 import type { ResolvedSegment, TimelineTake } from '#shared/utils/timeline'
 
 interface SongDetail {
@@ -12,6 +12,7 @@ interface SongDetail {
   title: string
   durationS: number | null
   editList: EditList
+  editSettings: EditSettings | null
   noiseRegion: NoiseRegion | null
 }
 
@@ -21,12 +22,6 @@ interface TakeInfo {
   durationS: number | null
   ordinal: number
 }
-
-interface PeaksResponse {
-  data: number[]
-}
-
-interface KeepRange { start: number, end: number }
 
 definePageMeta({ hidePlayerBar: true })
 
@@ -53,7 +48,6 @@ let zoomLevels: number[] = []
 
 const monitorGain = useMonitorGain()
 let masterGainNode: GainNode | null = null
-let masterPeaksFloat: Float32Array | null = null
 
 const isReady = ref(false)
 const isPlaying = ref(false)
@@ -123,20 +117,45 @@ function setupWheelZoomStepping(wavesurfer: WaveSurfer): () => void {
   return () => container.removeEventListener('wheel', onWheel)
 }
 
-const baseSegments = ref<ResolvedSegment[]>(song.value.editList.segments)
-const keepRanges = ref<KeepRange[]>([])
-const masterDuration = ref(song.value.durationS ?? 0)
+// The editor always starts from the full, original take stack — never from a previously-cropped
+// editList.segments — so a past crop never permanently hides the rest of the recording. What you
+// had selected/dialed-in last Save is restored on top of that via editSettings, not baked into
+// the starting range itself.
+const enabledTakeIdsInit = new Set(
+  song.value.editSettings?.enabledTakeIds ?? (takesData.value ?? []).map(t => t.id),
+)
+
+function computeBaseSegments(): ResolvedSegment[] {
+  const enabled: TimelineTake[] = (takesData.value ?? [])
+    .filter(t => enabledTakeIdsInit.has(t.id))
+    .map(t => ({ id: t.id, timelineStart: t.timelineStart, duration: t.durationS ?? 0 }))
+  return resolveTimeline(enabled)
+}
+
+const baseSegments = ref<ResolvedSegment[]>(computeBaseSegments())
+const keepRanges = ref<KeepRange[]>(
+  song.value.editSettings?.keepRanges ?? [{ start: 0, end: segmentsDuration(baseSegments.value) }],
+)
+const masterDuration = ref(segmentsDuration(baseSegments.value))
 
 const filters = ref<EditFilter[]>(structuredClone(song.value.editList.filters))
 const gain = ref<EditList['gain']>(structuredClone(song.value.editList.gain))
 const noiseRegionRef = ref<NoiseRegion | null>(structuredClone(song.value.noiseRegion))
-const initialFiltersJson = JSON.stringify(song.value.editList.filters)
-const initialGainJson = JSON.stringify(song.value.editList.gain ?? null)
+// Reassigned synchronously in onMounted below, once EditorNoisePanel has applied its own
+// mount-time defaults (e.g. "Normalize level" defaults on for a song with no gain set yet) —
+// those defaults are a display convenience, not an edit, so hasEdits must baseline against the
+// settled post-default state rather than the raw saved editList (which would otherwise make
+// Save look enabled the instant a fresh song's editor opens, before anything was touched). These
+// must be refs, not plain variables — hasEdits (a computed) only re-evaluates when a reactive
+// dependency it read changes, and a plain-variable reassignment in onMounted would never trigger
+// that, leaving hasEdits stuck on whatever it transiently cached during the mount/patch phase.
+const initialFiltersJson = ref(JSON.stringify(song.value.editList.filters))
+const initialGainJson = ref(JSON.stringify(song.value.editList.gain ?? null))
 
 const takesEnabled = ref<Record<string, boolean>>({})
 watchEffect(() => {
   for (const t of takesData.value ?? []) {
-    if (!(t.id in takesEnabled.value)) takesEnabled.value[t.id] = true
+    if (!(t.id in takesEnabled.value)) takesEnabled.value[t.id] = enabledTakeIdsInit.has(t.id)
   }
 })
 const showTakesPanel = computed(() => (takesData.value?.length ?? 0) > 1)
@@ -395,18 +414,31 @@ function setupCustomDragSelection(wavesurfer: WaveSurfer, regions: RegionsPlugin
 onMounted(() => {
   if (!import.meta.client || !containerRef.value || !song.value) return
 
+  // Child components (EditorNoisePanel included) have already mounted and applied their own
+  // immediate defaults by this point, synchronously, before the browser can process any user
+  // input — so this is the first moment "filters/gain as the user actually sees them" is settled,
+  // and the correct place to baseline hasEdits against.
+  initialFiltersJson.value = JSON.stringify(filters.value)
+  initialGainJson.value = JSON.stringify(gain.value ?? null)
+
   ;(async () => {
     try {
-      const peaks = await $fetch<PeaksResponse>(`/api/songs/${songId}/peaks`)
-      const duration = song.value!.durationS ?? undefined
-      masterPeaksFloat = peaksToFloatArray(peaks.data)
+      // The editor's waveform is always the raw, unfiltered, uncropped take stack — never
+      // master.ogg — so scrubbing/selecting always reaches the full original recording. Peaks
+      // come from WaveSurfer's own decode (like the take-toggle reload below) rather than a
+      // precomputed peaks fetch, since this render has no stored peaks of its own.
+      const duration = segmentsDuration(baseSegments.value) || undefined
+      const preview = await $fetch<{ url: string }>(`/api/songs/${songId}/preview`, {
+        method: 'POST',
+        body: { editList: { segments: baseSegments.value, filters: [] } },
+      })
 
       ws = WaveSurfer.create({
         container: containerRef.value!,
-        url: `/api/songs/${songId}/audio`,
-        peaks: [masterPeaksFloat],
+        url: preview.url,
         duration,
         height: 96,
+        normalize: true,
         waveColor: 'oklch(70% 0.02 250)',
         progressColor: 'oklch(55% 0.15 250)',
         cursorColor: 'oklch(70% 0.2 30)',
@@ -433,12 +465,18 @@ onMounted(() => {
       ws.on('ready', (dur) => {
         masterDuration.value = dur
         zoomLevels = computeZoomLevels(dur, containerRef.value!.clientWidth)
-        keepRanges.value = [{ start: 0, end: dur }]
+        // Only sync to the actual decoded duration when there's no explicit saved crop to
+        // restore — otherwise this would clobber a genuine restored selection. A fresh "keep
+        // everything" default needs to match wavesurfer's own decoded duration exactly (rather
+        // than the take metadata's reported duration), since the two can differ by a few ms
+        // after re-encoding for preview — and pushHistory below snapshots this as the pristine
+        // baseline hasEdits compares against, so the two always stay in sync regardless.
+        if (!song.value!.editSettings?.keepRanges) keepRanges.value = [{ start: 0, end: dur }]
         pushHistory()
         renderRegions()
         isReady.value = true
         masterGainNode = monitorGain.wrapElement(ws!.getMediaElement())
-        masterGainNode.gain.value = monitorGain.gainForPeaks(masterPeaksFloat!)
+        masterGainNode.gain.value = monitorGain.gainForBuffer(ws!.getDecodedData()!)
       })
       ws.on('play', () => { isPlaying.value = true })
       ws.on('pause', () => { isPlaying.value = false })
@@ -472,7 +510,8 @@ onMounted(() => {
 })
 
 watch(monitorGain.targetLevelDb, () => {
-  if (masterGainNode && masterPeaksFloat) masterGainNode.gain.value = monitorGain.gainForPeaks(masterPeaksFloat)
+  const decoded = ws?.getDecodedData()
+  if (masterGainNode && decoded) masterGainNode.gain.value = monitorGain.gainForBuffer(decoded)
 })
 
 onBeforeUnmount(() => {
@@ -513,7 +552,10 @@ const cutMarkerFraction = computed(() => {
 async function fetchAutoTrim() {
   autoTrimLoading.value = true
   try {
-    autoTrimProposal.value = await $fetch<AutoTrimProposal>(`/api/songs/${songId}/auto-trim`, { method: 'POST' })
+    autoTrimProposal.value = await $fetch<AutoTrimProposal>(`/api/songs/${songId}/auto-trim`, {
+      method: 'POST',
+      body: { segments: baseSegments.value },
+    })
   } finally {
     autoTrimLoading.value = false
   }
@@ -531,7 +573,7 @@ async function previewCut(which: 'start' | 'end') {
   try {
     const blob = await $fetch<Blob>(`/api/songs/${songId}/preview-window`, {
       method: 'POST',
-      body: { center, padding: CUT_PREVIEW_PADDING, clickAtCenter: true },
+      body: { segments: baseSegments.value, center, padding: CUT_PREVIEW_PADDING, clickAtCenter: true },
     })
     await cutPreviewPlayer.loadAndPlay(blob)
   } catch {
@@ -573,7 +615,7 @@ async function toggleTake(takeId: string) {
 
     const preview = await $fetch<{ url: string }>(`/api/songs/${songId}/preview`, {
       method: 'POST',
-      body: { editList: { segments: newSegments, filters: filters.value } },
+      body: { editList: { segments: newSegments, filters: filters.value }, baseSegments: newSegments },
     })
 
     baseSegments.value = newSegments
@@ -607,7 +649,7 @@ async function runPreview() {
   try {
     const res = await $fetch<{ url: string }>(`/api/songs/${songId}/preview`, {
       method: 'POST',
-      body: { editList: finalEditList.value },
+      body: { editList: finalEditList.value, baseSegments: baseSegments.value },
     })
     previewUrl.value = res.url
   } finally {
@@ -622,9 +664,13 @@ async function runSave() {
   saving.value = true
   saveError.value = null
   try {
+    const editSettings: EditSettings = {
+      keepRanges: keepRanges.value,
+      enabledTakeIds: (takesData.value ?? []).filter(t => takesEnabled.value[t.id]).map(t => t.id),
+    }
     await $fetch(`/api/songs/${songId}/edit`, {
       method: 'POST',
-      body: { editList: finalEditList.value, noiseRegion: noiseRegionRef.value },
+      body: { editList: finalEditList.value, noiseRegion: noiseRegionRef.value, editSettings, baseSegments: baseSegments.value },
     })
     router.push(`/songs/${songId}`)
   } catch (e) {
@@ -635,11 +681,17 @@ async function runSave() {
 }
 
 const hasEdits = computed(() => {
-  if (JSON.stringify(filters.value) !== initialFiltersJson) return true
-  if (JSON.stringify(gain.value ?? null) !== initialGainJson) return true
-  if (keepRanges.value.length !== 1) return true
-  const r = keepRanges.value[0]
-  return !r || Math.abs(r.start) > 0.05 || Math.abs(r.end - masterDuration.value) > 0.05
+  if (JSON.stringify(filters.value) !== initialFiltersJson.value) return true
+  if (JSON.stringify(gain.value ?? null) !== initialGainJson.value) return true
+  // history[0] is the pristine baseline captured right after load (see ws.on('ready')) — always
+  // compared against that first entry, not the current undo position, so redoing back to it (or
+  // toggling takes back to how they started) correctly reports "no edits" again. Comparing
+  // baseSegments here too means a take toggle back to the original set is covered without a
+  // separate enabled-takes check.
+  const baseline = history.value[0]
+  if (!baseline) return false
+  return JSON.stringify(baseSegments.value) !== JSON.stringify(baseline.baseSegments)
+    || JSON.stringify(keepRanges.value) !== JSON.stringify(baseline.keepRanges)
 })
 </script>
 
@@ -737,6 +789,7 @@ const hasEdits = computed(() => {
       v-model:filters="filters"
       v-model:gain="gain"
       :song-id="songId"
+      :segments="baseSegments"
       :noise-region="noiseRegionRef"
       :preview-center="currentTime"
       @select-ambience="startSelectingAmbience"

@@ -2,7 +2,8 @@ import { writeFile } from 'node:fs/promises'
 import { eq } from 'drizzle-orm'
 import { db } from '../../../database/client'
 import { songs, takes } from '../../../database/schema'
-import type { EditList, NoiseRegion } from '#shared/types'
+import type { EditList, EditSettings, NoiseRegion } from '#shared/types'
+import type { ResolvedSegment } from '#shared/utils/timeline'
 
 export default defineEventHandler(async (event) => {
   const actor = await requireActor(event)
@@ -13,7 +14,12 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 404, statusMessage: 'Audio is still processing' })
   }
 
-  const body = await readBody<{ editList: EditList, noiseRegion?: NoiseRegion | null }>(event)
+  const body = await readBody<{
+    editList: EditList
+    noiseRegion?: NoiseRegion | null
+    editSettings?: EditSettings | null
+    baseSegments?: ResolvedSegment[]
+  }>(event)
   const editList = body?.editList
   if (!editList?.segments?.length) {
     throw createError({ statusCode: 400, statusMessage: 'Edit list has no segments' })
@@ -26,7 +32,10 @@ export default defineEventHandler(async (event) => {
   }
 
   const sources = songTakes.map(t => ({ id: t.id, path: t.sourcePath }))
-  await renderEditList(sources, editList, song.masterPath, 'ogg')
+  const noiseTrainingSource = body.baseSegments
+    ? resolveNoiseTrainingSource(editList.filters, body.baseSegments, sources)
+    : undefined
+  await renderEditList(sources, editList, song.masterPath, 'ogg', { noiseTrainingSource })
 
   const [probe, peaks] = await Promise.all([
     ffprobe(song.masterPath),
@@ -36,6 +45,7 @@ export default defineEventHandler(async (event) => {
 
   db.update(songs).set({
     editList,
+    editSettings: body?.editSettings ?? null,
     noiseRegion: body?.noiseRegion ?? null,
     durationS: probe.durationS,
     sampleRate: probe.sampleRate,

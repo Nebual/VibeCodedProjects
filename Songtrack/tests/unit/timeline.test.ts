@@ -3,6 +3,7 @@ import {
   activeTakeAt,
   applyKeepRanges,
   punchInOverwriteAmount,
+  resolveSegmentPosition,
   resolveTimeline,
   segmentsDuration,
   timelineDuration,
@@ -100,6 +101,35 @@ describe('activeTakeAt', () => {
 
   it('returns null outside any take', () => {
     expect(activeTakeAt(takes, 100)).toBeNull()
+  })
+})
+
+describe('resolveSegmentPosition', () => {
+  // segment 2's own local time range (10-40) is offset from its master-timeline position
+  // (90-120) — mirrors a punch-in segment whose take-local coordinates don't start at 0.
+  const segments = [
+    { source: 'take-1', start: 0, end: 90 },
+    { source: 'take-2', start: 10, end: 40 },
+  ]
+
+  it('resolves a position within the first segment to its own local time', () => {
+    expect(resolveSegmentPosition(segments, 5)).toEqual({ source: 'take-1', localTime: 5 })
+  })
+
+  it('resolves a position within a later segment, offset by the earlier segments\' lengths', () => {
+    expect(resolveSegmentPosition(segments, 95)).toEqual({ source: 'take-2', localTime: 15 })
+  })
+
+  it('resolves the exact end boundary of the whole concatenation', () => {
+    expect(resolveSegmentPosition(segments, 120)).toEqual({ source: 'take-2', localTime: 40 })
+  })
+
+  it('returns null past the end', () => {
+    expect(resolveSegmentPosition(segments, 200)).toBeNull()
+  })
+
+  it('returns null for an empty segment list', () => {
+    expect(resolveSegmentPosition([], 5)).toBeNull()
   })
 })
 
