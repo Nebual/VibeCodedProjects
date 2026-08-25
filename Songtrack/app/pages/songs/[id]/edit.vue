@@ -3,7 +3,7 @@ import WaveSurfer from 'wavesurfer.js'
 import RegionsPlugin from 'wavesurfer.js/plugins/regions'
 import type { Region } from 'wavesurfer.js/plugins/regions'
 import ZoomPlugin from 'wavesurfer.js/plugins/zoom'
-import { ArrowUturnLeftIcon, ArrowUturnRightIcon, MagnifyingGlassMinusIcon, ScissorsIcon } from '@heroicons/vue/24/outline'
+import { ArrowUturnLeftIcon, ArrowUturnRightIcon, MagnifyingGlassMinusIcon, RectangleStackIcon, ScissorsIcon } from '@heroicons/vue/24/outline'
 import type { EditFilter, EditList, EditSettings, KeepRange, NoiseRegion } from '#shared/types'
 import type { ResolvedSegment, TimelineTake } from '#shared/utils/timeline'
 
@@ -700,6 +700,31 @@ const hasEdits = computed(() => {
     <div class="flex items-center justify-between">
       <h1 class="text-xl font-semibold">Edit — {{ song?.title }}</h1>
       <div class="flex gap-2">
+        <div v-if="showTakesPanel" class="dropdown">
+          <div tabindex="0" role="button" class="btn btn-sm btn-circle" aria-label="Takes">
+            <RectangleStackIcon class="w-4 h-4" />
+          </div>
+          <div tabindex="0" class="dropdown-content bg-base-100 rounded-box shadow p-4 mt-2 z-10 w-64">
+            <h2 class="font-medium mb-2">Takes</h2>
+            <p class="text-xs text-base-content/50 mb-2">
+              Turning off a punch-in reveals whatever take was underneath it. This resets any trims you've made.
+            </p>
+            <ul class="flex flex-col gap-1">
+              <li v-for="t in takesData" :key="t.id" class="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  class="toggle toggle-sm"
+                  :checked="takesEnabled[t.id]"
+                  :disabled="rebuildingTakes"
+                  @change="toggleTake(t.id)"
+                >
+                <span class="text-sm">
+                  Take at {{ formatDuration(t.timelineStart) }} ({{ formatDuration(t.durationS ?? 0) }})
+                </span>
+              </li>
+            </ul>
+          </div>
+        </div>
         <button class="btn btn-sm btn-circle" :disabled="!canUndo" aria-label="Undo" @click="undo">
           <ArrowUturnLeftIcon class="w-4 h-4" />
         </button>
@@ -802,28 +827,6 @@ const hasEdits = computed(() => {
     <p v-else class="text-xs text-base-content/50 -mt-2">
       Drag the amber region on the waveform to adjust which part of the recording is sampled as the noise profile.
     </p>
-
-    <!-- Takes -->
-    <div v-if="showTakesPanel" class="card bg-base-100 shadow-sm p-4">
-      <h2 class="font-medium mb-2">Takes</h2>
-      <p class="text-xs text-base-content/50 mb-2">
-        Turning off a punch-in reveals whatever take was underneath it. This resets any trims you've made.
-      </p>
-      <ul class="flex flex-col gap-1">
-        <li v-for="t in takesData" :key="t.id" class="flex items-center gap-2">
-          <input
-            type="checkbox"
-            class="toggle toggle-sm"
-            :checked="takesEnabled[t.id]"
-            :disabled="rebuildingTakes"
-            @change="toggleTake(t.id)"
-          >
-          <span class="text-sm">
-            Take at {{ formatDuration(t.timelineStart) }} ({{ formatDuration(t.durationS ?? 0) }})
-          </span>
-        </li>
-      </ul>
-    </div>
 
     <!-- Preview / Save -->
     <div class="flex flex-col gap-2">

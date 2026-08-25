@@ -147,3 +147,14 @@ Export into the main folder a version with nr=32, as I'm not able to hear a diff
 That sounds way cleaner than anything I've heard through the UI - turns out, our 'Normalize level' loudness was amplifying the noise again (or fighting the noise reduction?). Can you see if thats something we've done wrong?
 
 The Edit waveform is too compressed to see, do we need to amplify it before drawing?
+
+I got an error 500 on hitting Save for a song edit, there's little information in the error log: `[pasted]`  
+Also, when I hit Preview Edits, I get no error but a 0 length file. Oddly, Preview with Settings works fine. I think it might be related to the Noise reduction setting, as it seems to save without it.  
+Specifically I was testing on EcXAIKJHV56Oyj7llqNxW using strength 14, smoothing 6, with the last 5 seconds as the Noise sample zone, keeping the 2s to 6s slice. But I haven't been able to save, with noise reduction on, due to the 500.
+
+That seems to be working. Found a nearby bug: generation fails (without an error) if the ambient noise sample selection spans over more than 1 take.  
+Also, lets move the Takes toggle UI into a dropdown originating left of the Undo/Redo buttons.  
+Also, when not using Normalize level, is there a way to apply a flat gain to the whole track to raise the volume up (and is that a good idea quality wise)?
+
+Lets make the default 'Boost to peak', and also expose a slider for it, where 0db is the calculated gain, and the user can go -8 or +8db relative to that (going above 0 should make the slider go range-warning)
+

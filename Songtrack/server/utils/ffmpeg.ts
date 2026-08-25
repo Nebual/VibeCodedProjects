@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { resolveSegmentPosition } from '../../shared/utils/timeline'
+import { applyKeepRanges } from '../../shared/utils/timeline'
 import type { AfftdnFilter, EditFilter, EditList } from '#shared/types'
 import type { ResolvedSegment } from '../../shared/utils/timeline'
 
@@ -19,7 +19,8 @@ function logFfmpegRun(args: string[], code: number | null, stderr: string) {
   log(`[ffmpeg]${code === 0 ? '' : ` exit ${code}`} ffmpeg ${args.join(' ')}\n${stderr}`)
 }
 
-export function runFfmpeg(args: string[]): Promise<void> {
+/** Resolves with stderr on success (most callers ignore it) — needed by the peak-gain measuring pass, which reads its result (e.g. volumedetect's max_volume) from there. */
+export function runFfmpeg(args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
     const fullArgs = ['-y', '-hide_banner', ...args]
     const proc = spawn('ffmpeg', fullArgs, { stdio: ['ignore', 'ignore', 'pipe'] })
@@ -28,7 +29,7 @@ export function runFfmpeg(args: string[]): Promise<void> {
     proc.on('error', reject)
     proc.on('close', (code) => {
       logFfmpegRun(fullArgs, code, stderr)
-      if (code === 0) resolve()
+      if (code === 0) resolve(stderr)
       else reject(new Error(`ffmpeg exited with code ${code}: ${stderr.slice(-2000)}`))
     })
   })
@@ -149,23 +150,31 @@ export interface RenderSource {
 
 /**
  * Resolves an afftdn filter's noise region — captured against the full, uncropped take timeline —
- * to the actual take file + local-time span it corresponds to, for use as `RenderOptions.noiseTrainingSource`.
+ * to the take file(s) + local-time span(s) it corresponds to, for use as
+ * `RenderOptions.noiseTrainingSource`. The region can span more than one take (e.g. dragged across
+ * a punch-in boundary), in which case `applyKeepRanges` — the same machinery that maps a crop
+ * selection onto its underlying takes — splits it into one piece per covered take, in order.
  * Returns undefined when there's no afftdn filter, no region set, or the region can't be resolved
- * against the given `baseSegments`/`sources` (in which case the caller should render without the
- * region rather than risk self-extracting the wrong audio from a possibly-cropped chain).
+ * against the given `baseSegments`/`sources` at all (in which case the caller should render
+ * without the region rather than risk self-extracting the wrong audio from a possibly-cropped
+ * chain).
  */
 export function resolveNoiseTrainingSource(
   filters: EditFilter[],
   baseSegments: ResolvedSegment[],
   sources: RenderSource[],
-): { path: string, start: number, duration: number } | undefined {
+): { path: string, start: number, duration: number }[] | undefined {
   const afftdn = filters.find((f): f is AfftdnFilter => f.type === 'afftdn' && !!f.noiseRegion)
   if (!afftdn?.noiseRegion) return undefined
-  const resolved = resolveSegmentPosition(baseSegments, afftdn.noiseRegion.start)
-  if (!resolved) return undefined
-  const source = sources.find(s => s.id === resolved.source)
-  if (!source) return undefined
-  return { path: source.path, start: resolved.localTime, duration: afftdn.noiseRegion.end - afftdn.noiseRegion.start }
+  const pieces = applyKeepRanges(baseSegments, [afftdn.noiseRegion])
+  if (pieces.length === 0) return undefined
+  const resolved: { path: string, start: number, duration: number }[] = []
+  for (const piece of pieces) {
+    const source = sources.find(s => s.id === piece.source)
+    if (!source) return undefined
+    resolved.push({ path: source.path, start: piece.start, duration: piece.end - piece.start })
+  }
+  return resolved
 }
 
 /**
@@ -259,14 +268,23 @@ export interface RenderOptions {
    */
   noiseTrainingLabel?: string
   /**
-   * Explicit take + local-time span to extract the noise-training clip from, added as its own
-   * ffmpeg input by `buildFilterGraph` itself. Needed whenever the region's absolute position was
-   * captured against the full, uncropped take timeline (as ambience selection always is) but
+   * Explicit take + local-time span(s) to extract the noise-training clip from, each added as its
+   * own ffmpeg input by `buildFilterGraph` itself. Needed whenever the region's absolute position
+   * was captured against the full, uncropped take timeline (as ambience selection always is) but
    * `editList.segments` — the chain actually being rendered — may be a cropped subset of it, so
    * self-extracting from that chain could silently grab the wrong audio, or none at all if the
-   * crop removed that span entirely.
+   * crop removed that span entirely. More than one entry means the region spanned a take
+   * boundary (e.g. a punch-in) — the pieces are read in order and concatenated together.
    */
-  noiseTrainingSource?: { path: string, start: number, duration: number }
+  noiseTrainingSource?: { path: string, start: number, duration: number }[]
+  /**
+   * The flat gain (in dB) to apply for a `gain.mode === 'peak'` edit list, pre-measured by
+   * `renderEditList` against the same chain (minus gain) via a first, throwaway pass — a "how
+   * loud is the loudest sample" analysis `buildFilterGraph` itself has no way to do, since it
+   * stays synchronous/pure and never spawns ffmpeg. Left unset (e.g. by a windowed preview that
+   * skips the measuring pass), peak gain is silently not applied rather than thrown on.
+   */
+  resolvedPeakGainDb?: number
 }
 
 export interface FilterGraph {
@@ -336,6 +354,10 @@ function appendFilterChain(
     const next = `gain_${chain}`
     filterParts.push(`[${chain}]loudnorm=I=${gain.targetLufs}:TP=-1.5:LRA=11[${next}]`)
     chain = next
+  } else if (gain?.mode === 'peak' && opts.resolvedPeakGainDb != null) {
+    const next = `gain_${chain}`
+    filterParts.push(`[${chain}]volume=${opts.resolvedPeakGainDb}dB[${next}]`)
+    chain = next
   }
 
   if (fades && totalDuration != null) {
@@ -373,18 +395,30 @@ export function buildFilterGraph(sources: RenderSource[], editList: EditList, op
 
   const filterParts: string[] = []
 
-  // Reads the whole file as a plain input (no -ss/-t container-level seek) and trims to the
+  // Each piece reads its take as a plain input (no -ss/-t container-level seek) and trims to the
   // needed span via the atrim filter instead, after decode — container-level seeking is
   // unreliable on some formats (e.g. browser-recorded webm with no seek index), which can corrupt
   // or fail the read. Self-extraction from an already-decoded chain never had this problem, for
-  // the same reason: it only ever trims post-decode too.
+  // the same reason: it only ever trims post-decode too. More than one piece (the region spanned
+  // a take boundary) means each is format-normalized and concatenated together in order first.
   let chainOpts = opts
-  if (opts.noiseTrainingSource) {
-    const { path, start, duration } = opts.noiseTrainingSource
-    const trainIndex = uniqueSourceIds.length
-    inputArgs.push('-i', path)
+  if (opts.noiseTrainingSource?.length) {
     const trainLabel = 'nstrainsrc'
-    filterParts.push(`[${trainIndex}:a]atrim=start=${start}:end=${start + duration},asetpts=PTS-STARTPTS[${trainLabel}]`)
+    if (opts.noiseTrainingSource.length === 1) {
+      const { path, start, duration } = opts.noiseTrainingSource[0]!
+      const trainIndex = uniqueSourceIds.length
+      inputArgs.push('-i', path)
+      filterParts.push(`[${trainIndex}:a]atrim=start=${start}:end=${start + duration},asetpts=PTS-STARTPTS,aformat=sample_rates=48000:channel_layouts=stereo[${trainLabel}]`)
+    } else {
+      const pieceLabels = opts.noiseTrainingSource.map(({ path, start, duration }, i) => {
+        const trainIndex = uniqueSourceIds.length + i
+        inputArgs.push('-i', path)
+        const pieceLabel = `nstrainpiece${i}`
+        filterParts.push(`[${trainIndex}:a]atrim=start=${start}:end=${start + duration},asetpts=PTS-STARTPTS,aformat=sample_rates=48000:channel_layouts=stereo[${pieceLabel}]`)
+        return pieceLabel
+      })
+      filterParts.push(`${pieceLabels.map(l => `[${l}]`).join('')}concat=n=${pieceLabels.length}:v=0:a=1[${trainLabel}]`)
+    }
     chainOpts = { ...opts, noiseTrainingLabel: trainLabel }
   }
 
@@ -422,8 +456,42 @@ export function buildFiltersOnlyGraph(inputLabel: string, filters: EditFilter[],
   return { inputArgs: [], filterComplex: filterParts.join(';'), outputLabel }
 }
 
+/** The safe peak level "Boost to peak"'s baseline gain targets — a small margin below full scale, matching loudnorm's own TP=-1.5 true-peak ceiling elsewhere in the render chain. The UI's relative slider adjusts around this, not around 0dBFS itself. */
+const PEAK_SAFE_TARGET_DB = -1
+
+/**
+ * ffmpeg has no single-pass "scale so the peak sample lands at X dB" filter — `volumedetect`
+ * reports the peak of a stream it's handed, but doesn't feed that back into a gain within the
+ * same run. This renders the same chain (minus the still-unresolved gain stage) through
+ * `volumedetect` to a null output, measuring the peak everything up to that point actually
+ * produces, so `renderEditList` can compute the flat dB gain a `mode: 'peak'` edit needs and hand
+ * it back in as `resolvedPeakGainDb` for the real render.
+ */
+async function measurePeakDb(sources: RenderSource[], editList: EditList, opts: RenderOptions): Promise<number> {
+  const { inputArgs, filterComplex, outputLabel } = buildFilterGraph(sources, { ...editList, gain: undefined }, opts)
+  const stderr = await runFfmpeg([
+    ...inputArgs,
+    '-filter_complex',
+    `${filterComplex};[${outputLabel}]volumedetect[vdout]`,
+    '-map',
+    '[vdout]',
+    '-f',
+    'null',
+    '-',
+  ])
+  const match = stderr.match(/max_volume:\s*(-?\d+(?:\.\d+)?)\s*dB/)
+  if (!match) throw new Error('Could not measure peak level for "Boost to peak" (volumedetect produced no max_volume)')
+  return Number(match[1])
+}
+
 export async function renderEditList(sources: RenderSource[], editList: EditList, outputPath: string, format: 'ogg' | 'mp3', opts: RenderOptions = {}) {
-  const { inputArgs, filterComplex, outputLabel } = buildFilterGraph(sources, editList, opts)
+  let renderOpts = opts
+  if (editList.gain?.mode === 'peak' && opts.resolvedPeakGainDb == null) {
+    const measuredPeakDb = await measurePeakDb(sources, editList, opts)
+    renderOpts = { ...opts, resolvedPeakGainDb: PEAK_SAFE_TARGET_DB - measuredPeakDb + editList.gain.relativeDb }
+  }
+
+  const { inputArgs, filterComplex, outputLabel } = buildFilterGraph(sources, editList, renderOpts)
   const codecArgs = format === 'mp3' ? ['-c:a', 'libmp3lame', '-q:a', '0'] : ['-c:a', 'libopus', '-b:a', '192k']
 
   await runFfmpeg([

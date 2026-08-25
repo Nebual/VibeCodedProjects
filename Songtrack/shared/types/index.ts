@@ -30,10 +30,20 @@ export interface AgateFilter {
 
 export type EditFilter = AfftdnFilter | NotchFilter | HighpassFilter | AgateFilter
 
+export type EditGain =
+  | { mode: 'loudnorm'; targetLufs: number }
+  /**
+   * A single flat gain — unlike loudnorm, this never touches dynamics. The render computes a
+   * baseline gain that lands the loudest sample at a fixed safe target (see PEAK_SAFE_TARGET_DB
+   * server-side); `relativeDb` is the user's own adjustment on top of that baseline (0 = exactly
+   * the calculated safe gain, positive pushes louder — and closer to clipping — from there).
+   */
+  | { mode: 'peak'; relativeDb: number }
+
 export interface EditList {
   segments: EditSegment[]
   filters: EditFilter[]
-  gain?: { mode: 'loudnorm'; targetLufs: number }
+  gain?: EditGain
   fades?: { inMs: number; outMs: number }
 }
 

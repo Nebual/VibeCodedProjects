@@ -37,11 +37,19 @@ const detectingNotch = ref(false)
 
 const agateEnabled = ref(!!findFilter('agate'))
 
+type GainMode = 'off' | 'loudnorm' | 'peak'
+
 // Defaults on for old and new songs alike — `gain` being unset is indistinguishable from
 // "never touched", and given how much of this app is about fixing too-quiet audio, defaulting
-// to normalized is the friendlier behavior.
-const loudnormEnabled = ref(gain.value ? gain.value.mode === 'loudnorm' : true)
-const targetLufs = ref(gain.value?.targetLufs ?? -16)
+// to boosted is the friendlier behavior. "Boost to peak" over "Normalize level" specifically:
+// it's a single flat gain (no dynamics touched), so it's the safer default when we don't know
+// anything about the recording yet.
+const gainMode = ref<GainMode>(gain.value?.mode ?? 'peak')
+const targetLufs = ref(gain.value?.mode === 'loudnorm' ? gain.value.targetLufs : -16)
+// The 0-point is the server's own computed "safe" gain (measured per-render, not known here) —
+// this is purely the user's adjustment on top of that, so it stays meaningful across takes/edits
+// without needing to know the calculated value itself.
+const relativeDb = ref(gain.value?.mode === 'peak' ? gain.value.relativeDb : 0)
 
 const displayedChips = computed(() =>
   [...new Set([...notchCandidates.value, ...enabledNotchFreqs.value])].sort((a, b) => a - b),
@@ -71,8 +79,12 @@ const ownedFilters = computed<EditFilter[]>(() => {
 })
 
 watch(ownedFilters, (value) => { filters.value = value }, { immediate: true, deep: true })
-watch([loudnormEnabled, targetLufs], ([enabled, target]) => {
-  gain.value = enabled ? { mode: 'loudnorm', targetLufs: target } : undefined
+watch([gainMode, targetLufs, relativeDb], ([mode, target, relative]) => {
+  gain.value = mode === 'loudnorm'
+    ? { mode: 'loudnorm', targetLufs: target }
+    : mode === 'peak'
+      ? { mode: 'peak', relativeDb: relative }
+      : undefined
 }, { immediate: true })
 
 async function detectNotches() {
@@ -214,13 +226,42 @@ async function playPreview(kind: 'processed' | 'original' | 'removed') {
       Can clip the tail of long decays — listen to a preview before saving.
     </p>
 
-    <label class="label cursor-pointer justify-start gap-2 p-0">
-      <input v-model="loudnormEnabled" type="checkbox" class="toggle toggle-sm">
-      <span class="label-text text-sm">Normalize level</span>
-    </label>
-    <div v-if="loudnormEnabled" class="flex flex-col gap-1">
+    <div class="flex flex-col gap-1">
+      <label class="text-sm" for="gain-mode">Volume Level</label>
+      <select id="gain-mode" v-model="gainMode" class="select select-bordered select-sm w-full">
+        <option value="off">Off</option>
+        <option value="loudnorm">Normalize level</option>
+        <option value="peak">Boost to peak</option>
+      </select>
+    </div>
+    <div v-if="gainMode === 'loudnorm'" class="flex flex-col gap-1">
       <label class="text-sm flex justify-between"><span>Target loudness</span><span>{{ targetLufs }} LUFS</span></label>
       <input v-model.number="targetLufs" type="range" class="range range-sm" min="-24" max="-6" step="1">
+    </div>
+    <div v-else-if="gainMode === 'peak'" class="flex flex-col gap-1">
+      <label class="text-sm flex justify-between">
+        <span>Adjust from calculated</span>
+        <span>{{ relativeDb > 0 ? '+' : '' }}{{ relativeDb }}dB</span>
+      </label>
+      <input
+        v-model.number="relativeDb"
+        type="range"
+        class="range range-sm w-full"
+        :class="relativeDb > 0 ? 'range-warning' : ''"
+        min="-16"
+        max="16"
+        step="1"
+        aria-label="Adjust boost from calculated"
+      >
+      <div class="flex justify-between text-xs text-base-content/50">
+        <span>Quieter</span>
+        <span class="ml-12">Calculated</span>
+        <span>Risk of clipping</span>
+      </div>
+      <p class="text-xs text-base-content/50">
+        A single flat gain is calculated per-render so the loudest moment sits just under
+        clipping, preserving dynamics.
+      </p>
     </div>
   </div>
 </template>
