@@ -9,14 +9,17 @@ interface SongListItem {
   musicKey: string | null
   timeSignature: string | null
   createdAt: string
+  recordedAt: string
   tags: string[]
 }
 
 const search = ref('')
 const activeTags = ref<string[]>([])
+const sort = ref<'recent' | 'title' | 'rating'>('recent')
 
 const { data: songsList, refresh: refreshSongs } = await useFetch<SongListItem[]>('/api/songs', {
   query: computed(() => ({
+    sort: sort.value,
     ...(search.value ? { q: search.value } : {}),
     ...(activeTags.value.length ? { tags: activeTags.value.join(',') } : {}),
   })),
@@ -95,12 +98,19 @@ async function applyBulkTags() {
       Your account is awaiting admin approval — you can record up to 10 songs in the meantime.
     </p>
 
-    <input
-      v-model="search"
-      type="text"
-      placeholder="Search songs…"
-      class="input input-bordered w-full mb-3"
-    >
+    <div class="flex gap-2 mb-3">
+      <input
+        v-model="search"
+        type="text"
+        placeholder="Search songs…"
+        class="input input-bordered w-full"
+      >
+      <select v-model="sort" class="select select-bordered w-auto min-w-22" aria-label="Sort songs">
+        <option value="recent">Date</option>
+        <option value="title">Title</option>
+        <option value="rating">Rating</option>
+      </select>
+    </div>
 
     <div v-if="allTags?.length" class="flex flex-wrap gap-1 mb-4">
       <button
@@ -181,6 +191,7 @@ async function applyBulkTags() {
         >
           <div class="font-medium truncate">{{ song.title }}</div>
           <div class="text-xs text-base-content/60 flex gap-2 flex-wrap items-center mt-0.5">
+            <span>{{ formatDate(song.recordedAt) }}</span>
             <span v-if="song.durationS">{{ formatDuration(song.durationS) }}</span>
             <span v-if="song.musicKey">{{ song.musicKey }}</span>
             <span v-if="song.timeSignature">{{ song.timeSignature }}</span>
