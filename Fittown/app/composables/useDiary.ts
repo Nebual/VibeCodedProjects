@@ -106,6 +106,19 @@ export interface GoalSuggestion {
   suggested_goal_kcal: number
 }
 
+/**
+ * One daily reminder ("Vitamin D", "Meds") as the diary day shows it.
+ *
+ * The server only includes a reminder in a day's payload when that day is on
+ * or after its created day and before its removal day, so past days keep the
+ * checkboxes they had. `done` is this day's tick.
+ */
+export interface ReminderRow {
+  id: number
+  name: string
+  done: boolean
+}
+
 export interface DiaryDay {
   date: string
   meals: Record<string, DiaryEntry[]>
@@ -124,6 +137,7 @@ export interface DiaryDay {
   /** Most recent weigh-in on any date — what the calorie estimate uses. */
   latest_weight_kg: number | null
   biometrics: BiometricRow[]
+  reminders: ReminderRow[]
 }
 
 export const MEAL_ORDER = ['breakfast', 'lunch', 'dinner', 'snack'] as const
@@ -246,6 +260,33 @@ export function useDiary(date: Ref<string | null>) {
     await refresh()
   }
 
+  /** Add a daily reminder, starting today (or the day being viewed). */
+  async function addReminder(name: string) {
+    await $fetch('/api/reminders', {
+      method: 'POST',
+      body: { date: requireDate(), name },
+    })
+    await refresh()
+  }
+
+  /** Tick (or untick) one reminder for the day being viewed. */
+  async function toggleReminder(reminderId: number, done: boolean) {
+    await $fetch(`/api/reminders/${reminderId}/check`, {
+      method: 'POST',
+      body: { date: requireDate(), done },
+    })
+    await refresh()
+  }
+
+  /**
+   * Remove a reminder from this day onward. Past days keep their checkboxes;
+   * the confirmation happens in the component before this fires.
+   */
+  async function removeReminder(reminderId: number) {
+    await $fetch(`/api/reminders/${reminderId}`, { method: 'DELETE' })
+    await refresh()
+  }
+
   async function answerGoalSuggestion(action: 'accept' | 'dismiss') {
     await $fetch('/api/diary/goal-suggestion', {
       method: 'POST',
@@ -272,6 +313,9 @@ export function useDiary(date: Ref<string | null>) {
     setBiometric,
     addBiometricType,
     removeBiometricType,
+    addReminder,
+    toggleReminder,
+    removeReminder,
     acceptGoalSuggestion,
     dismissGoalSuggestion,
   }

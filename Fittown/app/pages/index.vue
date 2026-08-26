@@ -25,6 +25,7 @@ const date = computed({
 const {
   day, pending, error, refresh, removeEntry, addWater, removeWorkout,
   setWeight, clearWeight, setBiometric, addBiometricType, removeBiometricType,
+  addReminder, toggleReminder, removeReminder,
   acceptGoalSuggestion, dismissGoalSuggestion,
 } = useDiary(date)
 
@@ -102,6 +103,14 @@ async function updateEntryPortion(id: number, body: Record<string, unknown>) {
         :total-minutes="day.workouts.total_minutes"
         :date="date!"
         @remove="removeWorkout"
+      />
+
+      <RemindersSection
+        :reminders="day.reminders"
+        :date="date!"
+        @add="addReminder"
+        @toggle="toggleReminder"
+        @remove="removeReminder"
       />
 
       <BodyMeasurements

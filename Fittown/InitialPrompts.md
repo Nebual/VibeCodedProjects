@@ -122,3 +122,5 @@ Let's allow clicking the serving amount on the diary to switch to an inline inpu
 
 The Trends graph doesn't account for exercise, it should chart net calories. Also let's include on the calorie chart, in a separate overlaid colour, the calories burned.
 
+On the diary page, add a new Reminders section, below the Fitness card. When a new reminder is added, it presents as a todo checkbox, that when checked the text fades a little. Later days after its first created day will also show the checkbox, until the checkbox is removed (with a confirmation), at which point that + future days stop showing it, but past days still will. Examples include Vitamin D, Meds, etc.
+

@@ -26,7 +26,7 @@ function detail(w: WorkoutRow) {
 <template>
   <section class="card bg-base-100 shadow-sm">
     <div class="card-body p-0">
-      <header class="flex items-center justify-between px-4 pt-3 pb-2">
+      <header class="flex items-center justify-between px-4 pt-3 pb-1">
         <h2 class="font-semibold flex items-center gap-2">
           <AppIcon name="activity" class="w-4 h-4 text-success" />
           Fitness

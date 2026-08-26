@@ -64,6 +64,12 @@ export function optionalText(value: unknown, maxLength = 200): string | null {
   return s.slice(0, maxLength)
 }
 
+/** Assert a boolean, accepting real booleans only — no truthy strings. */
+export function assertBoolean(value: unknown, field: string): boolean {
+  if (typeof value !== 'boolean') bad(`${field} must be a boolean`)
+  return value
+}
+
 export function assertText(value: unknown, field: string, maxLength = 200): string {
   const s = optionalText(value, maxLength)
   if (!s) bad(`${field} is required`)

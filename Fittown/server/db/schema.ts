@@ -439,6 +439,33 @@ CREATE INDEX IF NOT EXISTS idx_biometric_entries_user_date
   ON biometric_entries(user_id, date);
 
 -- ---------------------------------------------------------------------------
+-- Reminders
+--
+-- Daily todo items on the diary ("Vitamin D", "Meds"). A reminder exists from
+-- its created day onward and is never hard-deleted: removing it records *when*
+-- it was removed, so past days keep showing the checkbox they had, while that
+-- day and every later one stops. Per-day ticks live in their own table so a
+-- checked box stays checked when you navigate back.
+CREATE TABLE IF NOT EXISTS reminders (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name        TEXT NOT NULL,
+  created_on  TEXT NOT NULL,            -- local calendar day, 'YYYY-MM-DD'
+  removed_on  TEXT,                     -- null while live; set when removed
+  sort_order  INTEGER NOT NULL DEFAULT 0,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_reminders_user ON reminders(user_id);
+
+CREATE TABLE IF NOT EXISTS reminder_checks (
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  reminder_id INTEGER NOT NULL REFERENCES reminders(id) ON DELETE CASCADE,
+  date        TEXT NOT NULL,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (user_id, reminder_id, date)
+);
+
+-- ---------------------------------------------------------------------------
 -- Friends and sharing
 --
 -- The only place in the app where one user reads another's rows. Everything

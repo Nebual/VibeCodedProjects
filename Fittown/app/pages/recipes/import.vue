@@ -236,7 +236,7 @@ async function importPhoto() {
       <!-- The preview. Shown before saving, because every line here is a guess. -->
       <section v-if="preview.length" class="card bg-base-100 shadow-sm">
         <div class="card-body p-0">
-          <header class="flex items-center justify-between px-4 pt-3 pb-2">
+          <header class="flex items-center justify-between px-4 pt-3 pb-1">
             <h2 class="font-semibold text-sm">
               {{ preview.length }} {{ preview.length === 1 ? 'ingredient' : 'ingredients' }}
             </h2>

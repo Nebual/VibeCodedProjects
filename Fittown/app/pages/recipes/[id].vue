@@ -656,7 +656,7 @@ const logLink = computed(
     <!-- Ingredients -->
     <section class="card bg-base-100 shadow-sm">
       <div class="card-body p-0">
-        <header class="flex items-center justify-between px-4 pt-3 pb-2">
+        <header class="flex items-center justify-between px-4 pt-3 pb-1">
           <h2 class="font-semibold">Ingredients</h2>
           <span class="text-sm text-base-content/60 tabular">
             {{ roundGrams(data?.raw_g ?? 0) }} {{ unit }} in

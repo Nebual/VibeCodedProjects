@@ -128,6 +128,24 @@ export default defineEventHandler(async (event) => {
     )
     .all(day, user.id)
 
+  // Reminders visible on this day: created on or before it, and not removed
+  // before it. A removal is a removal *date*, so past days keep the checkbox
+  // they had when the reminder still existed; that day and later lose it.
+  // Each row carries the day's tick, if there was one.
+  const reminders = db
+    .prepare(
+      `SELECT r.id, r.name,
+              rc.reminder_id IS NOT NULL AS done
+       FROM reminders r
+       LEFT JOIN reminder_checks rc
+         ON rc.reminder_id = r.id AND rc.user_id = r.user_id AND rc.date = ?
+       WHERE r.user_id = ?
+         AND r.created_on <= ?
+         AND (r.removed_on IS NULL OR r.removed_on > ?)
+       ORDER BY r.sort_order, r.id`,
+    )
+    .all(day, user.id, day, day)
+
   return {
     date: day,
     meals: byMeal,
@@ -150,6 +168,7 @@ export default defineEventHandler(async (event) => {
     weight_kg: weight?.weight_kg ?? null,
     latest_weight_kg: latest?.weight_kg ?? null,
     biometrics,
+    reminders,
   }
 })
 
