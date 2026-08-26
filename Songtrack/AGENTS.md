@@ -4,6 +4,14 @@ This file covers what isn't already in `README.md` or `plans/INITIAL_PLAN.md`, a
 from reading the code: current status, places the build deviated from the plan, bugs already found
 and fixed (so they don't get reintroduced), and environment gotchas specific to how this was built.
 
+# Environment notes:
+
+- **Node v24 every new shell** — the shell doesn't remember it:
+  `source "$HOME/.nvm/nvm.sh" && nvm install`. So `node -v` shows v24, required for the sqlite binary.
+- Long-lived servers detached: `(setsid nohup pnpm dev > /tmp/run.log 2>&1 < /dev/null &)`.
+  Killing the dev server: match `nu[x]t.mjs` or by PID (`nux[t]` won't match the
+  real cmdline); `NUXT_IGNORE_LOCK=1` bypasses the "already running" lock.
+
 ## Current status
 
 Phases 0–5 from `plans/INITIAL_PLAN.md` are built and working: foundation, auth/admin, recorder
@@ -209,14 +217,6 @@ These were specific to the sandbox this was built in, not the production machine
   tried and made things *worse* (do not re-add it) — the actual fixes were (a) not adding that override,
   and (b) the `networkidle` fix above. Installing a dummy PulseAudio null-source was tried and did not
   turn out to be the deciding factor, so it's not required.
-- **The project directory lived on a virtiofs mount with a space in the path
-  (`Claude Experiments/Songtrack`) that doesn't support symlinks**, which breaks `npm`/`pnpm` installs of
-  packages with native builds or `.bin` symlinks, and node-gyp's Makefiles break on spaces in paths
-  regardless of filesystem. The workaround used throughout this session: do all `pnpm install`/dev
-  server/test work in a mirror at a space-free path, then `rsync` changes back to the real project
-  directory (excluding `node_modules`, `.nuxt`, `.output`, `.data*`, `.env`, `samples/`). If you're
-  running directly on the user's own machine instead of this sandbox, you almost certainly don't need
-  this — check for spaces in your actual working directory path first.
 - **pnpm's `allowBuilds` policy** (`pnpm-workspace.yaml`) must list any new native/build-script package
   explicitly (`better-sqlite3`, `esbuild`, `@playwright/test` are already there) or installs fail with
   `ERR_PNPM_IGNORED_BUILDS`.

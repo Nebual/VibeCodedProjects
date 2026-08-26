@@ -11,6 +11,7 @@
     "generate": "nuxt generate",
     "preview": "nuxt preview",
     "start": "node --env-file-if-exists=.env .output/server/index.mjs",
+    "gman-deploy": "git push && ssh gman@gman '/servers/songtrack/Songtrack/bin/gman-deploy.sh'",
     "postinstall": "nuxt prepare",
     "db:generate": "drizzle-kit generate",
     "db:studio": "drizzle-kit studio",
@@ -30,12 +31,14 @@
     "wavesurfer.js": "^7.11.0"
   },
   "devDependencies": {
+    "@nuxt/test-utils": "^4.1.0",
     "@playwright/test": "^1.62.1",
     "@tailwindcss/vite": "^4.1.16",
     "@types/better-sqlite3": "^7.6.13",
     "@vite-pwa/nuxt": "^1.1.1",
     "daisyui": "^5.1.29",
     "drizzle-kit": "^0.31.5",
+    "h3": "2.0.1-rc.29",
     "tailwindcss": "^4.1.16",
     "tsx": "^4.20.7",
     "typescript": "^5.9.3",
