@@ -29,7 +29,9 @@ export const DIARY_CARDS: readonly DiaryCard[] = [
   { id: 'breakfast', label: 'Breakfast' },
   { id: 'lunch', label: 'Lunch' },
   { id: 'dinner', label: 'Dinner' },
-  { id: 'snacks', label: 'Snacks' },
+  // 'snack', not 'snacks': this must match the meal key in MEAL_ORDER /
+  // day.meals, which the Diary page indexes visibility by.
+  { id: 'snack', label: 'Snacks' },
   { id: 'water', label: 'Water' },
   { id: 'fitness', label: 'Fitness' },
   { id: 'reminders', label: 'Reminders' },
