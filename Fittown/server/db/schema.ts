@@ -78,6 +78,12 @@ CREATE TABLE IF NOT EXISTS user_goals (
   -- Negative = losing, positive = gaining, 0 / null = maintaining.
   goal_rate_kg_per_week REAL,
 
+  -- Which Diary cards the user has turned off. A JSON array of card ids from
+  -- shared/diaryCards.ts (e.g. '["water","fitness"]'); null or empty means
+  -- everything visible. One column rather than ten booleans because the
+  -- default is all-on and hiding a card is the deliberate, rare act.
+  diary_cards_hidden TEXT,
+
   updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -457,10 +463,31 @@ CREATE TABLE IF NOT EXISTS reminders (
 );
 CREATE INDEX IF NOT EXISTS idx_reminders_user ON reminders(user_id);
 
+-- Versioned schedule history. Each edit appends a rule taking effect from a
+-- day; evaluating a day uses the newest rule whose effective_from <= that
+-- day. That is what lets "moved Garbage from every-other-Thursday to
+-- every-other-Friday" change the future while the past stays on Thursdays.
+CREATE TABLE IF NOT EXISTS reminder_schedules (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  reminder_id    INTEGER NOT NULL REFERENCES reminders(id) ON DELETE CASCADE,
+  effective_from TEXT NOT NULL,
+  freq           TEXT NOT NULL,         -- 'daily' | 'weekly' | 'monthly'
+  interval       INTEGER NOT NULL DEFAULT 1,   -- weeks between, weekly only
+  byweekday      TEXT NOT NULL DEFAULT '',     -- comma-separated 0=Sun..6=Sat
+  day_of_month   INTEGER,                      -- monthly only
+  created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_reminder_schedules_reminder
+  ON reminder_schedules(reminder_id, effective_from);
+
+-- Per-day ticks and skips. A row with done=1 is a tick; done=0 is a skipped
+-- occurrence ("Delete Today's") — the reminder still exists tomorrow, it just
+-- didn't apply that day. No row means an ordinary unscheduled/unticked day.
 CREATE TABLE IF NOT EXISTS reminder_checks (
   user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   reminder_id INTEGER NOT NULL REFERENCES reminders(id) ON DELETE CASCADE,
   date        TEXT NOT NULL,
+  done        INTEGER NOT NULL DEFAULT 1,
   created_at  TEXT NOT NULL DEFAULT (datetime('now')),
   PRIMARY KEY (user_id, reminder_id, date)
 );

@@ -123,6 +123,9 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     // Upper limit for (added) sugar in grams. Default 50 = 10% of the default
     // 2000 kcal. Reads as shared default for pre-existing rows.
     sugar_limit_g: 'REAL NOT NULL DEFAULT 50',
+    // Which Diary cards the user hid, as a JSON array of ids (see
+    // shared/diaryCards.ts). Null = everything visible.
+    diary_cards_hidden: 'TEXT',
   },
   exercises: {
     met_light: 'REAL',
@@ -163,6 +166,12 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     // every existing row keeps counting the way it always did.
     is_optional: 'INTEGER NOT NULL DEFAULT 0',
     is_included: 'INTEGER NOT NULL DEFAULT 1',
+  },
+  // The first reminders release created reminder_checks without a done flag;
+  // this widens those databases (and no-ops on fresh ones that already have
+  // it from SCHEMA_SQL). Default 1 = ticked, matching the original rows.
+  reminder_checks: {
+    done: 'INTEGER NOT NULL DEFAULT 1',
   },
 }
 

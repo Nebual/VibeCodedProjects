@@ -1,4 +1,9 @@
 import { scaleNutrients, sumNutrients, type NutrientTotals } from '#shared/nutrients'
+import {
+  describeSchedule,
+  occursOn,
+  type ReminderScheduleRule,
+} from '#shared/reminders'
 import { GOAL_REDUCTION_KCAL, computeGoalSuggestion } from '#shared/goalSuggestion'
 import { foodCols } from '../../utils/foods'
 import { HYDRATION_ML_SQL } from '../../utils/hydration'
@@ -131,20 +136,81 @@ export default defineEventHandler(async (event) => {
   // Reminders visible on this day: created on or before it, and not removed
   // before it. A removal is a removal *date*, so past days keep the checkbox
   // they had when the reminder still existed; that day and later lose it.
-  // Each row carries the day's tick, if there was one.
-  const reminders = db
+  // Each row carries the day's tick, if there was one, plus the schedule rule
+  // in force that day — a reminder only *appears* (or shows as due) per its
+  // rule; the full history lets the UI label past days with what applied then.
+  const reminderRows = db
     .prepare(
       `SELECT r.id, r.name,
-              rc.reminder_id IS NOT NULL AS done
+              rc.done AS done
        FROM reminders r
        LEFT JOIN reminder_checks rc
          ON rc.reminder_id = r.id AND rc.user_id = r.user_id AND rc.date = ?
-       WHERE r.user_id = ?
-         AND r.created_on <= ?
+       WHERE r.user_id = ? AND r.created_on <= ?
          AND (r.removed_on IS NULL OR r.removed_on > ?)
        ORDER BY r.sort_order, r.id`,
     )
-    .all(day, user.id, day, day)
+    .all(day, user.id, day, day) as {
+    id: number
+    name: string
+    done: number | null
+  }[]
+
+  // One pass over every schedule rule in force so far — instead of one query
+  // per reminder — then the newest rule per reminder wins.
+  const allRules = db
+    .prepare(
+      `SELECT reminder_id, effective_from, freq, interval, byweekday, day_of_month
+       FROM reminder_schedules
+       WHERE reminder_id IN (${reminderRows.map(() => '?').join(',') || 'NULL'})
+         AND effective_from <= ?
+       ORDER BY reminder_id, effective_from DESC, id DESC`,
+    )
+    .all(...reminderRows.map((r) => r.id), day) as Record<string, unknown>[]
+
+  const newestRule = new Map<number, Record<string, unknown>>()
+  for (const rule of allRules) {
+    const id = Number(rule.reminder_id)
+    if (!newestRule.has(id)) newestRule.set(id, rule)
+  }
+
+  const toRule = (row: Record<string, unknown> | undefined): ReminderScheduleRule | null => {
+    if (!row) return null
+    return {
+      effective_from: String(row.effective_from),
+      freq: row.freq as ReminderScheduleRule['freq'],
+      interval: Number(row.interval),
+      byweekday: String(row.byweekday)
+        .split(',')
+        .filter((s) => s !== '')
+        .map(Number),
+      day_of_month: row.day_of_month === null ? null : Number(row.day_of_month),
+    }
+  }
+
+  const reminders = []
+  for (const row of reminderRows) {
+    // A day with no rule yet (created before recurrence existed) behaves as
+    // daily. Skipped days ("Delete Today's") hide the row entirely.
+    if (row.done === 0) continue
+
+    const rule = toRule(newestRule.get(row.id))
+    /** Whether this reminder's schedule produces an occurrence on this day. */
+    const occurs = rule === null || occursOn(rule, day)
+
+    // A non-daily reminder only shows on its scheduled days (a ticked day
+    // still shows, so history never loses a box once checked).
+    if (!occurs && row.done !== 1) continue
+
+    reminders.push({
+      id: row.id,
+      name: row.name,
+      done: row.done === 1,
+      occurs,
+      schedule: rule,
+      schedule_label: rule && rule.freq !== 'daily' ? describeSchedule(rule) : null,
+    })
+  }
 
   return {
     date: day,

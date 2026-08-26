@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { MEAL_LABELS, MEAL_ORDER, useDiary } from '~/composables/useDiary'
+import { useDiaryCards } from '~/composables/useDiaryCards'
 
 useHead({ title: 'Diary · Fittown' })
 
@@ -25,9 +26,13 @@ const date = computed({
 const {
   day, pending, error, refresh, removeEntry, addWater, removeWorkout,
   setWeight, clearWeight, setBiometric, addBiometricType, removeBiometricType,
-  addReminder, toggleReminder, removeReminder,
+  addReminder, toggleReminder, updateReminderSchedule, skipReminderToday, removeReminder,
   acceptGoalSuggestion, dismissGoalSuggestion,
 } = useDiary(date)
+
+// Which cards show is a per-user preference set on Settings; hidden ones are
+// simply not rendered here.
+const { visible: cardVisible } = useDiaryCards(computed(() => day.value?.goals))
 
 const showMicros = ref(false)
 
@@ -73,6 +78,7 @@ async function updateEntryPortion(id: number, body: Record<string, unknown>) {
       />
 
       <CalorieSummary
+        v-if="cardVisible.summary"
         :totals="day.totals"
         :goals="day.goals"
         :exercise-calories="day.workouts.total_calories"
@@ -81,6 +87,7 @@ async function updateEntryPortion(id: number, body: Record<string, unknown>) {
       <MealSection
         v-for="meal in MEAL_ORDER"
         :key="meal"
+        v-show="cardVisible[meal]"
         :meal="meal"
         :label="MEAL_LABELS[meal]"
         :entries="day.meals[meal] ?? []"
@@ -91,6 +98,7 @@ async function updateEntryPortion(id: number, body: Record<string, unknown>) {
       />
 
       <WaterTracker
+        v-if="cardVisible.water"
         :total-ml="day.water.total_ml"
         :goal-ml="day.goals.water_goal_ml"
         :unit="day.goals.volume_unit"
@@ -98,6 +106,7 @@ async function updateEntryPortion(id: number, body: Record<string, unknown>) {
       />
 
       <FitnessSection
+        v-if="cardVisible.fitness"
         :workouts="day.workouts.entries"
         :total-calories="day.workouts.total_calories"
         :total-minutes="day.workouts.total_minutes"
@@ -106,14 +115,18 @@ async function updateEntryPortion(id: number, body: Record<string, unknown>) {
       />
 
       <RemindersSection
+        v-if="cardVisible.reminders"
         :reminders="day.reminders"
         :date="date!"
         @add="addReminder"
         @toggle="toggleReminder"
+        @update-schedule="updateReminderSchedule"
+        @skip-today="skipReminderToday"
         @remove="removeReminder"
       />
 
       <BodyMeasurements
+        v-if="cardVisible.body"
         :weight-kg="day.weight_kg"
         :unit="day.goals.weight_unit"
         :biometrics="day.biometrics"
@@ -126,7 +139,7 @@ async function updateEntryPortion(id: number, body: Record<string, unknown>) {
         @remove-type="removeBiometricType"
       />
 
-      <section class="card bg-base-100 shadow-sm">
+      <section v-if="cardVisible.nutrition" class="card bg-base-100 shadow-sm">
         <button
           class="btn btn-ghost justify-between w-full"
           :aria-expanded="showMicros"

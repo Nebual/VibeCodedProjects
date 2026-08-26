@@ -1,4 +1,4 @@
-import { assertDate, assertBoolean } from '../../../utils/validate'
+import { assertBoolean } from '../../../utils/validate'
 
 /**
  * Tick (or untick) one reminder for one day.
@@ -23,8 +23,8 @@ export default defineEventHandler(async (event) => {
 
   if (done) {
     db.prepare(
-      `INSERT INTO reminder_checks (user_id, reminder_id, date) VALUES (?, ?, ?)
-       ON CONFLICT(user_id, reminder_id, date) DO NOTHING`,
+      `INSERT INTO reminder_checks (user_id, reminder_id, date, done) VALUES (?, ?, ?, 1)
+       ON CONFLICT(user_id, reminder_id, date) DO UPDATE SET done = 1`,
     ).run(user.id, reminderId, day)
     return { ok: true, done: true }
   }

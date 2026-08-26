@@ -16,6 +16,7 @@ import {
 } from '#shared/body'
 import type { MeasurementSystem } from '#shared/portions'
 import { SHARE_TOGGLES, sharePermissions, type ShareKey } from '#shared/sharing'
+import type { DiaryCardId } from '#shared/diaryCards'
 
 useHead({ title: 'Settings · Fittown' })
 
@@ -140,6 +141,18 @@ async function setSharing(key: ShareKey, value: boolean) {
     sharingBusy.value = null
   }
 }
+
+// --- Diary cards ----------------------------------------------------------
+
+/**
+ * Which cards appear on the Diary page, edited behind a collapsed section so
+ * it costs almost no space until someone wants it. Like Sharing, each toggle
+ * saves the moment it flips; `useDiaryCards` owns the optimistic flip and
+ * revert, reading and writing through `form`.
+ */
+const diaryCardsOpen = ref(false)
+const { cards: DIARY_CARD_LIST, visible: diaryCardVisible, busy: diaryCardBusy, setHidden: setCardHidden, showAll } =
+  useDiaryCards(form)
 
 // --- About you ------------------------------------------------------------
 
@@ -773,6 +786,61 @@ const sugarLabel = computed(() => {
           food you can enter the amount in grams, ounces, pounds, servings or
           whichever unit the packet uses, and Fittown shows what it works out to.
         </p>
+      </div>
+    </section>
+
+    <!--
+      Collapsed by default: ten rows of toggles would otherwise dominate the
+      screen for the majority who never change them. Like Sharing, each switch
+      saves itself the moment it's flipped.
+    -->
+    <section class="card bg-base-100 shadow-sm">
+      <div class="card-body p-4 gap-3">
+        <button
+          class="btn btn-ghost justify-between w-full -mx-2 px-2"
+          :aria-expanded="diaryCardsOpen"
+          @click="diaryCardsOpen = !diaryCardsOpen"
+        >
+          <span class="font-semibold">Diary Card Visibility</span>
+          <AppIcon
+            name="chevronRight"
+            class="w-4 h-4 transition-transform"
+            :class="{ 'rotate-90': diaryCardsOpen }"
+          />
+        </button>
+
+        <template v-if="diaryCardsOpen">
+          <p class="text-xs text-base-content/50">
+            What shows on your
+            <NuxtLink to="/" class="link">Diary</NuxtLink>.
+            Everything is on to start; switch off what you don't use.
+          </p>
+
+          <label
+            v-for="card in DIARY_CARD_LIST"
+            :key="card.id"
+            class="flex items-center justify-between gap-3 cursor-pointer"
+          >
+            <span class="label-text text-sm">{{ card.label }}</span>
+            <input
+              type="checkbox"
+              class="toggle toggle-sm shrink-0"
+              :checked="diaryCardVisible[card.id]"
+              :disabled="diaryCardBusy === card.id"
+              @change="setCardHidden(card.id, !($event.target as HTMLInputElement).checked)"
+            >
+          </label>
+
+          <div class="flex justify-end">
+            <button
+              class="btn btn-outline btn-xs"
+              :disabled="Object.values(diaryCardVisible).every(Boolean) || diaryCardBusy !== null"
+              @click="showAll"
+            >
+              Show all
+            </button>
+          </div>
+        </template>
       </div>
     </section>
 

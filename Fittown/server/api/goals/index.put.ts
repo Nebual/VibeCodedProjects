@@ -1,4 +1,5 @@
 import { ACTIVITY_KEYS } from '#shared/body'
+import { DIARY_CARD_IDS } from '#shared/diaryCards'
 import { SHARE_KEYS } from '#shared/sharing'
 
 /** Numeric goal fields and their accepted ranges. */
@@ -63,6 +64,29 @@ export default defineEventHandler(async (event) => {
     if (body[field] === undefined) continue
     sets.push(`${field} = ?`)
     params.push(body[field] ? 1 : 0)
+  }
+
+  // The hidden-Diary-cards list arrives as an array and is stored as its JSON
+  // text. Validate every id against the shared list — a typo'd id would
+  // otherwise hide nothing today and a real card after a rename. null resets
+  // to "everything visible".
+  if (body.diary_cards_hidden !== undefined) {
+    const raw = body.diary_cards_hidden
+    if (raw === null) {
+      sets.push('diary_cards_hidden = NULL')
+    } else {
+      if (
+        !Array.isArray(raw) ||
+        raw.some((id) => !(DIARY_CARD_IDS as readonly string[]).includes(id))
+      ) {
+        throw createError({
+          statusCode: 400,
+          statusMessage: `diary_cards_hidden must be an array of: ${DIARY_CARD_IDS.join(', ')}`,
+        })
+      }
+      sets.push('diary_cards_hidden = ?')
+      params.push(JSON.stringify([...new Set(raw)]))
+    }
   }
 
   if (sets.length === 0) {

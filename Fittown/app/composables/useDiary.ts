@@ -1,4 +1,5 @@
 import type { NutrientTotals } from '#shared/nutrients'
+import type { ReminderScheduleRule } from '#shared/reminders'
 import type { ActivityKey, HeightUnit, Sex, WeightUnit } from '#shared/body'
 import type { MeasurementSystem } from '#shared/portions'
 import type { EffortKey } from '#shared/activities'
@@ -75,6 +76,8 @@ export interface Goals {
   share_weight: number
   share_calories: number
   share_exercise: number
+  /** JSON array of hidden Diary card ids; null = all visible. See shared/diaryCards.ts. */
+  diary_cards_hidden: string | null
 }
 
 export interface BiometricRow {
@@ -117,6 +120,12 @@ export interface ReminderRow {
   id: number
   name: string
   done: boolean
+  /** Whether the reminder's schedule produces an occurrence on this day. */
+  occurs: boolean
+  /** The rule in force on this day (null only on legacy rows). */
+  schedule: ReminderScheduleRule | null
+  /** Short label like "Every 2 weeks on Thu", or null for daily. */
+  schedule_label: string | null
 }
 
 export interface DiaryDay {
@@ -279,11 +288,40 @@ export function useDiary(date: Ref<string | null>) {
   }
 
   /**
+   * Change a reminder's recurrence from this day onward. Past days keep
+   * evaluating against whichever rule was in force then.
+   */
+  async function updateReminderSchedule(
+    reminderId: number,
+    body: { freq: 'daily' | 'weekly' | 'monthly'; interval?: number; byweekday?: number[]; day_of_month?: number },
+  ) {
+    await $fetch(`/api/reminders/${reminderId}/schedule`, {
+      method: 'POST',
+      body: { date: requireDate(), ...body },
+    })
+    await refresh()
+  }
+
+  /** Skip just this occurrence ("Delete Today's") — other days unaffected. */
+  async function skipReminderToday(reminderId: number) {
+    await $fetch(`/api/reminders/${reminderId}/skip`, {
+      method: 'POST',
+      body: { date: requireDate() },
+    })
+    await refresh()
+  }
+
+  /**
    * Remove a reminder from this day onward. Past days keep their checkboxes;
    * the confirmation happens in the component before this fires.
    */
   async function removeReminder(reminderId: number) {
-    await $fetch(`/api/reminders/${reminderId}`, { method: 'DELETE' })
+    // The API records *which day* the removal starts from, so the viewed day
+    // must travel with the request.
+    await $fetch(`/api/reminders/${reminderId}`, {
+      method: 'DELETE',
+      body: { date: requireDate() },
+    })
     await refresh()
   }
 
@@ -315,6 +353,8 @@ export function useDiary(date: Ref<string | null>) {
     removeBiometricType,
     addReminder,
     toggleReminder,
+    updateReminderSchedule,
+    skipReminderToday,
     removeReminder,
     acceptGoalSuggestion,
     dismissGoalSuggestion,
