@@ -74,7 +74,7 @@ describe('Bloodtrack API e2e', () => {
     }
   })
 
-  it('generates round 1 with 4 sequential pairings', async () => {
+  it('generates the full round-robin (7 rounds, 28 matches for 8 players)', async () => {
     const res = await (
       await fetch(`${base}/api/leagues/${leagueId}/rounds`, {
         method: 'POST',
@@ -82,33 +82,55 @@ describe('Bloodtrack API e2e', () => {
         body: JSON.stringify({}),
       })
     ).json()
-    expect(res.round).toBe(1)
-    expect(res.matches).toHaveLength(4)
-    // set dates so the external endpoint can find "today's" match
-    const m1 = res.matches[0]
-    await (
-      await fetch(`${base}/api/matches/${m1.id}/report`, {
+    expect(res.createdRounds).toBe(7)
+    expect(res.createdMatches).toBe(28)
+
+    // every matchup exactly once
+    const pairs = new Set<string>()
+    for (const m of res.matches) {
+      const key = [m.playerAId, m.playerBId].sort().join('|')
+      expect(pairs.has(key)).toBe(false)
+      pairs.add(key)
+    }
+    expect(pairs.size).toBe(28)
+
+    // idempotent: re-running adds nothing
+    const again = await (
+      await fetch(`${base}/api/leagues/${leagueId}/rounds`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          reporterId: m1.playerAId,
-          result: 'A_WIN',
-          touchdownsA: 1,
-          touchdownsB: 0,
-          casualtiesA: 0,
-          casualtiesB: 0,
-          date: today,
-        }),
+        body: JSON.stringify({}),
       })
     ).json()
+    expect(again.createdMatches).toBe(0)
+  })
+
+  it('reports a match with today\'s date', async () => {
+    const matches = await (await fetch(`${base}/api/leagues/${leagueId}/matches`)).json()
+    const m1 = matches.matches[0]
+    await fetch(`${base}/api/matches/${m1.id}/report`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        reporterId: '__admin__',
+        result: 'A_WIN',
+        touchdownsA: 1,
+        touchdownsB: 0,
+        casualtiesA: 0,
+        casualtiesB: 0,
+        date: today,
+      }),
+    })
   })
 
   it('lists matches ordered by date', async () => {
     const res = await (await fetch(`${base}/api/leagues/${leagueId}/matches`)).json()
-    expect(res.matches).toHaveLength(4)
+    expect(res.matches).toHaveLength(28)
     const dated = res.matches.filter((m: any) => m.date)
     expect(dated).toHaveLength(1)
     expect(dated[0].date).toBe(today)
+    // dated match sorts first
+    expect(res.matches[0].id).toBe(dated[0].id)
   })
 
   it('external endpoint increments touchdowns on the current match', async () => {
@@ -119,6 +141,8 @@ describe('Bloodtrack API e2e', () => {
         body: JSON.stringify(body),
       })
 
+    const matches = await (await fetch(`${base}/api/leagues/${leagueId}/matches`)).json()
+    const dated = matches.matches.find((m: any) => m.date)
     const inc = await (await post({ player: 'B', op: 'inc' })).json()
     expect(inc.touchdownsB).toBe(1)
 
@@ -132,9 +156,50 @@ describe('Bloodtrack API e2e', () => {
 
     // standings reflect external TD updates (match was A win; set overwrote TDsA to 5)
     const standings = await (await fetch(`${base}/api/leagues/${leagueId}/standings`)).json()
-    const alice = standings.find((s: any) => s.name === 'Alice')
-    expect(alice.points).toBe(3)
-    expect(alice.touchdowns).toBe(5)
+    const playerAName = dated.playerA.name
+    const pa = standings.find((s: any) => s.name === playerAName)
+    expect(pa.points).toBe(3)
+    expect(pa.touchdowns).toBe(5)
+  })
+
+  it('lets a player rename themselves but not others', async () => {
+    const league = await (await fetch(`${base}/api/leagues/${leagueId}`)).json()
+    const p0 = league.players[0]
+    const p1 = league.players[1]
+
+    // self-rename works
+    const ok = await fetch(`${base}/api/leagues/${leagueId}/players/${p0.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requesterId: p0.id, name: 'Renamed One' }),
+    })
+    expect(ok.status).toBe(200)
+    const after = await (await fetch(`${base}/api/leagues/${leagueId}`)).json()
+    expect(after.players.find((p: any) => p.id === p0.id).name).toBe('Renamed One')
+
+    // renaming someone else is forbidden
+    const forbidden = await fetch(`${base}/api/leagues/${leagueId}/players/${p1.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requesterId: p0.id, name: 'Hacked' }),
+    })
+    expect(forbidden.status).toBe(403)
+
+    // admin can rename anyone
+    const admin = await fetch(`${base}/api/leagues/${leagueId}/players/${p1.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requesterId: '__admin__', name: 'Admin Renamed' }),
+    })
+    expect(admin.status).toBe(200)
+
+    // empty name rejected
+    const empty = await fetch(`${base}/api/leagues/${leagueId}/players/${p1.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requesterId: '__admin__', name: '  ' }),
+    })
+    expect(empty.status).toBe(400)
   })
 
   it('rejects bad external payloads and non-participant reporters', async () => {

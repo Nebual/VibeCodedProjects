@@ -200,7 +200,7 @@ const samplePayload = computed(() =>
             <path d="M6 4v16m0 0-3-3m3 3 3-3" />
             <path d="M12 6h9M12 12h6M12 18h3" />
           </svg>
-          <span class="text-base-content/50">
+          <span class="text-base-content/60">
             {{ sortMode === 'amount' ? 'Amount' : 'Name' }}
           </span>
         </button>
@@ -228,7 +228,7 @@ const samplePayload = computed(() =>
           >
             <path d="M3 5h18M6 12h12M10 19h4" />
           </svg>
-          <span class="text-base-content/50">Min set</span>
+          <span class="text-base-content/60">Targets Only</span>
         </button>
 
         <span v-if="query.trim()" class="text-sm text-base-content/50">
