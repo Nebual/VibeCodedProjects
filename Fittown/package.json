@@ -14,7 +14,8 @@
     "start": "node --env-file-if-exists=.env .output/server/index.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
-    "postinstall": "nuxt prepare"
+    "postinstall": "nuxt prepare",
+    "gman-deploy": "git push && ssh gman@gman '/servers/fittown/Fittown/bin/deploy-fittown.sh'"
   },
   "dependencies": {
     "barcode-detector": "^3.2.2",
