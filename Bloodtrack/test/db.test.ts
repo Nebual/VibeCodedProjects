@@ -131,10 +131,59 @@ describe('db', () => {
     const b = addPlayer(l.id, 'B')
     insertMatches(l.id, [
       { id: 'x1', round: 1, playerAId: a.id, playerBId: b.id },
-      { id: 'x2', round: 1, playerAId: b.id, playerAIdExtra: undefined, playerBId: a.id } as never,
+      { id: 'x2', round: 1, playerAId: b.id, playerBId: a.id },
     ])
     expect(getLeague(l.id)!.matches).toHaveLength(2)
     // no-op when empty
     insertMatches(l.id, [])
+  })
+
+  it('migrates a legacy json-blob database on open', () => {
+    const { DatabaseSync } = require('node:sqlite') as typeof import('node:sqlite')
+    const path = process.env.BLOODTRACK_DB!
+    // simulate a DB created by the pre-refactor code
+    const legacy = new DatabaseSync(path)
+    legacy.exec('CREATE TABLE leagues (id TEXT PRIMARY KEY, json TEXT NOT NULL)')
+    const blob = JSON.stringify({
+      id: 'lg1',
+      name: 'Legacy League',
+      players: [{ id: 'p1', name: 'Alice' }],
+      matches: [
+        {
+          id: 'm1',
+          round: 2,
+          playerAId: 'p1',
+          playerBId: 'ghost',
+          date: '2026-08-01',
+          reported: {
+            reporterId: 'p1',
+            result: 'A_WIN',
+            touchdownsA: 3,
+            touchdownsB: 1,
+            casualtiesA: 0,
+            casualtiesB: 2,
+          },
+        },
+      ],
+    })
+    legacy.prepare('INSERT INTO leagues (id, json) VALUES (?, ?)').run('lg1', blob)
+    legacy.close()
+
+    _resetDb() // force fresh open through the migration path
+    const l = getLeague('lg1')!
+    expect(l.name).toBe('Legacy League')
+    expect(l.players).toEqual([{ id: 'p1', name: 'Alice' }])
+    expect(l.matches).toHaveLength(1)
+    expect(l.matches[0]).toMatchObject({ id: 'm1', round: 2, date: '2026-08-01' })
+    expect(l.matches[0].reported).toMatchObject({ result: 'A_WIN', touchdownsA: 3 })
+    // writes work post-migration
+    addPlayer('lg1', 'Bob')
+    expect(getPlayers('lg1').map((p) => p.name)).toEqual(['Alice', 'Bob'])
+    // legacy table is gone
+    _resetDb()
+    const d = new DatabaseSync(path)
+    const tables = (d.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[]).map((t) => t.name)
+    expect(tables).not.toContain('leagues_json_legacy')
+    d.close()
   })
 })

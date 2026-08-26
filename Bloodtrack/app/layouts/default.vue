@@ -11,6 +11,10 @@
       <span class="hidden lg:inline text-sm opacity-70">Playing as <b>{{ identity.playerName }}</b></span>
       <span class="lg:hidden text-sm opacity-70"><b>{{ identity.playerName }}</b></span>
 
+      <!-- direct shortcuts -->
+      <NuxtLink :to="`/player/${identity.leagueId}`" class="btn btn-sm btn-ghost">My Matches</NuxtLink>
+      <NuxtLink :to="`/standings/${identity.leagueId}`" class="btn btn-sm btn-ghost">Standings</NuxtLink>
+
       <!-- gear menu: rename + shortcuts -->
       <div class="dropdown dropdown-end">
         <div tabindex="0" role="button" class="btn btn-sm btn-circle btn-ghost" aria-label="Menu">⚙️</div>
@@ -21,17 +25,11 @@
               <span class="badge badge-sm badge-ghost ml-auto">{{ identity.playerName }}</span>
             </button>
           </li>
-          <li class="sm:hidden">
-            <NuxtLink :to="`/player/${identity.leagueId}`">My Matches</NuxtLink>
-          </li>
-          <li class="md:hidden">
-            <NuxtLink :to="`/standings/${identity.leagueId}`">Standings</NuxtLink>
-          </li>
           <li><button @click="logout()">Logout</button></li>
         </ul>
       </div>
 
-      <button class="btn btn-sm btn-outline hidden sm:inline-flex" @click="logout()">Logout</button>
+      <button class="btn btn-sm btn-outline" @click="logout()">Logout</button>
     </div>
   </div>
   <main class="container mx-auto px-4 pb-10 max-w-full">

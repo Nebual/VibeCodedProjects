@@ -73,7 +73,10 @@ async function setMatchDate(matchId: string, ev: Event) {
   dateError.value = ''
   try {
     // dedicated date endpoint — never fabricates a match report
-    await $fetch(`/api/matches/${matchId}/date`, { method: 'PATCH', body: { date: date || null } })
+    await $fetch(`/api/matches/${matchId}/date`, {
+      method: 'PATCH',
+      body: { date: date || null, requesterId: '__admin__' },
+    })
     await refresh()
   } catch (e: any) {
     dateError.value = e?.data?.statusMessage ?? 'Failed to set date'

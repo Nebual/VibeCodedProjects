@@ -38,13 +38,78 @@ CREATE TABLE IF NOT EXISTS reports (
 );
 `
 
+/** True when the leagues table still has the legacy (id, json) shape. */
+function isLegacySchema(d: DatabaseSync): boolean {
+  const row = d.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='leagues'").get() as
+    | { sql?: string }
+    | undefined
+  return !!row?.sql && /\bjson\b/.test(row.sql) && !/\bname\b/.test(row.sql)
+}
+
+/**
+ * One-time migration: copy players/matches/reports out of legacy JSON blobs,
+ * then rebuild the leagues table with the new shape. Runs inside a transaction;
+ * the original data is kept in leagues_json_legacy until success is certain.
+ */
+function migrateLegacyDb(d: DatabaseSync): void {
+  const rows = d.prepare('SELECT id, json FROM leagues').all() as { id: string; json: string }[]
+  d.exec('ALTER TABLE leagues RENAME TO leagues_json_legacy')
+  d.exec(SCHEMA) // fresh normalized tables; aux tables' FKs point at the NEW leagues
+  d.exec('BEGIN')
+  try {
+    const insertLeague = d.prepare('INSERT INTO leagues (id, name) VALUES (?, ?)')
+    const insertPlayer = d.prepare('INSERT INTO players (id, league_id, name) VALUES (?, ?, ?)')
+    const insertMatch = d.prepare(
+      'INSERT INTO matches (id, league_id, round, player_a_id, player_b_id, date) VALUES (?, ?, ?, ?, ?, ?)',
+    )
+    const insertReport = d.prepare(
+      `INSERT OR REPLACE INTO reports (match_id, reporter_id, result, touchdowns_a, touchdowns_b, casualties_a, casualties_b)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    )
+    for (const r of rows) {
+      let l: { id: string; name: string; players?: { id: string; name: string }[]; matches?: Match[] }
+      try {
+        l = JSON.parse(r.json)
+      } catch {
+        continue // unreadable blob — keep going rather than aborting the league list
+      }
+      insertLeague.run(l.id, String(l.name ?? ''))
+      for (const p of l.players ?? []) insertPlayer.run(p.id, l.id, p.name)
+      for (const m of l.matches ?? []) {
+        insertMatch.run(m.id, l.id, m.round, m.playerAId, m.playerBId, m.date ?? null)
+        if (m.reported) {
+          insertReport.run(
+            m.id,
+            m.reported.reporterId,
+            m.reported.result,
+            m.reported.touchdownsA,
+            m.reported.touchdownsB,
+            m.reported.casualtiesA,
+            m.reported.casualtiesB,
+          )
+        }
+      }
+    }
+    d.exec('DROP TABLE leagues_json_legacy')
+    d.exec('COMMIT')
+  } catch (e) {
+    d.exec('ROLLBACK')
+    throw e
+  }
+}
+
 export function db(): DatabaseSync {
   if (!_db) {
     const path = dbPath()
     mkdirSync(dirname(path), { recursive: true })
     _db = new DatabaseSync(path)
+    _db.exec('PRAGMA foreign_keys = OFF') // off during potential migration
+    if (isLegacySchema(_db)) {
+      migrateLegacyDb(_db) // renames old table, creates normalized schema, copies data
+    } else {
+      _db.exec(SCHEMA)
+    }
     _db.exec('PRAGMA foreign_keys = ON')
-    _db.exec(SCHEMA)
   }
   return _db
 }

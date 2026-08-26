@@ -226,4 +226,43 @@ describe('Bloodtrack API e2e', () => {
     })
     expect([400, 403]).toContain(forbidden.status)
   })
+
+  it('date endpoint: admin ok, outsider forbidden, bad date rejected', async () => {
+    const matches = await (await fetch(`${base}/api/leagues/${leagueId}/matches`)).json()
+    const m = matches.matches[0]
+
+    const forbidden = await fetch(`${base}/api/matches/${m.id}/date`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requesterId: 'random-bystander', date: '2026-09-01' }),
+    })
+    expect(forbidden.status).toBe(403)
+
+    const badDate = await fetch(`${base}/api/matches/${m.id}/date`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requesterId: '__admin__', date: 'not-a-date' }),
+    })
+    expect(badDate.status).toBe(400)
+
+    const missing = await fetch(`${base}/api/matches/does-not-exist/date`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requesterId: '__admin__', date: '2026-09-01' }),
+    })
+    expect(missing.status).toBe(404)
+
+    const ok = await fetch(`${base}/api/matches/${m.id}/date`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requesterId: '__admin__', date: '2026-09-01' }),
+    })
+    expect(ok.status).toBe(200)
+    const after = await (await fetch(`${base}/api/matches/${m.id}/date`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requesterId: '__admin__', date: null }),
+    })).json()
+    expect(after.date).toBeUndefined()
+  })
 })

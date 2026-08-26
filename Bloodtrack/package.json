@@ -8,6 +8,7 @@
     "generate": "nuxt generate",
     "preview": "nuxt preview",
     "start": "node --env-file-if-exists=.env .output/server/index.mjs",
+    "gman-deploy": "git push && ssh gman@gman '/servers/bloodtrack/Bloodtrack/bin/gman-deploy.sh'",
     "postinstall": "nuxt prepare"
   },
   "dependencies": {
