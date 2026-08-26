@@ -1,4 +1,4 @@
-import { getLeague, saveLeague } from '../../../../utils/db'
+import { getLeague, renamePlayer } from '../../../../utils/db'
 
 export default defineEventHandler(async (event) => {
   const leagueId = getRouterParam(event, 'id')
@@ -29,7 +29,6 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  player.name = name
-  saveLeague(league)
-  return { ok: true, player }
+  const updated = renamePlayer(leagueId!, playerId!, name)
+  return { ok: true, player: updated }
 })

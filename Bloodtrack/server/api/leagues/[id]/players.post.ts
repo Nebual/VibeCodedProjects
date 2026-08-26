@@ -1,4 +1,4 @@
-import { addPlayer, getLeague, saveLeague } from '../../../utils/db'
+import { addPlayer } from '../../../utils/db'
 
 export default defineEventHandler(async (event) => {
   const leagueId = getRouterParam(event, 'id')

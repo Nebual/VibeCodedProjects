@@ -1,5 +1,4 @@
-import { getLeague, listLeagues, saveLeague } from '../../../utils/db'
-import type { League } from '~~/shared/types'
+import { findMatch, getLeague, updateMatchDate, upsertReport } from '../../../utils/db'
 import type { Report } from '~~/shared/types'
 
 function nonNegInt(v: unknown): number {
@@ -12,6 +11,14 @@ function nonNegInt(v: unknown): number {
 
 export default defineEventHandler(async (event) => {
   const matchId = getRouterParam(event, 'matchId')
+  const found = findMatch(matchId!)
+  if (!found) {
+    throw createError({ statusCode: 404, statusMessage: 'Match not found' })
+  }
+  const { match, leagueId } = found
+  const overwroteExisting = !!match.reported
+  const league = getLeague(leagueId)!
+
   const body = await readBody<{
     reporterId?: string
     result?: string
@@ -19,22 +26,8 @@ export default defineEventHandler(async (event) => {
     touchdownsB?: number
     casualtiesA?: number
     casualtiesB?: number
-    date?: string
+    date?: string | null
   }>(event)
-
-  let league: League | undefined
-  for (const l of listLeagues()) {
-    const full = getLeague(l.id)
-    if (full?.matches.some((m) => m.id === matchId)) {
-      league = full
-      break
-    }
-  }
-  if (!league) {
-    throw createError({ statusCode: 404, statusMessage: 'Match not found' })
-  }
-  const match = league.matches.find((m) => m.id === matchId)!
-  const overwroteExisting = !!match.reported
 
   const reporterId = body?.reporterId
   // '__admin__' is the league admin, who may report any match
@@ -52,11 +45,12 @@ export default defineEventHandler(async (event) => {
   if (result !== 'A_WIN' && result !== 'B_WIN' && result !== 'DRAW') {
     throw createError({ statusCode: 400, statusMessage: 'Invalid result' })
   }
+
   if (body?.date !== undefined && body.date !== null) {
     if (typeof body.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(body.date)) {
       throw createError({ statusCode: 400, statusMessage: 'date must be YYYY-MM-DD' })
     }
-    match.date = body.date
+    updateMatchDate(match.id, body.date)
   }
 
   const report: Report = {
@@ -67,8 +61,7 @@ export default defineEventHandler(async (event) => {
     casualtiesA: nonNegInt(body?.casualtiesA ?? 0),
     casualtiesB: nonNegInt(body?.casualtiesB ?? 0),
   }
-  match.reported = report
-  saveLeague(league)
+  upsertReport(match.id, report)
 
-  return { ok: true, overwroteExisting, match }
+  return { ok: true, overwroteExisting, match: findMatch(matchId!)!.match }
 })

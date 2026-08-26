@@ -8,9 +8,9 @@
  * day is assumed for this endpoint). If no report exists yet, one is created
  * with zeros (result DRAW until a player files a full report).
  */
-import type { League, Match, Report } from '~~/shared/types'
+import type { Report } from '~~/shared/types'
 import { findCurrentMatch } from '~~/shared/matches'
-import { getLeague, saveLeague } from '../../../../utils/db'
+import { findMatch, getLeague, upsertReport } from '../../../../utils/db'
 
 function todayISO(): string {
   const d = new Date()
@@ -69,17 +69,14 @@ export default defineEventHandler(async (event) => {
     })
   }
 
-  if (!match.reported) {
-    match.reported = {
-      reporterId: 'external-api',
-      result: 'DRAW',
-      touchdownsA: 0,
-      touchdownsB: 0,
-      casualtiesA: 0,
-      casualtiesB: 0,
-    }
+  const r: Report = match.reported ?? {
+    reporterId: 'external-api',
+    result: 'DRAW',
+    touchdownsA: 0,
+    touchdownsB: 0,
+    casualtiesA: 0,
+    casualtiesB: 0,
   }
-  const r = match.reported
   const current = side === 'A' ? r.touchdownsA : r.touchdownsB
   let next: number
   if (op === 'inc') next = current + amount
@@ -92,7 +89,8 @@ export default defineEventHandler(async (event) => {
   if (side === 'A') r.touchdownsA = next
   else r.touchdownsB = next
 
-  saveLeague(league)
+  upsertReport(match.id, r)
+
   return {
     ok: true,
     date: today,

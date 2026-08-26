@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { generateRoundRobin } from '~~/shared/scoring'
 import type { Match } from '~~/shared/types'
-import { getLeague, saveLeague } from '../../../utils/db'
+import { getLeague, insertMatches } from '../../../utils/db'
 
 export default defineEventHandler(async (event) => {
   const leagueId = getRouterParam(event, 'id')
@@ -54,7 +54,6 @@ export default defineEventHandler(async (event) => {
         playerBId: p.b.id,
         ...(roundDate ? { date: roundDate } : {}),
       }
-      league.matches.push(match)
       created.push(match)
       existing.add(key)
       anyMatchInRound = true
@@ -62,7 +61,8 @@ export default defineEventHandler(async (event) => {
     if (anyMatchInRound) roundNo++
   }
 
-  saveLeague(league)
+  insertMatches(leagueId!, created) // single transaction
+
   return {
     createdRounds: roundNo - nextRoundNumber,
     createdMatches: created.length,

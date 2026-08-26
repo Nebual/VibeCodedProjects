@@ -3,13 +3,18 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
+  _resetDb,
   addPlayer,
   createLeague,
+  findMatch,
   getLeague,
+  getPlayers,
+  insertMatches,
   listLeagues,
-  saveLeague,
+  renamePlayer,
+  updateMatchDate,
+  upsertReport,
 } from '../server/utils/db'
-import type { League } from '../shared/types'
 
 let dir: string
 let prevEnv: string | undefined
@@ -23,45 +28,113 @@ beforeEach(() => {
 afterEach(() => {
   if (prevEnv === undefined) delete process.env.BLOODTRACK_DB
   else process.env.BLOODTRACK_DB = prevEnv
+  _resetDb()
 })
 
 describe('db', () => {
   it('creates a league and lists it', () => {
     const league = createLeague('My League')
     expect(league.name).toBe('My League')
-    expect(league.players).toEqual([])
     const listed = listLeagues()
     expect(listed).toHaveLength(1)
     expect(listed[0].name).toBe('My League')
+    expect(listed[0].players).toEqual([])
   })
 
-  it('persists players across db re-open', () => {
+  it('persists players across connections', () => {
     const league = createLeague('L2')
     addPlayer(league.id, 'Alice')
     addPlayer(league.id, 'Bob')
-    // fresh open (new module-level cache is bypassed by re-calling; db file re-read)
+    _resetDb() // prove it lives on disk, not in a cache
     const loaded = getLeague(league.id)!
     expect(loaded!.players.map((p) => p.name)).toEqual(['Alice', 'Bob'])
   })
 
-  it('saves and reloads full league blobs including matches', () => {
+  it('saves and reloads full matches including reports', () => {
     const league = createLeague('L3')
     const p1 = addPlayer(league.id, 'A')
     const p2 = addPlayer(league.id, 'B')
-    const updated: League = getLeague(league.id)!
-    updated.matches.push({
-      id: 'm1',
-      round: 1,
-      playerAId: p1.id,
-      playerBId: p2.id,
+    insertMatches(league.id, [{ id: 'm1', round: 1, playerAId: p1.id, playerBId: p2.id }])
+    upsertReport('m1', {
+      reporterId: p1.id,
+      result: 'A_WIN',
+      touchdownsA: 2,
+      touchdownsB: 1,
+      casualtiesA: 3,
+      casualtiesB: 0,
     })
-    saveLeague(updated)
-    const reloaded = getLeague(league.id)
+    _resetDb()
+    const reloaded = getLeague(league.id)!
     expect(reloaded!.matches).toHaveLength(1)
     expect(reloaded!.matches[0].round).toBe(1)
+    expect(reloaded!.matches[0].reported).toMatchObject({ result: 'A_WIN', touchdownsA: 2 })
   })
 
   it('returns undefined for unknown league', () => {
     expect(getLeague('nope')).toBeUndefined()
+  })
+
+  it('getPlayers lists league players only', () => {
+    const l1 = createLeague('one')
+    const l2 = createLeague('two')
+    addPlayer(l1.id, 'A')
+    addPlayer(l2.id, 'B')
+    expect(getPlayers(l1.id).map((p) => p.name)).toEqual(['A'])
+  })
+
+  it('renames a player row', () => {
+    const l = createLeague('L')
+    const p = addPlayer(l.id, 'Old')
+    expect(renamePlayer(l.id, p.id, 'New')).toEqual({ id: p.id, name: 'New' })
+    expect(getPlayers(l.id)[0].name).toBe('New')
+  })
+
+  it('renamePlayer returns undefined for wrong league/player', () => {
+    const l = createLeague('L')
+    const other = createLeague('other')
+    const p = addPlayer(other.id, 'X')
+    expect(renamePlayer(l.id, p.id, 'Y')).toBeUndefined()
+  })
+
+  it('updates match date and upserts (overwrites) report; clears date on null', () => {
+    const l = createLeague('L')
+    const a = addPlayer(l.id, 'A')
+    const b = addPlayer(l.id, 'B')
+    insertMatches(l.id, [{ id: 'm1', round: 1, playerAId: a.id, playerBId: b.id }])
+    updateMatchDate('m1', '2026-08-01')
+    expect(getLeague(l.id)!.matches[0].date).toBe('2026-08-01')
+    upsertReport('m1', { reporterId: a.id, result: 'A_WIN', touchdownsA: 2, touchdownsB: 1, casualtiesA: 3, casualtiesB: 0 })
+    upsertReport('m1', { reporterId: b.id, result: 'DRAW', touchdownsA: 1, touchdownsB: 1, casualtiesA: 0, casualtiesB: 0 })
+    const m = getLeague(l.id)!.matches[0]
+    expect(m.reported).toMatchObject({ result: 'DRAW', reporterId: b.id })
+    // date survives report overwrite
+    expect(m.date).toBe('2026-08-01')
+    updateMatchDate('m1', null)
+    expect(getLeague(l.id)!.matches[0].date).toBeUndefined()
+  })
+
+  it('findMatch locates a match with its league', () => {
+    const l = createLeague('L')
+    const a = addPlayer(l.id, 'A')
+    const b = addPlayer(l.id, 'B')
+    insertMatches(l.id, [{ id: 'mx', round: 3, playerAId: a.id, playerBId: b.id, date: '2026-09-01' }])
+    const found = findMatch('mx')!
+    expect(found.leagueId).toBe(l.id)
+    expect(found.match.round).toBe(3)
+    expect(found.match.date).toBe('2026-09-01')
+    expect(findMatch('nope')).toBeUndefined()
+  })
+
+  it('inserts many matches in one call', () => {
+    const l = createLeague('L')
+    const a = addPlayer(l.id, 'A')
+    const b = addPlayer(l.id, 'B')
+    insertMatches(l.id, [
+      { id: 'x1', round: 1, playerAId: a.id, playerBId: b.id },
+      { id: 'x2', round: 1, playerAId: b.id, playerAIdExtra: undefined, playerBId: a.id } as never,
+    ])
+    expect(getLeague(l.id)!.matches).toHaveLength(2)
+    // no-op when empty
+    insertMatches(l.id, [])
   })
 })

@@ -27,22 +27,30 @@ const addingPlayer = ref(false)
 const generatingSchedule = ref(false)
 const scheduleStart = ref('')
 
+const addPlayerError = ref('')
+
 async function addPlayer() {
   const name = newPlayerName.value.trim()
   if (!name) return
   addingPlayer.value = true
+  addPlayerError.value = ''
   try {
     await $fetch(`/api/leagues/${leagueId.value}/players`, { method: 'POST', body: { name } })
     newPlayerName.value = ''
     await refresh()
+  } catch (e: any) {
+    addPlayerError.value = e?.data?.statusMessage ?? 'Failed to add player'
   } finally {
     addingPlayer.value = false
   }
 }
 
+const scheduleError = ref('')
+
 /** Generates the FULL round-robin (N-1 rounds, no repeated matchups). */
 async function generateSchedule() {
   generatingSchedule.value = true
+  scheduleError.value = ''
   try {
     await $fetch(`/api/leagues/${leagueId.value}/rounds`, {
       method: 'POST',
@@ -51,24 +59,26 @@ async function generateSchedule() {
       },
     })
     await refresh()
+  } catch (e: any) {
+    scheduleError.value = e?.data?.statusMessage ?? 'Failed to generate schedule'
   } finally {
     generatingSchedule.value = false
   }
 }
 
-function setMatchDate(matchId: string, ev: Event) {
+const dateError = ref('')
+
+async function setMatchDate(matchId: string, ev: Event) {
   const date = (ev.target as HTMLInputElement).value
-  if (!date) return
-  const match = league.value?.matches.find((m) => m.id === matchId)
-  if (!match) return
-  $fetch(`/api/matches/${matchId}/report`, {
-    method: 'POST',
-    body: {
-      reporterId: '__admin__',
-      ...(match.reported ?? { result: 'DRAW', touchdownsA: 0, touchdownsB: 0, casualtiesA: 0, casualtiesB: 0 }),
-      date,
-    },
-  }).then(refresh)
+  dateError.value = ''
+  try {
+    // dedicated date endpoint — never fabricates a match report
+    await $fetch(`/api/matches/${matchId}/date`, { method: 'PATCH', body: { date: date || null } })
+    await refresh()
+  } catch (e: any) {
+    dateError.value = e?.data?.statusMessage ?? 'Failed to set date'
+    await refresh() // restore the input to the stored value
+  }
 }
 
 const rounds = computed(() => {
@@ -156,6 +166,7 @@ async function confirmRename() {
           <input v-model="newPlayerName" class="input input-bordered join-item w-full min-w-0" placeholder="Player name…" @keyup.enter="addPlayer" />
           <button class="btn btn-primary join-item shrink-0" :disabled="addingPlayer || !newPlayerName.trim()" @click="addPlayer">Add</button>
         </div>
+        <p v-if="addPlayerError" class="text-error text-sm mt-1">{{ addPlayerError }}</p>
         <!-- editable name badges: click to rename (admin) -->
         <div class="flex flex-wrap gap-2">
           <span
@@ -185,6 +196,7 @@ async function confirmRename() {
             {{ generatingSchedule ? 'Generating…' : league.matches.length ? 'Generate remaining rounds' : 'Generate full schedule' }}
           </button>
         </div>
+        <p v-if="scheduleError" class="text-error text-sm">{{ scheduleError }}</p>
 
         <p v-if="!league.matches.length" class="opacity-60 py-4 text-center">No rounds yet.</p>
 
@@ -227,6 +239,7 @@ async function confirmRename() {
     </div>
   </div>
   <p v-else class="text-center opacity-60 py-10">League not found.</p>
+  <p v-if="dateError" class="text-error text-sm text-center">{{ dateError }}</p>
 
   <!-- rename dialog -->
   <dialog :open="renameOpen" class="modal modal-bottom sm:modal-middle">
