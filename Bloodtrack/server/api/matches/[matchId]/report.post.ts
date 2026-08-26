@@ -37,10 +37,12 @@ export default defineEventHandler(async (event) => {
   const overwroteExisting = !!match.reported
 
   const reporterId = body?.reporterId
-  if (!reporterId || !league.players.some((p) => p.id === reporterId)) {
+  // '__admin__' is the league admin, who may report any match
+  if (reporterId === '__admin__') {
+    // ok
+  } else if (!reporterId || !league.players.some((p) => p.id === reporterId)) {
     throw createError({ statusCode: 400, statusMessage: 'Unknown reporter' })
-  }
-  if (reporterId !== match.playerAId && reporterId !== match.playerBId) {
+  } else if (reporterId !== match.playerAId && reporterId !== match.playerBId) {
     throw createError({
       statusCode: 403,
       statusMessage: 'Reporter must be a participant in this match',

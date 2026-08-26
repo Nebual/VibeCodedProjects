@@ -106,7 +106,7 @@ const selectedMatch = computed(() => {
         <MatchReportForm
           v-if="selectedMatch && (selectedMatch.playerAId === myPlayerId || selectedMatch.playerBId === myPlayerId)"
           :match="selectedMatch"
-          :my-player-id="myPlayerId"
+          :reporter-id="myPlayerId"
           @submitted="async () => { await refresh(); selectedMatchId = null }"
         />
       </div>

@@ -13,6 +13,13 @@ function selectLeague(id: string) {
   selectedLeagueId.value = selectedLeagueId.value === id ? null : id
 }
 
+async function playAs(leagueId: string, playerId: string, playerName: string) {
+  login({ playerId, playerName, leagueId })
+  // full navigation (not just navigateTo) so the player page re-mounts and
+  // loads this player's matches fresh
+  await navigateTo(`/player/${leagueId}`, { replace: true })
+}
+
 async function createLeague() {
   const name = newLeagueName.value.trim()
   if (!name) return
@@ -73,7 +80,7 @@ async function createLeague() {
                   v-for="player in league.players"
                   :key="player.id"
                   class="btn btn-sm btn-outline btn-secondary"
-                  @click="login({ playerId: player.id, playerName: player.name, leagueId: league.id }) && navigateTo(`/player/${league.id}`)"
+                  @click="playAs(league.id, player.id, player.name)"
                 >
                   {{ player.name }}
                 </button>

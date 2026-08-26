@@ -55,6 +55,42 @@ export function computeStandings(league: League): Standing[] {
   )
 }
 
+/**
+ * Full round-robin schedule via the circle method: for N players this yields
+ * N-1 rounds where every player faces every other player exactly once.
+ * Odd player counts get a bye each round (the player paired with the ghost).
+ */
+export function generateRoundRobin(players: Player[]): Pairing[][] {
+  const list = [...players]
+  const hasGhost = list.length % 2 === 1
+  if (hasGhost) list.push({ id: '__bye__', name: 'BYE' })
+  const n = list.length
+  const rounds: Pairing[][] = []
+
+  for (let r = 0; r < n - 1; r++) {
+    const pairings: Pairing[] = []
+    for (let i = 0; i < n / 2; i++) {
+      const a = list[i]
+      const b = list[n - 1 - i]
+      if (a.id === '__bye__') {
+        pairings.push({ a: b, b: b, bye: b })
+      } else if (b.id === '__bye__') {
+        pairings.push({ a: a, b: a, bye: a })
+      } else {
+        // alternate home/away across rounds for variety
+        pairings.push(r % 2 === 0 ? { a, b } : { a: b, b: a })
+      }
+    }
+    rounds.push(pairings)
+    // rotate: keep first fixed, rotate the rest
+    const fixed = list[0]
+    const rest = list.slice(1)
+    rest.unshift(rest.pop()!)
+    list.splice(0, list.length, fixed, ...rest)
+  }
+  return rounds
+}
+
 export function pairRound(players: Player[], excludeIds: Set<string> = new Set()): Pairing[] {
   const available = players.filter((p) => !excludeIds.has(p.id))
   const pairings: Pairing[] = []

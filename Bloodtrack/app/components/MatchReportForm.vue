@@ -4,32 +4,26 @@ import type { MatchView } from '~~/shared/matches'
 
 const props = defineProps<{
   match: MatchView
-  myPlayerId: string
+  /** A participant player id, or '__admin__' when the league admin reports. */
+  reporterId: string
 }>()
 
 const emit = defineEmits<{ (e: 'submitted'): void }>()
 
 const RULES_URL = 'https://bloodbowlbase.ru/bb2025/core_rules/#post-game-sequence'
 
-const amA = computed(() => props.match.playerA.id === props.myPlayerId)
-// display from MY perspective: me vs opponent
-const me = computed(() => (amA.value ? props.match.playerA : props.match.playerB))
-const opp = computed(() => (amA.value ? props.match.playerB : props.match.playerA))
+const isAdmin = computed(() => props.reporterId === '__admin__')
+const nameA = computed(() => props.match.playerA.name)
+const nameB = computed(() => props.match.playerB.name)
 
-type Outcome = 'WIN' | 'DRAW' | 'LOSS'
-const outcome = ref<Outcome>(
-  props.match.reported
-    ? props.match.result === 'DRAW'
-      ? 'DRAW'
-      : (props.match.result === 'A_WIN') === amA.value
-        ? 'WIN'
-        : 'LOSS'
-    : 'WIN',
-)
-const myTds = ref(props.match.reported ? (amA.value ? props.match.touchdownsA! : props.match.touchdownsB!) : 0)
-const oppTds = ref(props.match.reported ? (amA.value ? props.match.touchdownsB! : props.match.touchdownsA!) : 0)
-const myCas = ref(props.match.reported ? (amA.value ? props.match.casualtiesA! : props.match.casualtiesB!) : 0)
-const oppCas = ref(props.match.reported ? (amA.value ? props.match.casualtiesB! : props.match.casualtiesA!) : 0)
+type Result = 'A_WIN' | 'B_WIN' | 'DRAW'
+const result = ref<Result>(props.match.result ?? 'DRAW')
+const tdsA = ref(props.match.touchdownsA ?? 0)
+const tdsB = ref(props.match.touchdownsB ?? 0)
+const casA = ref(props.match.casualtiesA ?? 0)
+const casB = ref(props.match.casualtiesB ?? 0)
+// keep date editable alongside stats
+const date = ref(props.match.date ?? '')
 
 const overwriting = computed(() => props.match.reported)
 const confirmOpen = ref(false)
@@ -40,16 +34,18 @@ async function doSubmit() {
   saving.value = true
   error.value = ''
   try {
-    const result = outcome.value === 'WIN' ? (amA.value ? 'A_WIN' : 'B_WIN') : outcome.value === 'LOSS' ? (amA.value ? 'B_WIN' : 'A_WIN') : 'DRAW'
-    const body = {
-      reporterId: props.myPlayerId,
-      result,
-      touchdownsA: amA.value ? myTds.value : oppTds.value,
-      touchdownsB: amA.value ? oppTds.value : myTds.value,
-      casualtiesA: amA.value ? myCas.value : oppCas.value,
-      casualtiesB: amA.value ? oppCas.value : myCas.value,
-    }
-    await $fetch(`/api/matches/${props.match.id}/report`, { method: 'POST', body })
+    await $fetch(`/api/matches/${props.match.id}/report`, {
+      method: 'POST',
+      body: {
+        reporterId: props.reporterId,
+        result: result.value,
+        touchdownsA: tdsA.value,
+        touchdownsB: tdsB.value,
+        casualtiesA: casA.value,
+        casualtiesB: casB.value,
+        ...(date.value ? { date: date.value } : {}),
+      },
+    })
     emit('submitted')
   } catch (e: any) {
     error.value = e?.data?.statusMessage ?? 'Failed to submit report'
@@ -68,7 +64,7 @@ function submit() {
 <template>
   <div class="card bg-base-100 shadow">
     <div class="card-body gap-4">
-      <div class="alert alert-info text-sm py-2">
+      <div v-if="!isAdmin" class="alert alert-info text-sm py-2">
         <span>
           You can log stats for both players.
           <a :href="RULES_URL" target="_blank" rel="noopener" class="link link-primary font-semibold">
@@ -78,34 +74,41 @@ function submit() {
       </div>
 
       <h3 class="card-title">
-        {{ me.name }} <span class="opacity-50">vs</span> {{ opp.name }}
+        {{ nameA }} <span class="opacity-50">vs</span> {{ nameB }}
         <span class="badge badge-ghost">Round {{ match.round }}</span>
       </h3>
 
-      <div class="grid grid-cols-2 gap-4 sm:grid-cols-3 items-end">
+      <div class="grid grid-cols-2 gap-4 items-end">
+        <div>
+          <label class="label label-text-alt opacity-70">{{ nameA }} — Touchdowns</label>
+          <input v-model.number="tdsA" type="number" min="0" max="99" class="input input-bordered w-full" />
+        </div>
+        <div>
+          <label class="label label-text-alt opacity-70">{{ nameB }} — Touchdowns</label>
+          <input v-model.number="tdsB" type="number" min="0" max="99" class="input input-bordered w-full" />
+        </div>
+        <div>
+          <label class="label label-text-alt opacity-70">{{ nameA }} — Casualties</label>
+          <input v-model.number="casA" type="number" min="0" max="99" class="input input-bordered w-full" />
+        </div>
+        <div>
+          <label class="label label-text-alt opacity-70">{{ nameB }} — Casualties</label>
+          <input v-model.number="casB" type="number" min="0" max="99" class="input input-bordered w-full" />
+        </div>
+      </div>
+
+      <div class="flex flex-wrap gap-4">
         <div>
           <label class="label label-text-alt opacity-70">Result</label>
-          <select v-model="outcome" class="select select-bordered w-full">
-            <option value="WIN">Win (3 pts)</option>
-            <option value="DRAW">Draw (1 pt)</option>
-            <option value="LOSS">Loss (0 pts)</option>
+          <select v-model="result" class="select select-bordered w-full">
+            <option value="A_WIN">{{ nameA }} wins</option>
+            <option value="DRAW">Draw</option>
+            <option value="B_WIN">{{ nameB }} wins</option>
           </select>
         </div>
         <div>
-          <label class="label label-text-alt opacity-70">{{ me.name }} — Touchdowns</label>
-          <input v-model.number="myTds" type="number" min="0" max="99" class="input input-bordered w-full" />
-        </div>
-        <div>
-          <label class="label label-text-alt opacity-70">{{ opp.name }} — Touchdowns</label>
-          <input v-model.number="oppTds" type="number" min="0" max="99" class="input input-bordered w-full" />
-        </div>
-        <div>
-          <label class="label label-text-alt opacity-70">{{ me.name }} — Casualties</label>
-          <input v-model.number="myCas" type="number" min="0" max="99" class="input input-bordered w-full" />
-        </div>
-        <div>
-          <label class="label label-text-alt opacity-70">{{ opp.name }} — Casualties</label>
-          <input v-model.number="oppCas" type="number" min="0" max="99" class="input input-bordered w-full" />
+          <label class="label label-text-alt opacity-70">Match date</label>
+          <input v-model="date" type="date" class="input input-bordered w-full" />
         </div>
       </div>
 

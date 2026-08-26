@@ -1,28 +1,31 @@
 <script setup lang="ts">
+import type { MatchView } from '~~/shared/matches'
+
 const route = useRoute()
 const leagueId = computed(() => String(route.params.leagueId))
 
-type LeagueResponse = {
+type MatchRow = {
+  id: string
+  round: number
+  date?: string
+  playerAId: string
+  playerBId: string
+  reported?: { result: string; touchdownsA: number; touchdownsB: number; casualtiesA: number; casualtiesB: number }
+}
+
+const { data: league, refresh } = await useFetch<{
   id: string
   name: string
   players: { id: string; name: string }[]
-  matches: {
-    id: string
-    round: number
-    date?: string
-    playerAId: string
-    playerBId: string
-    reported?: { result: string; touchdownsA: number; touchdownsB: number; casualtiesA: number; casualtiesB: number }
-  }[]
-}
-
-const { data: league, refresh } = await useFetch<LeagueResponse>(`/api/leagues/${leagueId.value}`)
+  matches: MatchRow[]
+}>(`/api/leagues/${leagueId.value}`)
 
 const playerName = (id: string) => league.value?.players.find((p) => p.id === id)?.name ?? '?'
 
 const newPlayerName = ref('')
 const addingPlayer = ref(false)
-const generatingRound = ref(false)
+const generatingSchedule = ref(false)
+const scheduleStart = ref('')
 
 async function addPlayer() {
   const name = newPlayerName.value.trim()
@@ -37,37 +40,40 @@ async function addPlayer() {
   }
 }
 
-async function generateRound() {
-  generatingRound.value = true
+/** Generates the FULL round-robin (N-1 rounds, no repeated matchups). */
+async function generateSchedule() {
+  generatingSchedule.value = true
   try {
-    await $fetch(`/api/leagues/${leagueId.value}/rounds`, { method: 'POST', body: {} })
+    await $fetch(`/api/leagues/${leagueId.value}/rounds`, {
+      method: 'POST',
+      body: {
+        ...(scheduleStart.value ? { startDate: scheduleStart.value, daysPerRound: 14 } : {}),
+      },
+    })
     await refresh()
   } finally {
-    generatingRound.value = false
+    generatingSchedule.value = false
   }
 }
 
 function setMatchDate(matchId: string, ev: Event) {
   const date = (ev.target as HTMLInputElement).value
   if (!date) return
-  // reuse report endpoint's date-only update path requires a full report; use a
-  // lightweight PATCH via the same endpoint with reporterId of participant A
   const match = league.value?.matches.find((m) => m.id === matchId)
   if (!match) return
   $fetch(`/api/matches/${matchId}/report`, {
     method: 'POST',
     body: {
-      reporterId: match.playerAId,
+      reporterId: '__admin__',
       ...(match.reported ?? { result: 'DRAW', touchdownsA: 0, touchdownsB: 0, casualtiesA: 0, casualtiesB: 0 }),
-      ...match.reported,
       date,
     },
   }).then(refresh)
 }
 
 const rounds = computed(() => {
-  const byRound = new Map<number, typeof matches>()
   const matches = league.value?.matches ?? []
+  const byRound = new Map<number, MatchRow[]>()
   for (const m of [...matches].sort((a, b) => a.round - b.round)) {
     if (!byRound.has(m.round)) byRound.set(m.round, [])
     byRound.get(m.round)!.push(m)
@@ -76,6 +82,26 @@ const rounds = computed(() => {
     round,
     matches: [...ms].sort((a, b) => (a.date ?? '9999').localeCompare(b.date ?? '9999')),
   }))
+})
+
+// admin can open the report form for ANY match
+const selectedMatchId = ref<string | null>(null)
+const selectedMatch = computed<MatchView | null>(() => {
+  const m = league.value?.matches.find((x) => x.id === selectedMatchId.value)
+  if (!m) return null
+  return {
+    id: m.id,
+    round: m.round,
+    date: m.date,
+    reported: !!m.reported,
+    playerA: { id: m.playerAId, name: playerName(m.playerAId) },
+    playerB: { id: m.playerBId, name: playerName(m.playerBId) },
+    result: m.reported?.result as MatchView['result'],
+    touchdownsA: m.reported?.touchdownsA,
+    touchdownsB: m.reported?.touchdownsB,
+    casualtiesA: m.reported?.casualtiesA,
+    casualtiesB: m.reported?.casualtiesB,
+  }
 })
 </script>
 
@@ -101,10 +127,17 @@ const rounds = computed(() => {
 
     <div class="card bg-base-100 shadow">
       <div class="card-body">
-        <h2 class="card-title">Rounds &amp; Fixtures</h2>
-        <button class="btn btn-secondary w-fit" :disabled="generatingRound || league.players.length < 2" @click="generateRound">
-          {{ generatingRound ? 'Generating…' : `Generate Round ${Math.max(0, ...league.matches.map(m => m.round), 0) + 1}` }}
-        </button>
+        <h2 class="card-title">Full Schedule</h2>
+        <p class="text-sm opacity-70">
+          Generates all {{ Math.max(league.players.length - 1, 0) }} rounds (round-robin): every player meets every other exactly once.
+          Existing matchups are never duplicated — safe to run again after adding players.
+        </p>
+        <div class="join w-fit">
+          <input v-model="scheduleStart" type="date" class="input input-bordered join-item" />
+          <button class="btn btn-secondary join-item" :disabled="generatingSchedule || league.players.length < 2" @click="generateSchedule">
+            {{ generatingSchedule ? 'Generating…' : league.matches.length ? 'Generate remaining rounds' : 'Generate full schedule' }}
+          </button>
+        </div>
 
         <p v-if="!league.matches.length" class="opacity-60 py-4 text-center">No rounds yet.</p>
 
@@ -112,17 +145,28 @@ const rounds = computed(() => {
           <h3 class="font-semibold opacity-80 mb-2">Round {{ r.round }}</h3>
           <ul class="list bg-base-200 rounded-box">
             <li v-for="m in r.matches" :key="m.id" class="list-row items-center gap-4 flex-wrap">
-              <span class="font-medium">{{ playerName(m.playerAId) }}</span>
-              <span class="opacity-50">vs</span>
-              <span class="font-medium">{{ playerName(m.playerBId) }}</span>
+              <span class="font-medium cursor-pointer hover:underline" @click="selectedMatchId = selectedMatchId === m.id ? null : m.id">
+                {{ playerName(m.playerAId) }} <span class="opacity-50">vs</span> {{ playerName(m.playerBId) }}
+              </span>
               <input type="date" class="input input-xs input-bordered" :value="m.date" @change="(e) => setMatchDate(m.id, e)" />
               <span v-if="m.reported" class="badge badge-success badge-sm whitespace-nowrap">
                 {{ m.reported.touchdownsA }}–{{ m.reported.touchdownsB }} TD,
                 {{ m.reported.casualtiesA }}–{{ m.reported.casualtiesB }} CAS
               </span>
               <span v-else class="badge badge-ghost badge-sm">Not reported</span>
+              <button class="btn btn-xs btn-primary" @click="selectedMatchId = selectedMatchId === m.id ? null : m.id">
+                {{ selectedMatchId === m.id ? 'Close' : 'Enter stats' }}
+              </button>
             </li>
           </ul>
+
+          <MatchReportForm
+            v-if="selectedMatch && r.matches.some(m => m.id === selectedMatch.id)"
+            :match="selectedMatch"
+            reporter-id="__admin__"
+            class="mt-3"
+            @submitted="async () => { await refresh(); }"
+          />
         </div>
       </div>
     </div>
