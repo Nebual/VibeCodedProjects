@@ -116,3 +116,9 @@ Sodium 0mg
 Potassium 150mg
 Calcium 0mg
 Iron 1.75mg
+
+The Share recipe button should immediately write to clipboard.  
+Let's allow clicking the serving amount on the diary to switch to an inline input, similar to in recipes.
+
+The Trends graph doesn't account for exercise, it should chart net calories. Also let's include on the calorie chart, in a separate overlaid colour, the calories burned.
+

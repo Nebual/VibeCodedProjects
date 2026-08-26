@@ -90,6 +90,10 @@ const days = computed(() => {
  * Bars to draw. A year is 365 days and at most ~52 bars fit on a phone, so the
  * year view averages each week — and averages over *logged* days only, or a
  * week where you tracked two days would look like a week of near-fasting.
+ *
+ * Each bucket carries three numbers: gross intake, burned, and net
+ * (intake − burned). Net is what the bar's height shows — training counts —
+ * while burned rides along as the overlaid green band.
  */
 const buckets = computed(() => {
   if (!isYear.value) {
@@ -97,19 +101,28 @@ const buckets = computed(() => {
       key: d.date,
       label: fromLocalDate(d.date).toLocaleDateString(undefined, { weekday: 'narrow' }),
       kcal: d.kcal,
-      tip: `${d.kcal} kcal`,
+      burned: d.burned,
+      net: d.kcal - d.burned,
+      tip: d.burned
+        ? `ate ${d.kcal} · burned ${d.burned} · net ${d.kcal - d.burned} kcal`
+        : `${d.kcal} kcal`,
     }))
   }
 
-  const out: { key: string; label: string; kcal: number; tip: string }[] = []
+  const out: {
+    key: string; label: string; kcal: number; burned: number; net: number; tip: string
+  }[] = []
   let lastMonth = -1
   for (let i = 0; i < days.value.length; i += 7) {
     const week = days.value.slice(i, i + 7)
     const first = week[0]!
     const loggedDays = week.filter((d) => d.kcal > 0)
-    const avg = loggedDays.length
-      ? Math.round(loggedDays.reduce((sum, d) => sum + d.kcal, 0) / loggedDays.length)
-      : 0
+    const avg = (pick: (d: typeof first) => number) =>
+      loggedDays.length
+        ? Math.round(loggedDays.reduce((sum, d) => sum + pick(d), 0) / loggedDays.length)
+        : 0
+    const kcal = avg((d) => d.kcal)
+    const burned = avg((d) => d.burned)
 
     // Label only the first bucket of each month, so the axis reads as a year
     // instead of 52 unreadable stubs.
@@ -124,9 +137,11 @@ const buckets = computed(() => {
     out.push({
       key: first.date,
       label,
-      kcal: avg,
-      tip: avg
-        ? `${avg} kcal/day avg · week of ${first.date}`
+      kcal,
+      burned,
+      net: kcal - burned,
+      tip: kcal
+        ? `${kcal} kcal/day ate · ${burned} burned · net ${kcal - burned} · week of ${first.date}`
         : `nothing logged · week of ${first.date}`,
     })
   }
@@ -134,8 +149,9 @@ const buckets = computed(() => {
 })
 
 const goal = computed(() => data.value?.goals?.calorie_goal ?? 2000)
+// The scale has to fit both series: the net bars and the burned overlay.
 const maxKcal = computed(() =>
-  Math.max(goal.value, ...buckets.value.map((b) => b.kcal)) * 1.1,
+  Math.max(goal.value, ...buckets.value.flatMap((b) => [b.net, b.kcal])) * 1.1,
 )
 
 const logged = computed(() => days.value.filter((d) => d.kcal > 0))
@@ -283,21 +299,39 @@ const nothingToShow = computed(
             </div>
 
             <div class="flex items-end gap-px h-full" :class="{ 'gap-1': !isYear }">
-              <div
-                v-for="b in buckets"
-                :key="b.key"
-                class="flex-1 flex flex-col justify-end h-full group relative"
-              >
+            <div
+              v-for="b in buckets"
+              :key="b.key"
+              class="flex-1 flex flex-col justify-end h-full group relative"
+            >
+              <!--
+                The bar is *net* (intake − burned), so a trained day reads
+                honestly against the goal. The burned part is drawn back on in
+                green from the bottom of the bar: the full column height is the
+                gross intake, the solid top is what actually stayed in.
+              -->
+              <div class="relative w-full" :style="`height:${Math.max(b.kcal > 0 ? 2 : 0, (b.net / maxKcal) * 100)}%`">
                 <div
-                  class="rounded-t transition-all"
-                  :class="b.kcal > goal ? 'bg-error/70' : 'bg-primary/70'"
-                  :style="`height:${Math.max(b.kcal > 0 ? 2 : 0, (b.kcal / maxKcal) * 100)}%`"
+                  v-if="b.burned > 0"
+                  class="absolute bottom-0 inset-x-0 rounded-t bg-success/70"
+                  :style="`height:${Math.min(100, (b.burned / Math.max(b.kcal, 1)) * 100)}%`"
                 />
-                <div class="absolute -top-5 left-1/2 -translate-x-1/2 hidden group-hover:block text-[0.6rem] tabular bg-neutral text-neutral-content px-1 rounded whitespace-nowrap z-20">
-                  {{ b.tip }}
-                </div>
+                <div
+                  class="absolute inset-x-0 top-0 transition-all rounded-t"
+                  :class="[b.net > goal ? 'bg-error/70' : 'bg-primary/70', { 'rounded-b-none': b.burned > 0 }]"
+                  :style="`height:${Math.min(100, (b.net / Math.max(b.kcal, 1)) * 100)}%`"
+                />
+              </div>
+              <div class="absolute -top-5 left-1/2 -translate-x-1/2 hidden group-hover:block text-[0.6rem] tabular bg-neutral text-neutral-content px-1 rounded whitespace-nowrap z-20">
+                {{ b.tip }}
               </div>
             </div>
+            </div>
+          </div>
+
+          <div class="flex items-center gap-3 text-[0.65rem] text-base-content/50">
+            <span class="flex items-center gap-1"><span class="inline-block w-2 h-2 rounded-sm bg-primary/70" /> net (ate − burned)</span>
+            <span class="flex items-center gap-1"><span class="inline-block w-2 h-2 rounded-sm bg-success/70" /> burned</span>
           </div>
 
           <!--

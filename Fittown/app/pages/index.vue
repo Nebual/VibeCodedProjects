@@ -38,6 +38,19 @@ async function setWeightUnit(unit: 'kg' | 'lb') {
   await $fetch('/api/goals', { method: 'PUT', body: { weight_unit: unit } })
   await refresh()
 }
+/**
+ * Inline portion edits from the diary rows: PATCH the entry, then re-fetch so
+ * the kcal/macros on the row (and the meal header) reflect the new amount.
+ */
+async function updateEntryPortion(id: number, body: Record<string, unknown>) {
+  try {
+    await $fetch(`/api/diary/entries/${id}`, { method: 'PATCH', body })
+    await refresh()
+  } catch {
+    // The row keeps its previous values; the full edit page still works for
+    // fixing whatever went wrong.
+  }
+}
 </script>
 
 <template>
@@ -73,6 +86,7 @@ async function setWeightUnit(unit: 'kg' | 'lb') {
         :date="date!"
         @remove="removeEntry"
         @quick-add="refresh"
+        @update-portion="updateEntryPortion"
       />
 
       <WaterTracker

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { showsGramPortions } from '#shared/recipes'
+import { portionUnits, type PortionUnit } from '#shared/portions'
 import type { DiaryEntry, MealName } from '~/composables/useDiary'
 
 const props = defineProps<{
@@ -9,9 +10,11 @@ const props = defineProps<{
   date: string
 }>()
 
-defineEmits<{ remove: [id: number]; 'quick-add': [] }>()
-
-const showQuickAdd = ref(false)
+const emit = defineEmits<{
+  remove: [id: number]
+  'quick-add': []
+  'update-portion': [id: number, body: Record<string, unknown>]
+}>()
 
 const kcal = computed(() =>
   Math.round(props.entries.reduce((sum, e) => sum + (e.nutrients.kcal ?? 0), 0)),
@@ -50,6 +53,112 @@ function editLink(entry: DiaryEntry) {
   if (entry.serving_count) params.set('sc', String(entry.serving_count))
   return `/food/${entry.food.id}?${params}`
 }
+
+// --- inline portion edit -----------------------------------------------------
+// Same pattern as the recipe page's ingredient amounts: the portion text is a
+// button; tapping it swaps in a small input + unit picker, and closing the
+// group (focusout, Enter) saves while Esc backs out.
+
+/** Which entry's portion is open for a quick edit, plus its unsaved draft. */
+const editingEntryId = ref<number | null>(null)
+const amountDraft = ref(0)
+const unitDraft = ref<PortionUnit>({ key: 'g', label: 'g', size: 1 })
+const portionInputEl = ref<HTMLInputElement | null>(null)
+function setPortionInputEl(el: Element | null) {
+  portionInputEl.value = el as HTMLInputElement | null
+}
+
+watch(editingEntryId, async (opened) => {
+  if (opened === null) return
+  await nextTick()
+  portionInputEl.value?.focus()
+  portionInputEl.value?.select()
+})
+
+/** This entry's own named serving, if it was logged with one. */
+function ownUnit(entry: DiaryEntry): PortionUnit | null {
+  if (entry.serving_label && entry.serving_count) {
+    return {
+      key: 'own',
+      label: entry.serving_label,
+      size: entry.grams / entry.serving_count,
+    }
+  }
+  return null
+}
+
+/** The unit this row's draft opens in: its own serving where it has one,
+ *  otherwise the base weight/volume unit — matching what `portion()` prints. */
+function baseChoice(entry: DiaryEntry): PortionUnit {
+  const own = ownUnit(entry)
+  if (own) return own
+  const base = entry.food.is_liquid ? 'ml' : 'g'
+  return { key: base, label: base, size: 1 }
+}
+
+function unitChoices(entry: DiaryEntry): PortionUnit[] {
+  const own = ownUnit(entry)
+  const list: PortionUnit[] = own ? [own] : []
+  for (const choice of portionUnits(!!entry.food.is_liquid)) {
+    if (own && choice.label.toLowerCase() === own.label.toLowerCase()) continue
+    list.push(choice)
+  }
+  return list
+}
+
+function displayAmount(entry: DiaryEntry, unit: PortionUnit): number {
+  if (unit.key === 'g' || unit.key === 'ml') return Math.round(entry.grams)
+  return Math.round((entry.grams / unit.size) * 100) / 100
+}
+
+function startEditPortion(entry: DiaryEntry) {
+  const unit = baseChoice(entry)
+  editingEntryId.value = entry.id
+  unitDraft.value = unit
+  amountDraft.value = displayAmount(entry, unit)
+}
+
+/** Switching units mid-edit re-expresses the same weight rather than keeping
+ *  the number in the box and quietly changing what was eaten. */
+function switchDraftUnit(unit: PortionUnit) {
+  const grams = amountDraft.value * unitDraft.value.size
+  unitDraft.value = unit
+  amountDraft.value = Math.round((grams / unit.size) * 100) / 100
+}
+
+function cancelEditPortion() {
+  editingEntryId.value = null
+}
+
+/**
+ * Closes the editor and, if anything actually changed, saves via the parent.
+ *
+ * Bound to the group's `focusout`, not each control's `blur`: moving focus
+ * from the amount box to the unit picker is still inside this edit.
+ */
+function onPortionGroupFocusOut(event: FocusEvent, entry: DiaryEntry) {
+  const next = event.relatedTarget as Node | null
+  const group = event.currentTarget as HTMLElement
+  if (next && group.contains(next)) return
+  commitPortion(entry)
+}
+
+function commitPortion(entry: DiaryEntry) {
+  if (editingEntryId.value !== entry.id) return
+  editingEntryId.value = null
+
+  const isBaseUnit = unitDraft.value.key === 'g' || unitDraft.value.key === 'ml'
+  const grams = amountDraft.value * unitDraft.value.size
+  const servingLabel = isBaseUnit ? null : unitDraft.value.label
+  const servingCount = isBaseUnit ? null : amountDraft.value
+
+  const unchanged = Math.abs(grams - entry.grams) < 0.0001
+    && servingLabel === (entry.serving_label ?? null)
+    && servingCount === (entry.serving_count ?? null)
+  if (unchanged) return
+
+  emit('update-portion', entry.id, { grams, serving_label: servingLabel, serving_count: servingCount })
+}
 </script>
 
 <template>
@@ -73,9 +182,45 @@ function editLink(entry: DiaryEntry) {
             >
               {{ entry.food.name }}
             </NuxtLink>
-            <div class="text-xs text-base-content/60 truncate">
-              <span v-if="entry.food.brand">{{ entry.food.brand }} · </span>{{ portion(entry) }}
+            <div
+              v-if="editingEntryId === entry.id"
+              class="flex items-center gap-1.5 flex-wrap"
+              @focusout="onPortionGroupFocusOut($event, entry)"
+            >
+              <input
+                :ref="setPortionInputEl"
+                v-model.number="amountDraft"
+                type="number"
+                min="0"
+                step="any"
+                inputmode="decimal"
+                class="input input-bordered input-xs w-20 text-right tabular"
+                :aria-label="`Amount of ${entry.food.name}`"
+                @keydown.enter="commitPortion(entry)"
+                @keydown.esc="cancelEditPortion"
+              >
+              <select
+                class="select select-bordered select-xs w-24 truncate"
+                :aria-label="`Unit for ${entry.food.name}`"
+                :value="unitDraft.key"
+                @change="switchDraftUnit(unitChoices(entry).find((u) => u.key === ($event.target as HTMLSelectElement).value)!)"
+                @keydown.enter="commitPortion(entry)"
+                @keydown.esc="cancelEditPortion"
+              >
+                <option v-for="choice in unitChoices(entry)" :key="choice.key" :value="choice.key">
+                  {{ choice.label }}
+                </option>
+              </select>
             </div>
+            <button
+              v-else
+              type="button"
+              class="block text-xs truncate tabular text-base-content/60 rounded hover:bg-base-200 -mx-1 px-1"
+              :aria-label="`Change amount of ${entry.food.name}`"
+              @click="startEditPortion(entry)"
+            >
+              <span v-if="entry.food.brand">{{ entry.food.brand }} · </span>{{ portion(entry) }}
+            </button>
             <!-- What was different about this one: "3 × egg instead of 4 · no
                  bacon". Only ever set on a meal logged from a recipe with
                  changes, so it costs nothing on every other row. -->

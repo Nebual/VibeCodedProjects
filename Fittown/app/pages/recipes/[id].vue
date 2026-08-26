@@ -456,6 +456,16 @@ async function startSharing() {
   try {
     await $fetch(`/api/recipes/${id.value}/share`, { method: 'POST' })
     await refresh()
+    // One tap does it all: the link exists by now (refresh() re-fetched), so
+    // put it straight on the clipboard instead of making a second "Copy" press.
+    try {
+      await navigator.clipboard.writeText(shareLink.value)
+      shareCopied.value = true
+      setTimeout(() => (shareCopied.value = false), 2000)
+    } catch {
+      // Refused on insecure origins and in some in-app browsers; the link is
+      // still on screen in a selectable field, so this isn't worth an error.
+    }
   } catch (err) {
     saveError.value = (err as { statusMessage?: string }).statusMessage ?? 'Could not share'
   } finally {
@@ -886,7 +896,7 @@ const logLink = computed(
             @click="startSharing"
           >
             <AppIcon name="link" class="w-4 h-4" />
-            Create link
+            {{ shareCopied ? 'Link copied' : 'Create link' }}
           </button>
         </div>
 
