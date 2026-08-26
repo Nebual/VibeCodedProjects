@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { ArrowUpTrayIcon } from '@heroicons/vue/24/outline'
+
 const route = useRoute()
 const { user, clear } = useUserSession()
 const { data: me, refresh: refreshMe } = useMe()
@@ -20,6 +22,11 @@ async function exitImpersonation() {
     exitingImpersonation.value = false
   }
 }
+
+// Upload modal (multi-file upload, one song per file, queued client-side).
+// Queue state lives in the composable inside <UploadModal>, which stays mounted
+// app-wide via this layout — so closing the modal mid-upload keeps uploads running.
+const showUploadModal = ref(false)
 </script>
 
 <template>
@@ -43,6 +50,10 @@ async function exitImpersonation() {
       </div>
       <div class="flex items-center gap-2">
         <NuxtLink to="/albums" class="btn btn-ghost btn-sm">Albums</NuxtLink>
+        <button class="btn btn-ghost btn-sm gap-1" aria-label="Upload songs" @click="showUploadModal = true">
+          <ArrowUpTrayIcon class="w-4 h-4" />
+          <span class="hidden sm:inline">Upload</span>
+        </button>
         <NuxtLink to="/record" class="btn btn-primary btn-sm">Record</NuxtLink>
         <NuxtLink v-if="user?.role === 'admin'" to="/admin" class="btn btn-ghost btn-sm">
           Admin
@@ -69,5 +80,7 @@ async function exitImpersonation() {
     </main>
 
     <PlayerBar v-if="!route.meta.hidePlayerBar" />
+
+    <UploadModal :open="showUploadModal" @close="showUploadModal = false" />
   </div>
 </template>

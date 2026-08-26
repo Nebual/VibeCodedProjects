@@ -4,9 +4,16 @@ import { join } from 'node:path'
 import { db } from '../../../../../database/client'
 import { takes } from '../../../../../database/schema'
 
+// Covers both MediaRecorder output (ogg/webm) and user-uploaded files (mp3, m4a, flac,
+// wav, opus, aac) — browser-reported MIME strings vary (`x-m4a`, `codecs=` suffixes).
 function extFromMime(mime: string): string {
-  if (mime.includes('ogg')) return 'ogg'
-  if (mime.includes('webm')) return 'webm'
+  const m = mime.toLowerCase()
+  if (m.includes('ogg')) return 'ogg'
+  if (m.includes('webm')) return 'webm'
+  if (m.includes('mpeg') || m.includes('mp3')) return 'mp3'
+  if (m.includes('m4a') || m.includes('mp4') || m.includes('aac')) return 'm4a'
+  if (m.includes('flac')) return 'flac'
+  if (m.includes('wav')) return 'wav'
   return 'bin'
 }
 
