@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { BeatGrid, TranscribedNote } from '#shared/types'
 import { BEATS_PER_BAR_CHOICES } from '#shared/types'
+import { alignDownbeat } from '#shared/utils/grid'
 
 /**
  * Corrects the beat grid the model detected.
@@ -39,6 +40,21 @@ const SUBDIVISIONS = [
  */
 function setGrid(patch: Partial<BeatGrid>) {
   grid.value = { ...grid.value, ...patch, source: 'user' }
+}
+
+/**
+ * Slides the grid onto the notes without changing which beat starts the bar.
+ *
+ * This is the control that actually fixes "the music won't line up". Nudging the downbeat by a
+ * 16th cannot help — a whole-step move maps the grid onto itself, leaving every note where it was
+ * and moving only the barlines. Only a sub-step shift re-aligns anything.
+ */
+function alignToNotes() {
+  const starts = props.notes.map(n => n.start)
+  if (!starts.length) return
+  setGrid({
+    firstDownbeat: alignDownbeat(starts, grid.value.bpm, grid.value.subdivision, grid.value.firstDownbeat),
+  })
 }
 
 function scaleBpm(factor: number) {
@@ -184,12 +200,23 @@ const errorQuality = computed(() => {
           data-testid="pick-downbeat"
           @click="emit('pickDownbeat')"
         >
-          {{ pickingDownbeat ? 'Click the roll…' : `${grid.firstDownbeat.toFixed(2)}s` }}
+          {{ pickingDownbeat ? 'Click the roll…' : `${grid.firstDownbeat.toFixed(3)}s` }}
+        </button>
+      </div>
+
+      <div class="form-control flex flex-col gap-1">
+        <span class="label-text text-xs">Grid</span>
+        <button class="btn btn-sm btn-outline" data-testid="align-grid" @click="alignToNotes">
+          Align to notes
         </button>
       </div>
     </div>
 
     <p class="text-xs text-base-content/60">
+      <strong>Align to notes</strong> slides the grid onto the performance without changing which
+      beat starts the bar — that is what lowers onset error. Clicking the roll moves the downbeat by
+      whole beats, which is how you pick <em>which</em> beat begins the bar; a smaller move than
+      that only slides the barlines between the notes and syncopates the whole piece.
       The barlines drawn over the piano roll are the real check: with the right tempo the note
       onsets line up with them, and with a half-time guess every other line lands in empty space.
       Onset error only says how tightly they cluster — it can't tell those two apart on its own.

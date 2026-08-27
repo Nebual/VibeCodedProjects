@@ -1,5 +1,6 @@
 import type { BeatGrid, TranscribedNote } from '../../shared/types'
 import { DEFAULT_SUBDIVISION } from '../../shared/types'
+import { bestPhaseWithinPeriod } from '../../shared/utils/grid'
 
 /**
  * Estimates a tempo from note onsets alone.
@@ -99,24 +100,11 @@ function pickOctave(bpm: number): number {
 }
 
 /**
- * Where the grid should start: the offset within one beat that puts the most onsets nearest a
- * beat line. Returned as a time in the first beat, so it doubles as `firstDownbeat`.
+ * Where the grid should start. Delegates to the shared phase search so the estimator and the
+ * tempo editor's "align to notes" agree on what alignment means.
  */
 function bestPhase(onsets: number[], bpm: number): number {
-  const beat = 60 / bpm
-  const steps = 100
-  let best = { phase: 0, error: Infinity }
-  for (let s = 0; s < steps; s++) {
-    const phase = (s / steps) * beat
-    let error = 0
-    for (const t of onsets) {
-      const rel = t - phase
-      error += Math.abs(rel - Math.round(rel / beat) * beat)
-    }
-    if (error < best.error) best = { phase, error }
-  }
-  // A downbeat must not sit after the first note; fold it back into [0, beat).
-  return Math.max(0, Math.round(best.phase * 10000) / 10000)
+  return Math.max(0, Math.round(bestPhaseWithinPeriod(onsets, 60 / bpm) * 10000) / 10000)
 }
 
 /**

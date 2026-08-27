@@ -42,6 +42,9 @@ const visible = computed(() => Math.min(props.window || totalSeconds.value, tota
 
 const maxScroll = computed(() => Math.max(0, totalSeconds.value - visible.value))
 
+/** Whether there is anything off-screen to pan to. Drives the cursor. */
+const canPan = computed(() => !!props.window && maxScroll.value > 0)
+
 function scrollTo(seconds: number) {
   scroll.value = Math.min(maxScroll.value, Math.max(0, seconds))
 }
@@ -169,7 +172,46 @@ function barLinesFor(grid: BeatGrid, endTime: number): number[] {
   return lines
 }
 
+/**
+ * Drag to pan sideways.
+ *
+ * A drag has to be told apart from a click, since a click seeks: nothing pans until the pointer has
+ * moved past a few pixels, and a gesture that crosses that threshold suppresses the click that
+ * would otherwise follow it.
+ */
+const DRAG_THRESHOLD_PX = 4
+let dragFrom: { x: number, scroll: number } | null = null
+const dragging = ref(false)
+
+function onPointerDown(e: PointerEvent) {
+  if (!props.window || maxScroll.value <= 0) return
+  dragFrom = { x: e.clientX, scroll: scroll.value }
+  dragging.value = false
+  ;(e.target as HTMLElement).setPointerCapture?.(e.pointerId)
+}
+
+function onPointerMove(e: PointerEvent) {
+  if (!dragFrom) return
+  const dx = e.clientX - dragFrom.x
+  if (!dragging.value && Math.abs(dx) < DRAG_THRESHOLD_PX) return
+  dragging.value = true
+  const canvas = canvasRef.value
+  if (!canvas) return
+  const perPixel = visible.value / canvas.getBoundingClientRect().width
+  // Drag left to move forwards through the piece, as with any scrollable surface.
+  scrollTo(dragFrom.scroll - dx * perPixel)
+}
+
+function onPointerUp(e: PointerEvent) {
+  ;(e.target as HTMLElement).releasePointerCapture?.(e.pointerId)
+  dragFrom = null
+  // Cleared after the click event has come and gone, so the click handler can see it.
+  if (dragging.value) setTimeout(() => { dragging.value = false }, 0)
+}
+
 function onClick(e: MouseEvent) {
+  // A pan is not a seek.
+  if (dragging.value) return
   const canvas = canvasRef.value
   if (!canvas) return
   const rect = canvas.getBoundingClientRect()
@@ -213,10 +255,15 @@ onMounted(() => {
          scrollbar below it to zero height. -->
     <canvas
       ref="canvas"
-      class="w-full flex-1 min-h-0 block cursor-crosshair rounded bg-base-300"
+      class="w-full flex-1 min-h-0 block rounded bg-base-300 touch-pan-y"
+      :class="canPan ? (dragging ? 'cursor-grabbing' : 'cursor-grab') : 'cursor-crosshair'"
       data-testid="piano-roll"
       @click="onClick"
       @wheel="onWheel"
+      @pointerdown="onPointerDown"
+      @pointermove="onPointerMove"
+      @pointerup="onPointerUp"
+      @pointercancel="onPointerUp"
     />
   </div>
 </template>

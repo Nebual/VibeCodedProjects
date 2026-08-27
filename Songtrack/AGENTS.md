@@ -154,6 +154,27 @@ Two things that only real data exposed, both fixed:
   the browser.** The plan suggested `spessasynth_core` for that; serving the saved events is
   simpler, identical on a fresh run and a cache hit, and removes a client-side MIDI parser.
   `spessasynth_lib` is still used for playback, which takes the raw bytes.
+### Grid alignment: two different things, and the objective that matters
+
+Measured against a real MuseScore, on a real transcription. Both of these are counter-intuitive
+enough to be worth writing down before someone "fixes" them back:
+
+**Moving the downbeat by exactly one grid step does nothing useful.** The grid points are
+`{firstDownbeat + k * step}`, so shifting the origin by a whole step maps the set onto itself —
+every note snaps to the same time as before — while the barlines *do* move. With 16th subdivision,
+nudging the downbeat by a 16th left onset error unchanged at 40 ms and turned a clean 8-note scale
+into 2 ties and 10 stray rests. So "snap the downbeat to the nearest 16th" is precisely the useless
+case; only a shift *smaller* than one step re-aligns anything.
+
+**Onset error is the wrong thing to minimise.** `alignDownbeat` originally searched for the phase
+minimising distance to the *subdivision* grid, which drove onset error from 41 ms to 4 ms and made
+the engraving dramatically worse — seven clean quarter notes became two halves, two quarters, two
+eighths, a 16th and nine rests. Minimising at 16th resolution makes the grid chase the performance's
+microtiming, and the notes then land on odd subdivisions relative to the barlines. It aligns to the
+**beat** now (`bestPhaseWithinPeriod(starts, beat)`), which is what puts notes on beats: same
+transcription, 7 quarter notes, 0 ties. Onset error genuinely cannot distinguish the two — both
+score ~4 ms — so don't use it as the objective for anything notation-shaped.
+
 ### First downbeat is a whole-beat control, and why that matters
 
 Moving the downbeat by a *fraction of a beat* does not shift the barlines along with the music — it
@@ -209,6 +230,11 @@ remaining artefact is ties, which are the correct rendering of a genuinely off-b
 - **The "tempo is an estimate" banner keys off `grid.source`, not a snapshot taken at load.** Every
   edit in the tempo editor stamps `source: 'user'`, which hides it. Keyed off a boolean captured
   once, the banner kept quoting whatever number the user had just typed and calling it a guess.
+- **The piano roll pans by drag and by wheel.** A drag is told apart from a click by a 4px
+  threshold, and a gesture that crosses it suppresses the click that would otherwise seek.
+- **"Download synth" fetches and hands over a blob** rather than being an `<a download>`: the render
+  is a real sidecar + ffmpeg round trip taking seconds, and a plain link gives no feedback and no
+  way to report a failure.
 - **daisyUI's `.alert` is a grid**, so loose text nodes and an inline `<strong>` become separate
   grid items and the sentence breaks apart. Alert bodies are wrapped in a single `<span>`.
 - **`POST /transcribe` takes `force`**, and the page always sends it. Without it, "Transcribe again"

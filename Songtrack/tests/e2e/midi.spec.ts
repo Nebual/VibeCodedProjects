@@ -244,6 +244,97 @@ test('instruments are chosen from a searchable list, not a wall of chips', async
   await expect(page.getByTestId('instrument-selected-electric_bass')).toHaveCount(0)
 })
 
+test('the roll can be dragged sideways, and a drag is not a seek', async ({ page }) => {
+  await page.goto('/')
+  const songId = await fixtureSong(page)
+  await page.evaluate(id => fetch(`/api/songs/${id}/transcribe`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ instruments: [] }),
+  }).then(r => r.text()), songId)
+
+  await page.goto(`/songs/${songId}/midi`, { waitUntil: 'networkidle' })
+  // A 5s window over ~8s of notes leaves something to pan to.
+  await page.getByTestId('zoom-5s').click()
+
+  const roll = page.getByTestId('piano-roll')
+  const box = (await roll.boundingBox())!
+  const pixels = () => page.evaluate(() => {
+    const c = document.querySelector('[data-testid="piano-roll"]') as HTMLCanvasElement
+    return c.toDataURL()
+  })
+  const before = await pixels()
+  const seekBefore = Number(await page.getByTestId('seek').inputValue())
+
+  // Drag left: the view moves forwards through the piece.
+  await page.mouse.move(box.x + box.width * 0.7, box.y + box.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(box.x + box.width * 0.3, box.y + box.height / 2, { steps: 10 })
+  await page.mouse.up()
+
+  expect(await pixels(), 'dragging must pan the roll').not.toBe(before)
+  // Panning is not seeking — the playhead must not have jumped to wherever the drag ended.
+  expect(Number(await page.getByTestId('seek').inputValue())).toBe(seekBefore)
+})
+
+test('align to notes drives the onset error down', async ({ page }) => {
+  await page.goto('/')
+  const songId = await fixtureSong(page)
+  await page.evaluate(id => fetch(`/api/songs/${id}/transcribe`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ instruments: [] }),
+  }).then(r => r.text()), songId)
+
+  await page.goto(`/songs/${songId}/midi`, { waitUntil: 'networkidle' })
+  await expect(page.getByTestId('tempo-editor')).toBeVisible()
+
+  const readError = async () =>
+    Number.parseFloat((await page.getByTestId('onset-error').innerText()).replace(/[^0-9.]/g, ''))
+
+  // Knock the grid out of alignment by a fraction of a step, then let the button fix it.
+  await page.getByTestId('bpm-input').click()
+  await page.getByTestId('bpm-input').press('Control+a')
+  await page.getByTestId('bpm-input').pressSequentially('119')
+  await page.getByTestId('bpm-input').blur()
+
+  await page.getByTestId('align-grid').click()
+  const after = await readError()
+  // The stub's notes are exactly on a 120bpm grid, so aligning at 119 should still land close.
+  expect(after).toBeLessThan(60)
+})
+
+test('downloading the synth render shows a loading state', async ({ page }) => {
+  await page.goto('/')
+  const songId = await fixtureSong(page)
+  await page.evaluate(id => fetch(`/api/songs/${id}/transcribe`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ instruments: [] }),
+  }).then(r => r.text()), songId)
+
+  await page.goto(`/songs/${songId}/midi`, { waitUntil: 'networkidle' })
+
+  // Hold the response open so the intermediate state is observable rather than raced.
+  let release: () => void = () => {}
+  const held = new Promise<void>((r) => { release = r })
+  await page.route('**/transcription/preview**', async (route) => {
+    await held
+    await route.fulfill({ status: 503, contentType: 'text/plain', body: 'no sidecar in tests' })
+  })
+
+  const button = page.getByTestId('download-synth')
+  await button.click()
+  await expect(button).toHaveText(/Rendering/)
+  await expect(button).toBeDisabled()
+
+  release()
+  // It must recover rather than stay stuck on "Rendering…" when the render fails.
+  await expect(button).toHaveText(/Download synth/)
+  await expect(button).toBeEnabled()
+  await expect(page.getByTestId('synth-download-error')).toBeVisible()
+})
+
 test('the estimated-tempo banner goes away once the tempo is edited', async ({ page }) => {
   await page.goto('/')
   const songId = await fixtureSong(page)

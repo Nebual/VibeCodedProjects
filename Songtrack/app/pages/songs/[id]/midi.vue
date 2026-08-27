@@ -210,6 +210,37 @@ const gridQuery = computed(() => {
   return `?bpm=${g.bpm}&beatsPerBar=${g.beatsPerBar}&firstDownbeat=${g.firstDownbeat}&subdivision=${g.subdivision}`
 })
 
+/**
+ * The synth render is a real round trip: the sidecar renders it and ffmpeg re-encodes it, which
+ * takes seconds. A plain <a download> gives no feedback at all, so it's fetched here instead and
+ * handed to the browser as a blob once it has actually arrived.
+ */
+const downloadingSynth = ref(false)
+const synthError = ref<string | null>(null)
+
+async function downloadSynth() {
+  downloadingSynth.value = true
+  synthError.value = null
+  try {
+    const res = await fetch(`/api/songs/${songId}/transcription/preview?mode=synth`)
+    if (!res.ok) throw new Error((await res.text().catch(() => '')) || `Render failed (${res.status})`)
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${song.value?.title ?? 'transcription'}-synth.ogg`
+    a.click()
+    // Revoked on the next tick: revoking immediately can cancel the download in some browsers.
+    setTimeout(() => URL.revokeObjectURL(url), 10_000)
+  }
+  catch (e) {
+    synthError.value = e instanceof Error ? e.message : 'Could not render the synth audio'
+  }
+  finally {
+    downloadingSynth.value = false
+  }
+}
+
 // --- engraving ---
 interface SheetFile { name: string, url: string }
 const sheets = ref<SheetFile[]>([])
@@ -377,12 +408,18 @@ onScopeDispose(() => { for (const f of sheets.value) URL.revokeObjectURL(f.url) 
             :href="`/api/songs/${songId}/transcription/midi?variant=performance`"
             data-testid="download-performance-midi"
           >Performance MIDI</a>
-          <a
+          <button
             class="btn btn-sm btn-ghost"
-            :href="`/api/songs/${songId}/transcription/preview?mode=synth`"
-            download
+            :disabled="downloadingSynth"
             data-testid="download-synth"
-          >Download synth (ogg)</a>
+            @click="downloadSynth"
+          >
+            <span v-if="downloadingSynth" class="loading loading-spinner loading-xs" />
+            {{ downloadingSynth ? 'Rendering…' : 'Download synth (ogg)' }}
+          </button>
+        </div>
+        <div v-if="synthError" class="alert alert-error text-sm" data-testid="synth-download-error">
+          <span>{{ synthError }}</span>
         </div>
         <ul class="text-xs text-base-content/60 list-disc pl-4">
           <li><strong>Score MIDI</strong> — snapped to the beat. Use this one for MuseScore, Sibelius or any notation software.</li>
