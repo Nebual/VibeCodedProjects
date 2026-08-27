@@ -154,6 +154,31 @@ Two things that only real data exposed, both fixed:
   the browser.** The plan suggested `spessasynth_core` for that; serving the saved events is
   simpler, identical on a fresh run and a cache hit, and removes a client-side MIDI parser.
   `spessasynth_lib` is still used for playback, which takes the raw bytes.
+### The GPU tier (Stage 7)
+
+Opt-in and stateless: `docker compose --profile gpu up -d` starts `midi-gpu` — the *same* patched
+image with `--model large --device cuda` — and the app only looks for it when
+`MIDI_WORKER_GPU_URL` is set. With that unset, `resolveWorker()` returns the CPU target without
+probing anything, so a stopped GPU tier costs literally nothing.
+
+- **The tier is resolved before the spec hash**, because the model name is part of that hash. The
+  two tiers deliberately run different models (`medium` / `large`), so their results cache
+  separately and a `large` result is never served as though the CPU tier produced it. Verified:
+  the same song transcribed on each tier stored two rows with different spec hashes.
+- **Health probe**: `/health`, 1.5s timeout, verdict cached 30s (`HealthCache`). A job that dies
+  against the GPU calls `reportWorkerFailure`, which marks it unhealthy *as of now* — the next
+  request goes to the CPU tier and the GPU is reconsidered only after the TTL, not immediately.
+  Nothing is re-queued: transcription is idempotent and cheap to re-request.
+- **Everything except transcription stays on the CPU worker** — engraving, auralize, soundfont and
+  the instrument list gain nothing from a GPU and shouldn't compete for it.
+- The decision logic lives in `server/utils/workerTier.ts`, kept free of Nitro auto-imports so it
+  can be unit-tested without a server (a GPU can't be stood up in CI).
+
+Measured against a real GPU container on the same 4-second clip: CPU `medium` ~7.2s, GPU `large`
+~3.5s warm — about twice as fast while running the bigger model. The first GPU request after a cold
+start is much slower (~12.6s here) because of CUDA warm-up, and the container takes a while to
+answer `/health` at all while it loads the `large` weights.
+
 ### The audio is padded before the model sees it
 
 The model reliably drops a note that starts at t=0. Measured on a clean 8-note scale beginning at

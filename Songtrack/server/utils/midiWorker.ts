@@ -1,6 +1,8 @@
 import { readFile, unlink } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { fakeInstruments, fakeTranscribeResponse } from './midiFakeWorker'
+import { HEALTH_TIMEOUT_MS, HealthCache, pickTarget } from './workerTier'
+import type { WorkerTarget } from './workerTier'
 
 /**
  * The only module that knows a transcription sidecar exists. Everything above this speaks
@@ -24,9 +26,66 @@ import { fakeInstruments, fakeTranscribeResponse } from './midiFakeWorker'
  */
 export const TRANSCRIBE_PAD_S = 0.2
 
-/** Which model the sidecar was launched with. Part of the spec hash, so bumping it re-transcribes. */
+/** Which model the CPU sidecar was launched with. Part of the spec hash, so bumping re-transcribes. */
 export function midiWorkerModel(): string {
   return process.env.MIDI_WORKER_MODEL || 'small'
+}
+
+const gpuHealth = new HealthCache()
+
+function cpuTarget(): WorkerTarget {
+  return { url: midiWorkerUrl(), model: midiWorkerModel(), tier: 'cpu' }
+}
+
+function gpuTarget(): WorkerTarget | null {
+  const url = process.env.MIDI_WORKER_GPU_URL
+  if (!url) return null
+  return {
+    url: url.replace(/\/+$/, ''),
+    // A different model, so the spec hash differs and a `large` GPU result is never served from
+    // cache as though the CPU tier had produced it.
+    model: process.env.MIDI_WORKER_GPU_MODEL || 'large',
+    tier: 'gpu',
+  }
+}
+
+/**
+ * Which sidecar this transcription should go to.
+ *
+ * With no `MIDI_WORKER_GPU_URL` set this costs nothing — no probe happens at all, which is the
+ * common case. When a GPU is configured, its `/health` is probed at most once per TTL.
+ */
+export async function resolveWorker(): Promise<WorkerTarget> {
+  const cpu = cpuTarget()
+  const gpu = gpuTarget()
+  if (!gpu) return cpu
+
+  const now = Date.now()
+  const remembered = gpuHealth.get(now)
+  if (remembered !== null) return pickTarget(cpu, gpu, remembered)
+
+  const healthy = await probeHealth(gpu.url)
+  gpuHealth.set(healthy, now)
+  return pickTarget(cpu, gpu, healthy)
+}
+
+async function probeHealth(url: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${url}/health`, { signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS) })
+    return res.ok
+  }
+  catch {
+    // Unreachable, too slow, or not running. Either way the CPU worker is right there.
+    return false
+  }
+}
+
+/**
+ * Called when a job fails against the GPU tier. The *next* request falls back to the CPU worker;
+ * this one surfaces as an error the user can retry, which is cheaper than machinery to hide it.
+ */
+export function reportWorkerFailure(tier: WorkerTarget['tier']) {
+  if (tier === 'gpu') gpuHealth.markUnhealthy(Date.now())
 }
 
 /** True when the canned event stream stands in for a real sidecar (Playwright, local dev). */
@@ -89,7 +148,14 @@ export interface TranscribeStream {
 
 export async function postAudio(
   path: string,
-  opts: { instruments: string[], clientId: string, signal?: AbortSignal, tmpDir?: string },
+  opts: {
+    instruments: string[]
+    clientId: string
+    signal?: AbortSignal
+    tmpDir?: string
+    /** Which sidecar to use. Resolve it once in the caller so the spec hash uses the same model. */
+    target: WorkerTarget
+  },
 ): Promise<TranscribeStream> {
   // The stub replays fixed frames from a file, so there is nothing to pad and nothing to shift.
   if (usingFakeWorker()) return { response: fakeTranscribeResponse(opts.signal), padSeconds: 0 }
@@ -103,7 +169,7 @@ export async function postAudio(
   form.append('detect_tempo', 'best-effort')
 
   try {
-    const res = await fetch(`${midiWorkerUrl()}/transcribe`, {
+    const res = await fetch(`${opts.target.url}/transcribe`, {
       method: 'POST',
       body: form,
       headers: { 'X-Client-Id': opts.clientId, 'Accept': 'text/event-stream' },

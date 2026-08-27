@@ -33,7 +33,11 @@ export default defineEventHandler(async (event) => {
   const body = await readBody<{ instruments?: string[], force?: boolean }>(event).catch(() => ({}))
   // No selection means auto-detect, which is a different cache key from any explicit choice.
   const instruments = Array.isArray(body?.instruments) ? body.instruments.filter(i => typeof i === 'string') : []
-  const model = midiWorkerModel()
+  // Resolved once, up front: the model name is part of the spec hash, so the tier that will do
+  // the work has to be known before the cache is consulted. A GPU result (`large`) and a CPU one
+  // (`medium`) are different transcriptions and hash differently — which is the point.
+  const target = usingFakeWorker() ? null : await resolveWorker()
+  const model = target?.model ?? midiWorkerModel()
 
   const mtimeMs = statSync(song.masterPath).mtimeMs
   const specHash = transcriptionSpecHash(song.masterPath, mtimeMs, model, instruments)
@@ -91,6 +95,7 @@ export default defineEventHandler(async (event) => {
     clientId,
     signal: abort.signal,
     tmpDir: songTmpDir(actor.user.id, song.id),
+    target: target ?? { url: '', model, tier: 'cpu' },
   })
   if (!upstream.body) {
     throw createError({ statusCode: 502, statusMessage: 'Transcription worker returned an empty stream' })
@@ -188,6 +193,10 @@ export default defineEventHandler(async (event) => {
         }
       }
       catch (err) {
+        // A job that died against the GPU sends the *next* request to the CPU worker. This one is
+        // not re-queued: transcription is idempotent and cheap to re-request, so surfacing the
+        // failure for the user to retry beats machinery that hides it.
+        if (target) reportWorkerFailure(target.tier)
         // The response has already begun, so an h3 error can't be thrown any more —
         // the only way to tell the page is an error frame it already knows how to render.
         const message = err instanceof Error ? err.message : 'Transcription failed'

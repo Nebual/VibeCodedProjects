@@ -66,6 +66,27 @@ on the v0.3.0 tag the last of those does not exist.
   that, just re-run the script — the model download is already cached, so it only adds the
   soundfonts.
 
+### Optional GPU tier
+
+The same image runs on a GPU with a bigger model. Fetch the weights, start it, and point the app
+at it:
+
+```bash
+./bin/fetch-midi-model.sh large        # separate download from the CPU tier's model
+# in .env:  MIDI_WORKER_GPU_URL=http://midi-gpu:8000
+docker compose --profile gpu up -d
+```
+
+It's opt-in for two reasons: without the NVIDIA Container Toolkit `docker compose up -d` would
+fail on a CPU-only machine, and with `MIDI_WORKER_GPU_URL` unset the app never probes for a GPU, so
+a stopped GPU tier costs nothing.
+
+Each transcription probes the GPU's `/health` (1.5 s timeout, verdict cached for 30 s) and uses it
+when it answers, falling back to the CPU sidecar when it doesn't. A job that dies mid-stream is
+reported as an error to retry rather than silently re-queued, and the next request goes to the CPU
+tier. The two tiers use different model names, so their results are cached separately — switching
+tiers re-transcribes rather than serving a `large` result as though it came from `medium`.
+
 > **Licence note:** MuScriptor's *inference code* is MIT, but its **model weights are
 > CC BY-NC 4.0**. Personal and family use is fine. Songtrack cannot be commercialised
 > while this feature is enabled without a separate licence from Kyutai/Mirelo.

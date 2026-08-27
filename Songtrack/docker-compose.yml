@@ -45,3 +45,35 @@ services:
         limits:
           cpus: "4.0"
           memory: 8g
+
+  # Optional GPU tier. Opt in with:  docker compose --profile gpu up -d
+  # and set MIDI_WORKER_GPU_URL=http://midi-gpu:8000 in .env so the app looks for it.
+  #
+  # Left out of the default profile on purpose: without the NVIDIA Container Toolkit installed,
+  # `docker compose up -d` would fail outright on a CPU-only box. And without the env var set, the
+  # app never probes for a GPU at all, so a stopped GPU tier costs nothing.
+  #
+  # Nothing here is a second copy of the app: it is the same image as `midi`, given a bigger model
+  # and a CUDA device. Songtrack probes its /health and falls back to the CPU tier whenever it
+  # doesn't answer, so this can be stopped and started freely.
+  midi-gpu:
+    image: songtrack-midi:main-e34b397-patched
+    profiles: ["gpu"]
+    pull_policy: never
+    restart: unless-stopped
+    command: ["--model", "large", "--device", "cuda", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      HF_HOME: /hf-cache
+      HF_HUB_OFFLINE: "1"
+    volumes:
+      # The `large` weights are a separate download — see bin/fetch-midi-model.sh large.
+      - ./cache/midi-cache:/hf-cache:ro
+    ports:
+      - "8196:8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
