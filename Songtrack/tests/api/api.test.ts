@@ -544,3 +544,49 @@ describe('admin surface (light)', () => {
     await api('/api/admin/settings', { user: 'admin', method: 'POST', body: { signupsEnabled: true } })
   })
 })
+
+describe('impersonation: stopping it', () => {
+  /**
+   * Starting impersonation was covered; stopping it was not, which is how "Exit does nothing"
+   * survived. These drive the real endpoints and follow the Set-Cookie the way a browser does.
+   */
+  async function sessionAfter(path: string, cookie: string): Promise<{ cookie: string, body: any }> {
+    let headers: Headers | undefined
+    const body = await $fetch(path, {
+      method: 'POST',
+      headers: { cookie },
+      retry: 0,
+      onResponse({ response }) { headers = response.headers },
+    }).catch((e: any) => e)
+    const setCookie = headers?.get('set-cookie')
+    return { cookie: setCookie ? setCookie.split(';')[0]! : cookie, body }
+  }
+
+  it('exiting impersonation returns the admin to their own identity', async () => {
+    const admin = seededUsers.admin!
+    const target = seededUsers.bob!
+    const adminCookie = await loginCookie(admin)
+
+    const started = await sessionAfter(`/api/admin/impersonate/${target.id}`, adminCookie)
+    const whileImpersonating: any = await $fetch('/api/me', {
+      headers: { cookie: started.cookie }, retry: 0,
+    })
+    expect(whileImpersonating.isImpersonating).toBe(true)
+    expect(whileImpersonating.user.id).toBe(target.id)
+
+    const stopped = await sessionAfter('/api/admin/impersonate/stop', started.cookie)
+    expect(stopped.body?.statusCode, `stop failed: ${JSON.stringify(stopped.body)}`).toBeUndefined()
+
+    const after: any = await $fetch('/api/me', { headers: { cookie: stopped.cookie }, retry: 0 })
+    expect(after.isImpersonating).toBe(false)
+    expect(after.user.id).toBe(admin.id)
+  })
+
+  it('stopping when not impersonating is a harmless no-op', async () => {
+    const admin = seededUsers.admin!
+    const stopped = await sessionAfter('/api/admin/impersonate/stop', await loginCookie(admin))
+    const after: any = await $fetch('/api/me', { headers: { cookie: stopped.cookie }, retry: 0 })
+    expect(after.isImpersonating).toBe(false)
+    expect(after.user.id).toBe(admin.id)
+  })
+})
