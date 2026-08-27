@@ -40,6 +40,20 @@ export type EditGain =
    */
   | { mode: 'peak'; relativeDb: number }
 
+/**
+ * The gain a song starts with when nobody has chosen one yet.
+ *
+ * The editor has always shown "Boost to peak" as the selection for a song with no stored `gain`
+ * (see NoisePanel) and materializes it on mount — so merely opening the editor was enough to make a
+ * quiet song play at a normal level. The master rendered at ingest never passes through the editor,
+ * so it starts from this same default; otherwise the Song List plays a song quieter than the editor
+ * does, for no reason the user can see.
+ *
+ * "Boost to peak" rather than "Normalize level": it's a single flat gain that never touches
+ * dynamics, making it the safe one to apply before anyone has listened to the recording.
+ */
+export const DEFAULT_EDIT_GAIN = { mode: 'peak', relativeDb: 0 } as const satisfies EditGain
+
 export interface EditList {
   segments: EditSegment[]
   filters: EditFilter[]

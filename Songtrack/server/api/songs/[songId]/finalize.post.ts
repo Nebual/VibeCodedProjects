@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { asc, eq } from 'drizzle-orm'
 import { db } from '../../../database/client'
 import { songs, takes } from '../../../database/schema'
+import { DEFAULT_EDIT_GAIN } from '#shared/types'
 import type { EditList, NoiseRegion } from '#shared/types'
 
 export default defineEventHandler(async (event) => {
@@ -20,7 +21,7 @@ export default defineEventHandler(async (event) => {
   const timelineTakes = songTakes.map(t => ({ id: t.id, timelineStart: t.timelineStart, duration: t.durationS ?? 0 }))
   const segments = resolveTimeline(timelineTakes)
 
-  const editList: EditList = { segments, filters: [] }
+  const editList: EditList = { segments, filters: [], gain: DEFAULT_EDIT_GAIN }
   const dir = songDir(actor.user.id, songId)
   const masterPath = join(dir, 'master.ogg')
   const peaksPath = join(dir, 'peaks.json')

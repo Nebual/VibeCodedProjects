@@ -9,7 +9,7 @@ import { ffprobe, generatePeaks, renderEditList } from './ffmpeg'
 import { songDir } from './paths'
 import { recordAuditIfImpersonating } from './auth'
 import type { AuthedUser, RequestActor } from './auth'
-import { PENDING_SONG_LIMIT } from '#shared/types'
+import { DEFAULT_EDIT_GAIN, PENDING_SONG_LIMIT } from '#shared/types'
 import type { EditList } from '#shared/types'
 
 /** Pending accounts can try the app immediately, capped so an open box can't be abused before approval. */
@@ -107,6 +107,7 @@ export async function createSongFromAudioFile(
   const editList: EditList = {
     segments: [{ source: takeId, start: 0, end: probe.durationS }],
     filters: [],
+    gain: DEFAULT_EDIT_GAIN,
   }
   const masterPath = join(dir, 'master.ogg')
   const peaksPath = join(dir, 'peaks.json')

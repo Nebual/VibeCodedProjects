@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { DEFAULT_EDIT_GAIN } from '#shared/types'
 import type { EditFilter, EditList, NoiseRegion } from '#shared/types'
 import type { ResolvedSegment } from '#shared/utils/timeline'
 
@@ -41,15 +42,14 @@ type GainMode = 'off' | 'loudnorm' | 'peak'
 
 // Defaults on for old and new songs alike — `gain` being unset is indistinguishable from
 // "never touched", and given how much of this app is about fixing too-quiet audio, defaulting
-// to boosted is the friendlier behavior. "Boost to peak" over "Normalize level" specifically:
-// it's a single flat gain (no dynamics touched), so it's the safer default when we don't know
-// anything about the recording yet.
-const gainMode = ref<GainMode>(gain.value?.mode ?? 'peak')
+// to boosted is the friendlier behavior. Shared with the master rendered at ingest (see
+// DEFAULT_EDIT_GAIN) so the editor and the Song List never disagree about how loud a song is.
+const gainMode = ref<GainMode>(gain.value?.mode ?? DEFAULT_EDIT_GAIN.mode)
 const targetLufs = ref(gain.value?.mode === 'loudnorm' ? gain.value.targetLufs : -16)
 // The 0-point is the server's own computed "safe" gain (measured per-render, not known here) —
 // this is purely the user's adjustment on top of that, so it stays meaningful across takes/edits
 // without needing to know the calculated value itself.
-const relativeDb = ref(gain.value?.mode === 'peak' ? gain.value.relativeDb : 0)
+const relativeDb = ref(gain.value?.mode === 'peak' ? gain.value.relativeDb : DEFAULT_EDIT_GAIN.relativeDb)
 
 const displayedChips = computed(() =>
   [...new Set([...notchCandidates.value, ...enabledNotchFreqs.value])].sort((a, b) => a - b),

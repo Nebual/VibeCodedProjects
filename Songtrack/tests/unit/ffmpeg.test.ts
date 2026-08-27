@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { buildFilterGraph, buildFiltersOnlyGraph, resolveNoiseTrainingSource } from '../../server/utils/ffmpeg'
+import { DEFAULT_EDIT_GAIN } from '../../shared/types'
 import type { EditFilter, EditList } from '../../shared/types'
 
 const SOURCES = [
@@ -188,6 +189,15 @@ describe('buildFilterGraph', () => {
     // synchronous — the measuring pass that produces resolvedPeakGainDb happens in renderEditList).
     const list = editList({ gain: { mode: 'peak', relativeDb: 0 } })
     const graph = buildFilterGraph(SOURCES, list, { resolvedPeakGainDb: 6.5 })
+    expect(graph.filterComplex).toContain('volume=6.5dB')
+  })
+
+  it('defaults a song with no chosen gain to "Boost to peak"', () => {
+    // Ingest renders master.ogg before anyone opens the editor, so this default is what stops a
+    // quiet recording from playing quiet in the Song List. The editor shows the same default for a
+    // song with no stored gain, and both sides read it from here so they can't drift apart.
+    expect(DEFAULT_EDIT_GAIN).toEqual({ mode: 'peak', relativeDb: 0 })
+    const graph = buildFilterGraph(SOURCES, editList({ gain: DEFAULT_EDIT_GAIN }), { resolvedPeakGainDb: 6.5 })
     expect(graph.filterComplex).toContain('volume=6.5dB')
   })
 

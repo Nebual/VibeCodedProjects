@@ -10,6 +10,7 @@ import { ffprobe, generatePeaks, renderEditList } from '../server/utils/ffmpeg'
 import { songDir } from '../server/utils/paths'
 import { resolveTimeline } from '../shared/utils/timeline'
 import { slugify } from '../shared/utils/slug'
+import { DEFAULT_EDIT_GAIN } from '../shared/types'
 import type { EditList } from '../shared/types'
 
 const AUDIO_EXTENSIONS = new Set(['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.aac', '.wma', '.opus', '.webm'])
@@ -115,6 +116,7 @@ async function main() {
     const editList: EditList = {
       segments: resolveTimeline([{ id: takeId, timelineStart: 0, duration: takeProbe.durationS }]),
       filters: [],
+      gain: DEFAULT_EDIT_GAIN,
     }
     const masterPath = join(dir, 'master.ogg')
     const peaksPath = join(dir, 'peaks.json')
