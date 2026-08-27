@@ -1,6 +1,7 @@
 import { Midi } from '@tonejs/midi'
 import type { BeatGrid, TranscribedNote } from '../../shared/types'
-import { pickupBeats } from './quantize'
+import { scoreLayout } from './quantize'
+import { DRUM_CHANNEL, gmProgramFor, isDrumInstrument } from '../../shared/utils/instruments'
 
 /**
  * Reads note events back out of a MIDI file.
@@ -56,16 +57,18 @@ export function writeScoreMidi(notes: TranscribedNote[], grid: BeatGrid): Buffer
   // A beat is always a quarter note here, so the signature is beatsPerBar/4. Choosing 6/8 for
   // compound time would redefine what `bpm` counts and desync every other consumer of the grid
   // (the roll overlay, barLines, onsetError) for a purely cosmetic gain.
-  const pickup = pickupBeats(grid)
-  if (pickup > 0) {
-    // An anacrusis is expressed as a short opening bar followed by a signature change at the
-    // first downbeat — the same way notation software represents one. Padding the start with
-    // silence instead would push every barline in the piece one pickup off.
-    // Sixteenths keep the denominator a power of two, which MIDI requires (it stores log2).
-    const sixteenths = Math.max(1, Math.round(pickup * 4))
-    midi.header.timeSignatures.push({ ticks: 0, timeSignature: [sixteenths, 16] })
+  // A score has no absolute time, only positions relative to barlines, so the sub-beat part of
+  // firstDownbeat is absorbed by moving the notes. See scoreLayout() for why emitting it as a
+  // meter instead corrupts the engraving.
+  const earliest = notes.length ? Math.min(...notes.map(n => n.start)) : 0
+  const { pickupBeats, shift } = scoreLayout(grid, earliest)
+
+  if (pickupBeats > 0) {
+    // Same beat unit as the main meter — a 3-beat anacrusis in 4/4 is 3/4, not 12/16. MuseScore
+    // handles the former and mangles the latter.
+    midi.header.timeSignatures.push({ ticks: 0, timeSignature: [pickupBeats, 4] })
     midi.header.timeSignatures.push({
-      ticks: Math.round(midi.header.secondsToTicks(grid.firstDownbeat)),
+      ticks: Math.round(midi.header.secondsToTicks(pickupBeats * (60 / grid.bpm))),
       timeSignature: [grid.beatsPerBar, 4],
     })
   }
@@ -89,11 +92,18 @@ export function writeScoreMidi(notes: TranscribedNote[], grid: BeatGrid): Buffer
   for (const [instrument, group] of byInstrument) {
     const track = midi.addTrack()
     track.name = instrument
-    if (instrument === 'drums') track.channel = 9
+    // Without a programme every part imports and plays back as piano, which makes a
+    // multi-instrument transcription useless as an audio check and wrong on the page.
+    if (isDrumInstrument(instrument)) {
+      track.channel = DRUM_CHANNEL
+    }
+    else {
+      track.instrument.number = gmProgramFor(instrument)
+    }
     for (const note of group) {
       track.addNote({
         midi: note.pitch,
-        time: note.start,
+        time: Math.max(0, note.start + shift),
         duration: Math.max(minDuration, note.end - note.start),
         // The tokenizer doesn't recover velocity at all, so a flat mezzo-forte is the honest
         // choice — anything else would be inventing dynamics that were never transcribed.

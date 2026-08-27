@@ -37,14 +37,37 @@ describe('writeScoreMidi / notesFromMidi round trip', () => {
     expect(midi.header.timeSignatures[0]!.timeSignature).toEqual([3, 4])
   })
 
-  it('emits a short opening bar as a pickup, then switches to the real signature', () => {
-    // firstDownbeat 1.5s at 120bpm = 3 beats in → a 3-beat (12/16) anacrusis.
+  it('emits a short opening bar as a pickup, in the main meter\'s beat unit', () => {
+    // firstDownbeat 1.5s at 120bpm = 3 beats in → a 3-beat anacrusis, written 3/4 not 12/16.
+    // A pickup with a different denominator makes MuseScore discard the meter while keeping the
+    // tick positions computed against it, which reorders notes and inserts stray rests.
     const grid = { ...GRID, firstDownbeat: 1.5 }
     const midi = new Midi(toArrayBuffer(writeScoreMidi(quantizeNotes(scale(), grid), grid)))
     expect(midi.header.timeSignatures).toHaveLength(2)
-    expect(midi.header.timeSignatures[0]).toMatchObject({ ticks: 0, timeSignature: [12, 16] })
+    expect(midi.header.timeSignatures[0]).toMatchObject({ ticks: 0, timeSignature: [3, 4] })
     expect(midi.header.timeSignatures[1]!.timeSignature).toEqual([4, 4])
     expect(midi.header.timeSignatures[1]!.ticks).toBeGreaterThan(0)
+  })
+
+  it('never writes a pickup whose denominator differs from the main meter', () => {
+    for (const firstDownbeat of [0.125, 0.25, 0.31, 0.5, 1, 1.5, 2.75]) {
+      const grid = { ...GRID, firstDownbeat }
+      const midi = new Midi(toArrayBuffer(writeScoreMidi(quantizeNotes(scale(), grid), grid)))
+      for (const sig of midi.header.timeSignatures) {
+        expect(sig.timeSignature[1], `denominator for firstDownbeat ${firstDownbeat}`).toBe(4)
+      }
+    }
+  })
+
+  it('keeps every note when the downbeat moves', () => {
+    // The reported symptom was notes appearing to shift pitch as the downbeat changed; they were
+    // being reordered and split. Whatever the downbeat, all eight notes must survive.
+    for (const firstDownbeat of [0, 0.125, 0.31, 0.5, 1, 1.5]) {
+      const grid = { ...GRID, firstDownbeat }
+      const read = notesFromMidi(writeScoreMidi(quantizeNotes(scale(), grid), grid))
+      expect(read.map(n => n.pitch).sort(), `pitches for firstDownbeat ${firstDownbeat}`)
+        .toEqual([60, 62, 64, 65])
+    }
   })
 
   it('uses a single time signature when the music starts on a downbeat', () => {
@@ -63,6 +86,16 @@ describe('writeScoreMidi / notesFromMidi round trip', () => {
     expect(drums?.channel).toBe(9)
     expect(notesFromMidi(writeScoreMidi(notes, GRID)).map(n => n.instrument).sort())
       .toEqual(['acoustic_piano', 'drums'])
+  })
+
+  it('gives each part its General MIDI programme, not piano for everything', () => {
+    const notes: TranscribedNote[] = [
+      { pitch: 40, start: 0, end: 0.5, instrument: 'electric_bass' },
+      { pitch: 70, start: 0, end: 0.5, instrument: 'tenor_sax' },
+    ]
+    const midi = new Midi(toArrayBuffer(writeScoreMidi(notes, GRID)))
+    expect(midi.tracks.find(t => t.name === 'electric_bass')!.instrument.number).toBe(33)
+    expect(midi.tracks.find(t => t.name === 'tenor_sax')!.instrument.number).toBe(66)
   })
 
   it('writes a valid file for an empty transcription rather than throwing', () => {

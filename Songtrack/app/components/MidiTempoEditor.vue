@@ -32,12 +32,54 @@ const SUBDIVISIONS = [
   { value: 3, label: '8th triplets' },
 ]
 
+/**
+ * Every edit here stamps the grid as the user's own. That's what lets the page stop calling the
+ * tempo an estimate the moment you've corrected it — otherwise the banner keeps quoting whatever
+ * number is now in the box and claims it's a guess.
+ */
+function setGrid(patch: Partial<BeatGrid>) {
+  grid.value = { ...grid.value, ...patch, source: 'user' }
+}
+
 function scaleBpm(factor: number) {
-  grid.value = { ...grid.value, bpm: clampBpm(grid.value.bpm * factor) }
+  setGrid({ bpm: clampBpm(grid.value.bpm * factor) })
+  bpmText.value = String(grid.value.bpm)
 }
 
 function clampBpm(bpm: number): number {
   return Math.min(400, Math.max(20, Math.round(bpm * 100) / 100))
+}
+
+/**
+ * The BPM field is edited as free text and only clamped when you leave it.
+ *
+ * Clamping on every keystroke made it unusable: typing "81" clamps the intermediate "8" up to the
+ * minimum, so the field becomes "20" and you end up with "201". There is deliberately no `min`
+ * attribute either, for the same reason — the browser fights mid-typing values too.
+ */
+const bpmText = ref(String(grid.value.bpm))
+const editingBpm = ref(false)
+
+watch(() => grid.value.bpm, (bpm) => {
+  if (!editingBpm.value) bpmText.value = String(bpm)
+})
+
+function onBpmInput(value: string) {
+  bpmText.value = value
+  const parsed = Number.parseFloat(value)
+  // Applied live so the barlines and onset error track what you're typing, but only once the
+  // value is plausible — a half-typed "8" is not a tempo anyone means.
+  if (Number.isFinite(parsed) && parsed >= 20 && parsed <= 400) {
+    setGrid({ bpm: Math.round(parsed * 100) / 100 })
+  }
+}
+
+function onBpmBlur() {
+  editingBpm.value = false
+  const parsed = Number.parseFloat(bpmText.value)
+  const bpm = Number.isFinite(parsed) ? clampBpm(parsed) : grid.value.bpm
+  setGrid({ bpm })
+  bpmText.value = String(bpm)
 }
 
 /**
@@ -92,11 +134,13 @@ const errorQuality = computed(() => {
       <label class="form-control flex flex-col gap-1">
         <span class="label-text text-xs">BPM</span>
         <input
-          :value="grid.bpm"
-          type="number" min="20" max="400" step="0.1"
+          :value="bpmText"
+          type="number" step="0.1"
           class="input input-bordered input-sm w-24"
           data-testid="bpm-input"
-          @input="grid = { ...grid, bpm: clampBpm(Number(($event.target as HTMLInputElement).value)) }"
+          @focus="editingBpm = true"
+          @input="onBpmInput(($event.target as HTMLInputElement).value)"
+          @blur="onBpmBlur"
         >
       </label>
 
@@ -114,7 +158,7 @@ const errorQuality = computed(() => {
           :value="grid.beatsPerBar"
           class="select select-bordered select-sm w-20"
           data-testid="beats-per-bar"
-          @change="grid = { ...grid, beatsPerBar: Number(($event.target as HTMLSelectElement).value) }"
+          @change="setGrid({ beatsPerBar: Number(($event.target as HTMLSelectElement).value) })"
         >
           <option v-for="n in BEATS_PER_BAR_CHOICES" :key="n" :value="n">{{ n }}</option>
         </select>
@@ -126,7 +170,7 @@ const errorQuality = computed(() => {
           :value="grid.subdivision"
           class="select select-bordered select-sm w-32"
           data-testid="subdivision"
-          @change="grid = { ...grid, subdivision: Number(($event.target as HTMLSelectElement).value) }"
+          @change="setGrid({ subdivision: Number(($event.target as HTMLSelectElement).value) })"
         >
           <option v-for="s in SUBDIVISIONS" :key="s.value" :value="s.value">{{ s.label }}</option>
         </select>

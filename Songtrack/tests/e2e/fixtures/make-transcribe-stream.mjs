@@ -12,10 +12,22 @@ const { Midi } = TonejsMidi
 
 const BPM = 120
 const ONSET_DELAY = 0.021
-const PITCHES = [60, 62, 64, 65, 67, 69, 71, 72] // two 4/4 bars of straight quarter notes
+// Four 4/4 bars of straight quarter notes — 8 seconds at 120bpm. Long enough that the roll's
+// 5-second window has something to scroll through, which a 2-bar fixture never did.
+const PITCHES = [60, 62, 64, 65, 67, 69, 71, 72, 72, 71, 69, 67, 65, 64, 62, 60]
 const DUR = 0.5
 
-const notes = PITCHES.map((pitch, i) => ({ pitch, start: i * DUR, end: i * DUR + DUR * 0.9 }))
+// Two instruments, not one: a single-instrument fixture can't exercise the per-part mute
+// toggles at all, and real transcriptions are routinely multi-instrument.
+const notes = [
+  ...PITCHES.map((pitch, i) => ({
+    pitch, start: i * DUR, end: i * DUR + DUR * 0.9, instrument: 'acoustic_piano',
+  })),
+  // A root note under each bar.
+  ...[36, 43, 41, 36].map((pitch, i) => ({
+    pitch, start: i * DUR * 4, end: i * DUR * 4 + DUR * 3.5, instrument: 'acoustic_bass',
+  })),
+].sort((a, b) => a.start - b.start)
 
 // Real progress frames are per *chunk* of audio, not per note — a 4-second file yields a single
 // {completed:0,total:1} then {completed:1,total:1}. A longer file yields many, which is what this
@@ -25,16 +37,18 @@ function midiBase64(quantize) {
   const midi = new Midi()
   midi.header.setTempo(BPM)
   midi.header.timeSignatures.push({ ticks: 0, timeSignature: [4, 4] })
-  const track = midi.addTrack()
-  track.name = 'acoustic_piano'
-  track.instrument.number = 0
-  for (const n of notes) {
-    track.addNote({
-      midi: n.pitch,
-      time: n.start,
-      duration: quantize ? DUR : n.end - n.start,
-      velocity: 0.8,
-    })
+  for (const instrument of [...new Set(notes.map(n => n.instrument))]) {
+    const track = midi.addTrack()
+    track.name = instrument
+    track.instrument.number = instrument === 'acoustic_bass' ? 32 : 0
+    for (const n of notes.filter(n => n.instrument === instrument)) {
+      track.addNote({
+        midi: n.pitch,
+        time: n.start,
+        duration: quantize ? DUR : n.end - n.start,
+        velocity: 0.8,
+      })
+    }
   }
   return Buffer.from(midi.toArray()).toString('base64')
 }
@@ -47,7 +61,7 @@ notes.forEach((n, i) => {
     pitch: n.pitch,
     start_time: Number((n.start + ONSET_DELAY).toFixed(4)),
     index: i,
-    instrument: 'acoustic_piano',
+    instrument: n.instrument,
   })
   frames.push({
     type: 'end',

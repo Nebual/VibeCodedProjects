@@ -104,6 +104,16 @@ export interface BeatGrid {
   onsetDelay: number
   /** Finest notated division of a beat the grid admits: 2 = 8ths, 4 = 16ths, 3 = 8th triplets. */
   subdivision: number
+  /**
+   * Where this grid came from, so the UI can be honest about how much to trust it.
+   * Optional because rows written before it existed simply don't carry it.
+   *
+   * - `detected` — the sidecar's beat tracker fitted a constant tempo and stood by it.
+   * - `estimated` — a best guess: either the tempo upstream fitted and then *rejected* as too
+   *   irregular, or our own autocorrelation over the onsets. Good enough to start from.
+   * - `user` — supplied from the tempo editor. Never second-guess it.
+   */
+  source?: 'detected' | 'estimated' | 'user'
 }
 
 export const DEFAULT_SUBDIVISION = 4
@@ -153,6 +163,20 @@ export interface WireBeatGrid {
   onset_delay: number | null
 }
 
+/**
+ * A tempo that was fitted but rejected as not constant enough.
+ *
+ * Only present on a sidecar carrying `patches/0001-mscz-export-and-tempo-hint.patch`. Stock
+ * upstream raises `BeatDetectionError` and the fitted BPM survives only inside the exception's
+ * message text, so a recording with any rubato at all yields a bare `beat_grid: null` and the UI
+ * has nothing better than a 120 placeholder to offer.
+ */
+export interface WireTempoHint {
+  bpm: number
+  residual_ms: number | null
+  reason: string
+}
+
 export interface TranscriptionCompleteEvent {
   type: 'transcription_complete'
   /** base64 .mid — the de-lagged performance MIDI. This is the file to save. */
@@ -164,6 +188,7 @@ export interface TranscriptionCompleteEvent {
    */
   quantized_midi?: string | null
   beat_grid?: WireBeatGrid | null
+  tempo_hint?: WireTempoHint | null
 }
 
 export interface TranscriptionErrorEvent {

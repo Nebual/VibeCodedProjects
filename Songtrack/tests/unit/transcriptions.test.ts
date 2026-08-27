@@ -71,7 +71,13 @@ describe('beatGridFromWire', () => {
     expect(beatGridFromWire({
       bpm: 92.4, beats_per_bar: 4, first_downbeat: 0.31, onset_delay: 0.021,
     })).toEqual({
-      bpm: 92.4, beatsPerBar: 4, firstDownbeat: 0.31, onsetDelay: 0.021, subdivision: 4,
+      bpm: 92.4,
+      beatsPerBar: 4,
+      firstDownbeat: 0.31,
+      onsetDelay: 0.021,
+      subdivision: 4,
+      // Tagged so the UI can say whether a tempo was detected or merely guessed at.
+      source: 'detected',
     })
   })
 

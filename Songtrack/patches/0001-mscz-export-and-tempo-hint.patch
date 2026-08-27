@@ -1,0 +1,118 @@
+diff --git a/muscriptor/server.py b/muscriptor/server.py
+index c9933d1..c1df19c 100644
+--- a/muscriptor/server.py
++++ b/muscriptor/server.py
+@@ -28,6 +28,7 @@ import base64
+ import dataclasses
+ import io
+ import json
++import logging
+ import os
+ import tempfile
+ import threading
+@@ -299,7 +300,31 @@ def create_app(model: TranscriptionModel, web_dir: str | Path | None = None) ->
+                     return
+                 # Detect tempo/meter only now: it costs a few seconds of CPU and
+                 # nothing before this point needs it, so the notes stream first.
+-                grid = model.detect_beat_grid_for((wav, sr), detect_tempo)
++                # Detect through the underlying call rather than the best-effort
++                # wrapper, so a rejected-but-fitted tempo can be reported instead of
++                # thrown away. Semantics are unchanged: True still raises, False still
++                # skips, "best-effort" still falls back to no grid.
++                tempo_hint = None
++                if detect_tempo is False:
++                    grid = None
++                else:
++                    try:
++                        grid = model.detect_beat_grid_for((wav, sr), True)
++                    except BeatDetectionError as e:
++                        if detect_tempo is True:
++                            raise
++                        logging.getLogger(__name__).warning(
++                            "tempo detection failed: %s", e
++                        )
++                        grid = None
++                        if e.bpm:
++                            tempo_hint = {
++                                "bpm": float(e.bpm),
++                                "residual_ms": float(e.residual * 1000)
++                                if e.residual is not None
++                                else None,
++                                "reason": str(e),
++                            }
+                 # Measure the onset lag up here rather than leaving it to the MIDI
+                 # writing, since the UI has to be told the very same number to move
+                 # the notes it already drew.
+@@ -346,6 +371,11 @@ def create_app(model: TranscriptionModel, web_dir: str | Path | None = None) ->
+                         }
+                         if grid
+                         else None,
++                        # A tempo that was fitted but rejected as not constant enough.
++                        # Null when a grid was found, or when none could be fitted at
++                        # all. Callers should treat it as a starting point to correct,
++                        # never as a detected grid.
++                        "tempo_hint": tempo_hint,
+                     }
+                 )
+                 yield f"data: {payload}\n\n"
+diff --git a/muscriptor/utils/beats.py b/muscriptor/utils/beats.py
+index eb31c53..5be7048 100644
+--- a/muscriptor/utils/beats.py
++++ b/muscriptor/utils/beats.py
+@@ -51,7 +51,24 @@ Onsets = Sequence[float] | np.ndarray
+ 
+ 
+ class BeatDetectionError(RuntimeError):
+-    """No usable beat grid in the audio (too short, or no constant tempo)."""
++    """No usable beat grid in the audio (too short, or no constant tempo).
++
++    Carries the tempo that *was* fitted, when there was one. A recording whose beats
++    wander too much for a constant grid still has a best-fit BPM, and that number is
++    a far better starting point for a caller than a 120 placeholder — but it used to
++    survive only inside the message text, where nothing could reach it.
++    """
++
++    def __init__(
++        self,
++        message: str,
++        *,
++        bpm: float | None = None,
++        residual: float | None = None,
++    ):
++        super().__init__(message)
++        self.bpm = bpm
++        self.residual = residual
+ 
+ 
+ # What to do when the tempo can't be detected: True raises, False doesn't even
+@@ -351,7 +368,9 @@ def detect_grid(
+     if residual > MAX_TEMPO_RESIDUAL * beat_seconds:
+         raise BeatDetectionError(
+             f"The recording has no fixed tempo (beats deviate {residual * 1000:.0f} ms "
+-            f"RMS from a constant {bpm:.1f} BPM)"
++            f"RMS from a constant {bpm:.1f} BPM)",
++            bpm=bpm,
++            residual=residual,
+         )
+ 
+     beats_per_bar = infer_beats_per_bar(beats, downbeats)
+diff --git a/muscriptor/utils/sheets.py b/muscriptor/utils/sheets.py
+index 4aa0925..5b23525 100644
+--- a/muscriptor/utils/sheets.py
++++ b/muscriptor/utils/sheets.py
+@@ -368,6 +368,15 @@ def write_sheets(
+         if not mscx.is_file():
+             _fail("import the MIDI file", proc)
+ 
++        # MuseScore's own container format. MusicXML opens natively too, but .mscz is
++        # what round-trips a score without re-importing it, so it is the file to hand
++        # someone who is going to keep editing.
++        mscz = out_dir / "score.mscz"
++        proc = _run(binary, ["-o", str(mscz), str(mscx)])
++        if not mscz.is_file():
++            _fail("write the MuseScore file", proc)
++        written.append(mscz)
++
+         musicxml = out_dir / "score.musicxml"
+         proc = _run(binary, ["-o", str(musicxml), str(mscx)])
+         if not musicxml.is_file():

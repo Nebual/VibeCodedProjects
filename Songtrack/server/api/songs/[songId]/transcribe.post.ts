@@ -29,7 +29,7 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 404, statusMessage: 'Audio is still processing' })
   }
 
-  const body = await readBody<{ instruments?: string[] }>(event).catch(() => ({}))
+  const body = await readBody<{ instruments?: string[], force?: boolean }>(event).catch(() => ({}))
   // No selection means auto-detect, which is a different cache key from any explicit choice.
   const instruments = Array.isArray(body?.instruments) ? body.instruments.filter(i => typeof i === 'string') : []
   const model = midiWorkerModel()
@@ -43,9 +43,14 @@ export default defineEventHandler(async (event) => {
   // nginx buffers proxied responses by default, which would hold the whole stream until it ends.
   setHeader(event, 'X-Accel-Buffering', 'no')
 
-  const existing = db.select().from(transcriptions)
-    .where(and(eq(transcriptions.songId, song.id), eq(transcriptions.specHash, specHash)))
-    .get()
+  // `force` re-runs the model over inputs that are already cached. Without it, asking to
+  // transcribe again with an unchanged instrument selection is a silent no-op that looks like a
+  // broken button — and there is no other way to pick up a better model or a fixed upstream.
+  const existing = body?.force
+    ? undefined
+    : db.select().from(transcriptions)
+        .where(and(eq(transcriptions.songId, song.id), eq(transcriptions.specHash, specHash)))
+        .get()
 
   if (existing && existsSync(existing.midiPath)) {
     // A cache hit has no note events to replay, so the client is handed the same
@@ -98,7 +103,6 @@ export default defineEventHandler(async (event) => {
   /** Writes the MIDI, the events and the row. Must complete before the final frame is forwarded. */
   async function persist(frame: TranscriptionCompleteEvent) {
     const midi = Buffer.from(frame.data, 'base64')
-    const grid = beatGridFromWire(frame.beat_grid)
 
     let notes: TranscribedNote[]
     try {
@@ -109,6 +113,16 @@ export default defineEventHandler(async (event) => {
       // re-quantization path alive rather than losing the whole run to a parse error.
       notes = notesFromEvents(starts, ends, grid?.onsetDelay ?? 0)
     }
+
+    // Best grid available, in descending order of trust:
+    //  1. What the sidecar's beat tracker detected and stood by.
+    //  2. The tempo it fitted and then rejected as too irregular — only reachable on a patched
+    //     sidecar, which is most of why we carry the patch. A rubato recording lands here, and
+    //     a rough tempo is worth far more than a 120 placeholder that is right by accident only.
+    //  3. Our own autocorrelation over the transcribed onsets, for an unpatched sidecar.
+    const grid = beatGridFromWire(frame.beat_grid)
+      ?? estimateBeatGrid(notes, frame.tempo_hint?.bpm)
+      ?? estimateBeatGrid(notes)
 
     const payload: TranscriptionEvents = { version: 1, notes }
     await writeFile(midiPath, midi)
@@ -125,7 +139,13 @@ export default defineEventHandler(async (event) => {
       previewPath: null,
       beatGrid: grid,
       createdAt: new Date(),
-    }).onConflictDoNothing().run()
+    }).onConflictDoUpdate({
+      // A forced re-run has to replace what's stored, not quietly keep the old grid — the point
+      // of forcing is that the previous result was unsatisfactory. Paths are content-addressed
+      // by spec hash, so the files have already been overwritten in place above.
+      target: [transcriptions.songId, transcriptions.specHash],
+      set: { beatGrid: grid, model, instruments, midiPath, eventsPath, createdAt: new Date() },
+    }).run()
 
     recordAuditIfImpersonating(actor, 'song.transcribe', song.id)
   }

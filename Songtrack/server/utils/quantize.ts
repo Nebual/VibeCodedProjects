@@ -60,6 +60,25 @@ export function onsetError(notes: TranscribedNote[], grid: BeatGrid): number {
 }
 
 /**
+ * Moves the downbeat to the beat nearest `time`, keeping the grid's existing phase.
+ *
+ * This is what "set the first downbeat" has to mean. Moving it by a *fraction* of a beat leaves
+ * the grid points where they are and slides the barlines between them, so every note becomes
+ * syncopated and the engraving fills with ties and rests — technically a correct rendering of a
+ * meaningless instruction. The real use is fixing a downbeat that landed on beat 3 instead of
+ * beat 1, which is a whole-beat move, and a whole-beat move leaves the notes exactly where they
+ * are relative to the beat.
+ */
+export function snapDownbeat(time: number, grid: BeatGrid): number {
+  const beat = 60 / grid.bpm
+  const moved = grid.firstDownbeat + Math.round((time - grid.firstDownbeat) / beat) * beat
+  // Never before the start of the recording; step forward a beat at a time if rounding went under.
+  let out = moved
+  while (out < -1e-9) out += beat
+  return Math.max(0, Math.round(out * 10000) / 10000)
+}
+
+/**
  * Where bar lines fall, from `firstDownbeat` up to `endTime`. Used both for the piano roll's grid
  * overlay and for working out the pickup bar when engraving.
  */
@@ -76,17 +95,54 @@ export function barLines(grid: BeatGrid, endTime: number): number[] {
 }
 
 /**
- * The leading partial bar, in beats, when the piece starts mid-bar.
+ * How to lay a quantized transcription out as a score.
  *
- * Emitting this as a pickup (rather than padding the start with silence) is what keeps every
- * subsequent barline in the right place — pad instead and the whole piece sits one anacrusis off.
- * Returns 0 when the music starts on a downbeat.
+ * `firstDownbeat` is a *phase*: it says where bar 1 begins, and it can legitimately sit anywhere,
+ * including a fraction of a beat into the recording. Notation has no way to express that — a score
+ * has no absolute wall-clock time, only positions relative to barlines — so the fractional part has
+ * to be absorbed by moving the notes rather than declared as a meter.
+ *
+ * Getting that wrong is not subtle. Emitting a sub-beat opening bar (a `1/16` or `2/16` time
+ * signature) makes MuseScore's importer *discard* the odd meter while keeping tick positions that
+ * were computed against it, and the score comes back with duplicated notes, stray rests and
+ * pitches apparently shifted. Measured directly: a clean C major scale engraves perfectly at
+ * firstDownbeat 0, 0.5, 1.0 and 1.5 s (whole beats), and is mangled at 0.125, 0.25 and 0.31 s.
+ *
+ * So: round the lead-in to a whole number of beats, shift every note by the difference, and only
+ * ever emit a pickup meter with the same beat unit as the main one.
+ */
+export interface ScoreLayout {
+  /** Whole beats before the first full bar. 0 when the music starts on a downbeat. */
+  pickupBeats: number
+  /** Seconds to add to every note time so the first downbeat lands exactly on a barline. */
+  shift: number
+}
+
+export function scoreLayout(grid: BeatGrid, earliestNoteStart = 0): ScoreLayout {
+  const beatDuration = 60 / grid.bpm
+  const beatsIn = grid.firstDownbeat / beatDuration
+  let wholeBeatsIn = Math.round(beatsIn)
+  // Within a thousandth of a beat of a bar boundary is a bar boundary, not a 0.999-beat pickup.
+  if (Math.abs(beatsIn - wholeBeatsIn) < 1e-3) wholeBeatsIn = Math.round(beatsIn)
+
+  let shift = wholeBeatsIn * beatDuration - grid.firstDownbeat
+  // Rounding down would drag the opening note before the start of the score. Give it another
+  // beat of room rather than truncating music off the front.
+  while (earliestNoteStart + shift < -1e-9) {
+    wholeBeatsIn += 1
+    shift += beatDuration
+  }
+
+  return {
+    pickupBeats: ((wholeBeatsIn % grid.beatsPerBar) + grid.beatsPerBar) % grid.beatsPerBar,
+    shift,
+  }
+}
+
+/**
+ * The leading partial bar in whole beats. Kept as a thin wrapper over `scoreLayout` because it
+ * reads better at call sites that only care whether there *is* a pickup.
  */
 export function pickupBeats(grid: BeatGrid): number {
-  if (grid.firstDownbeat <= 0) return 0
-  const beatDuration = 60 / grid.bpm
-  const beats = grid.firstDownbeat / beatDuration
-  const remainder = beats % grid.beatsPerBar
-  // Within a thousandth of a beat of a full bar is a full bar, not a 0.999-beat pickup.
-  return remainder < 1e-3 || grid.beatsPerBar - remainder < 1e-3 ? 0 : remainder
+  return scoreLayout(grid).pickupBeats
 }

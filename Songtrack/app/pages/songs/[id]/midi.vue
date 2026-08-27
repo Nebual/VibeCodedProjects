@@ -27,11 +27,6 @@ const { data: existing } = await useFetch<TranscriptionSummary | null>(
 )
 
 const selected = ref<string[]>([])
-function toggleInstrument(name: string) {
-  const i = selected.value.indexOf(name)
-  if (i === -1) selected.value.push(name)
-  else selected.value.splice(i, 1)
-}
 
 // --- transcription state ---
 const running = ref(false)
@@ -47,9 +42,20 @@ const completed = ref(0)
 const total = ref(0)
 const liveNotes = ref<TranscribedNote[]>([])
 const finalNotes = ref<TranscribedNote[]>([])
-const midiBytes = ref<ArrayBuffer | null>(null)
 const grid = ref<BeatGrid | null>(null)
-const hasDetectedGrid = ref(false)
+
+const ZOOM_CHOICES = [
+  { seconds: 5, label: '5s' },
+  { seconds: 10, label: '10s' },
+  { seconds: 30, label: '30s' },
+  { seconds: 0, label: 'All' },
+]
+/** Ten seconds at a time by default — a whole song squeezed across one canvas is unreadable. */
+const zoom = ref(10)
+const rollWindow = computed(() => (zoom.value > 0 ? zoom.value : null))
+const playhead = ref(0)
+const mutedInstruments = ref<string[]>([])
+const playerRef = useTemplateRef<{ seek: (s: number) => void, stop: () => void }>('player')
 
 const progressPct = computed(() => (total.value ? Math.round((completed.value / total.value) * 100) : 0))
 
@@ -82,19 +88,14 @@ function handleEvent(ev: TranscriptionEvent) {
       break
     }
     case 'transcription_complete':
-      midiBytes.value = base64ToBytes(ev.data)
+      // Nothing to keep here any more: the player is driven by notes, and the finished ones are
+      // fetched from the server in finish(). Holding the MIDI bytes was how the player ended up
+      // silent on every revisit — they only ever arrived on the run that streamed them.
       break
     case 'error':
       errorMessage.value = ev.message
       break
   }
-}
-
-function base64ToBytes(b64: string): ArrayBuffer {
-  const binary = atob(b64)
-  const bytes = new Uint8Array(binary.length)
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
-  return bytes.buffer
 }
 
 async function start() {
@@ -111,7 +112,9 @@ async function start() {
     const res = await fetch(`/api/songs/${songId}/transcribe`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Client-Id': clientId.value },
-      body: JSON.stringify({ instruments: selected.value }),
+      // Always force from this page: the user pressed a button, so something must happen —
+      // an unchanged instrument selection would otherwise be an instant, invisible no-op.
+      body: JSON.stringify({ instruments: selected.value, force: true }),
     })
     if (!res.ok || !res.body) {
       throw new Error((await res.text().catch(() => '')) || `Transcription failed (${res.status})`)
@@ -156,9 +159,11 @@ async function finish() {
     `/api/songs/${songId}/transcription/events`,
   )
   finalNotes.value = data.notes
-  hasDetectedGrid.value = !!data.beatGrid
+  // The server now always supplies its best grid — detected, or estimated from the onsets when
+  // the beat tracker refused to commit — so a bare 120 placeholder is only ever the last resort.
   grid.value = data.beatGrid ?? {
     bpm: 120, beatsPerBar: 4, firstDownbeat: 0, onsetDelay: 0, subdivision: DEFAULT_SUBDIVISION,
+    source: 'estimated',
   }
   done.value = true
   showSetup.value = false
@@ -177,9 +182,26 @@ function transcribeAgain() {
 // --- tempo editing ---
 const pickingDownbeat = ref(false)
 function onRollSeek(time: number) {
-  if (!pickingDownbeat.value || !grid.value) return
-  grid.value = { ...grid.value, firstDownbeat: Math.max(0, time) }
-  pickingDownbeat.value = false
+  if (pickingDownbeat.value && grid.value) {
+    // Snapped to the nearest beat, keeping the grid's phase. A sub-beat downbeat slides the
+    // barlines between the notes instead of moving with them, which syncopates the whole piece
+    // and fills the score with ties — see snapDownbeat() server-side for the full reasoning.
+    const g = grid.value
+    const beat = 60 / g.bpm
+    const moved = g.firstDownbeat + Math.round((time - g.firstDownbeat) / beat) * beat
+    let snapped = moved
+    while (snapped < -1e-9) snapped += beat
+    grid.value = {
+      ...g,
+      firstDownbeat: Math.max(0, Math.round(snapped * 10000) / 10000),
+      source: 'user',
+    }
+    pickingDownbeat.value = false
+    return
+  }
+  // Otherwise a click on the roll is a playback position, which is what people expect of it.
+  playhead.value = Math.max(0, time)
+  playerRef.value?.seek(playhead.value)
 }
 
 const gridQuery = computed(() => {
@@ -223,6 +245,8 @@ function mimeFor(name: string): string {
   if (name.endsWith('.pdf')) return 'application/pdf'
   if (name.endsWith('.mid')) return 'audio/midi'
   if (name.endsWith('.musicxml')) return 'application/vnd.recordare.musicxml+xml'
+  // MuseScore's own format, added by patches/0001-mscz-export-and-tempo-hint.patch.
+  if (name.endsWith('.mscz')) return 'application/vnd.musescore.mscz+zip'
   return 'application/octet-stream'
 }
 
@@ -240,20 +264,13 @@ onScopeDispose(() => { for (const f of sheets.value) URL.revokeObjectURL(f.url) 
     <div v-if="showSetup" class="flex flex-col gap-3">
       <div>
         <p class="label-text text-xs mb-1">
-          Instruments — leave all off to let the model detect them.
+          Instruments — leave this empty to let the model detect them.
         </p>
-        <div class="flex flex-wrap gap-1.5">
-          <button
-            v-for="name in instrumentList.instruments"
-            :key="name"
-            class="btn btn-xs"
-            :class="selected.includes(name) ? 'btn-primary' : 'btn-outline'"
-            :disabled="running"
-            @click="toggleInstrument(name)"
-          >
-            {{ name.replace(/_/g, ' ') }}
-          </button>
-        </div>
+        <InstrumentPicker
+          v-model="selected"
+          :options="instrumentList.instruments"
+          :disabled="running"
+        />
       </div>
 
       <button
@@ -279,29 +296,71 @@ onScopeDispose(() => { for (const f of sheets.value) URL.revokeObjectURL(f.url) 
     </div>
 
     <div v-if="errorMessage" class="alert alert-error text-sm" data-testid="transcribe-error">
-      {{ errorMessage }}
+      <span>{{ errorMessage }}</span>
     </div>
 
     <!-- piano roll: live while running, redrawn from the saved events when finished -->
-    <div v-if="rollNotes.length || running" class="h-56">
-      <PianoRoll :notes="rollNotes" :grid="done ? grid : null" :duration="song.durationS ?? undefined" @seek="onRollSeek" />
-    </div>
+    <template v-if="rollNotes.length || running">
+      <div class="flex items-center gap-2">
+        <span class="text-xs text-base-content/60">Show</span>
+        <div class="join">
+          <button
+            v-for="z in ZOOM_CHOICES"
+            :key="z.label"
+            class="btn btn-xs join-item"
+            :class="zoom === z.seconds ? 'btn-primary' : 'btn-outline'"
+            :data-testid="`zoom-${z.label}`"
+            @click="zoom = z.seconds"
+          >{{ z.label }}</button>
+        </div>
+        <span class="text-xs text-base-content/50 ml-auto">
+          Click the roll to move playback{{ pickingDownbeat ? ' — or to set the downbeat' : '' }}.
+        </span>
+      </div>
+      <div class="h-56">
+        <PianoRoll
+          :notes="rollNotes"
+          :grid="done ? grid : null"
+          :duration="song.durationS ?? undefined"
+          :window="rollWindow"
+          :playhead="playhead"
+          :follow="true"
+          :muted="mutedInstruments"
+          @seek="onRollSeek"
+        />
+      </div>
+
+      <!-- Available while transcribing too: the whole point is hearing it before it finishes. -->
+      <MidiCrossfadePlayer
+        ref="player"
+        :song-id="songId"
+        :notes="rollNotes"
+        :duration="song.durationS ?? undefined"
+        :live="running"
+        @time="playhead = $event"
+        @update:muted="mutedInstruments = $event"
+      />
+    </template>
 
     <template v-if="done && grid">
-      <p v-if="!hasDetectedGrid" class="alert alert-warning text-sm">
-        No tempo was detected for this recording, so the notation will be rough until you set one
-        below. Playback is unaffected either way.
-      </p>
+      <!-- One <span> child, not loose text: daisyUI's .alert is a grid, so bare text nodes and the
+           <strong> each become their own grid item and the sentence breaks apart. -->
+      <div v-if="grid.source === 'estimated'" class="alert alert-warning text-sm">
+        <span>
+          The beat tracker wouldn't commit to a tempo for this recording, so
+          <strong>{{ grid.bpm }} BPM is an estimate</strong> — close enough to start from, not to
+          trust. Check the barlines on the roll, and try ×2 or ÷2 if every other one lands in empty
+          space. Playback is unaffected either way.
+        </span>
+      </div>
 
       <div class="flex justify-end">
         <button class="btn btn-xs btn-ghost" data-testid="transcribe-again" @click="transcribeAgain">
-          Transcribe again with different instruments
+          Transcribe again
         </button>
       </div>
 
       <MidiTempoEditor v-model="grid" :notes="finalNotes" :picking-downbeat="pickingDownbeat" @pick-downbeat="pickingDownbeat = true" />
-
-      <MidiCrossfadePlayer :song-id="songId" :midi="midiBytes" />
 
       <div class="flex flex-col gap-2 p-3 rounded-box bg-base-200">
         <h3 class="font-semibold text-sm">Downloads</h3>
@@ -320,8 +379,10 @@ onScopeDispose(() => { for (const f of sheets.value) URL.revokeObjectURL(f.url) 
           >Performance MIDI</a>
           <a
             class="btn btn-sm btn-ghost"
-            :href="`/api/songs/${songId}/transcription/preview?mode=mix`"
-          >Check mix (ogg)</a>
+            :href="`/api/songs/${songId}/transcription/preview?mode=synth`"
+            download
+            data-testid="download-synth"
+          >Download synth (ogg)</a>
         </div>
         <ul class="text-xs text-base-content/60 list-disc pl-4">
           <li><strong>Score MIDI</strong> — snapped to the beat. Use this one for MuseScore, Sibelius or any notation software.</li>
@@ -340,7 +401,9 @@ onScopeDispose(() => { for (const f of sheets.value) URL.revokeObjectURL(f.url) 
           Engraving runs MuseScore and takes a few seconds — check the barlines on the roll above
           first. Expect a good starting point to edit, not a finished score.
         </p>
-        <div v-if="engraveError" class="alert alert-error text-sm" data-testid="engrave-error">{{ engraveError }}</div>
+        <div v-if="engraveError" class="alert alert-error text-sm" data-testid="engrave-error">
+          <span>{{ engraveError }}</span>
+        </div>
         <!-- <object>, not <embed>: it supports fallback content, so a browser with no PDF viewer
              gets a link instead of a blank panel saying "couldn't load plugin". -->
         <object v-if="scorePdf" :data="scorePdf" type="application/pdf" class="w-full h-96 rounded">

@@ -23,6 +23,9 @@ export default defineEventHandler(async (event) => {
   const mode = q.mode === 'synth' ? 'synth' : 'mix'
   const row = loadTranscription(song.id, q.spec as string | undefined)
 
+  setHeader(event, 'Content-Disposition',
+    `attachment; filename="${slugify(song.title)}-${mode === 'synth' ? 'synth' : 'mix'}.ogg"`)
+
   if (mode === 'mix' && row.previewPath && existsSync(row.previewPath)) {
     return streamRangeableFile(event, row.previewPath, 'audio/ogg')
   }

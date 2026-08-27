@@ -15,7 +15,7 @@ services:
 
   # Audio → MIDI transcription sidecar (upstream MuScriptor, unmodified).
   midi:
-    image: songtrack-midi:main-e34b397
+    image: songtrack-midi:main-e34b397-patched
     # Pinned to a commit, not a release: /sheets (engraving) landed after v0.3.0 and no tag
     # carries it. See the header of bin/build-midi-sidecar.sh.
     # No `build:` — see bin/build-midi-sidecar.sh. gman-deploy.sh runs `up --build`

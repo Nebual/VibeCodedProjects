@@ -33,7 +33,7 @@ Three one-time setup steps on the server, none of which run from a deploy:
 ```bash
 export HF_TOKEN=hf_...            # after accepting the licence, see the script header
 ./bin/fetch-midi-model.sh medium  # populates ./cache/midi-cache (~1.2 GB, gitignored)
-./bin/build-midi-sidecar.sh   # pinned commit; see the script header
+./bin/build-midi-sidecar.sh   # pinned commit + patches/; see the script header
 docker compose up -d
 ```
 
@@ -57,6 +57,10 @@ on the v0.3.0 tag the last of those does not exist.
 - **Sheet-music engraving needs the pinned commit, not a release.** `/sheets` landed upstream after
   v0.3.0 and no tag carries it, so `bin/build-midi-sidecar.sh` pins commit `e34b397`. Built from
   the v0.3.0 tag instead, the Engrave button reports a 501 saying so and points at the Score MIDI.
+- **The image is patched, not stock.** `patches/` adds two things upstream doesn't have: `.mscz`
+  export, and a `tempo_hint` reporting the tempo the beat tracker fitted and then rejected (which
+  otherwise survives only inside an exception message, leaving rubato recordings on a meaningless
+  120 BPM placeholder). The build script refuses to build without the patches applied.
 - **`/auralize` and the in-browser synth need `MuScriptor/assets` in the cache**, which
   `bin/fetch-midi-model.sh` now fetches alongside the weights. If you populated the cache before
   that, just re-run the script — the model download is already cached, so it only adds the

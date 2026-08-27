@@ -32,6 +32,45 @@ been edited to reflect build decisions made along the way — where this file di
 Stages 1–6 of the V2 plan are built and **verified against a live muscriptor 0.3.0 sidecar**
 (model `medium`), not just against the stub.
 
+### The sidecar image is pinned AND patched — and why
+
+`bin/build-midi-sidecar.sh` clones upstream at a pinned commit, applies everything in `patches/`,
+and builds that. It **refuses to build with no patches present**, because an unpatched image loses
+`.mscz` and the tempo hint in ways that look like app bugs rather than build ones.
+
+`patches/0001-mscz-export-and-tempo-hint.patch` does two things, both small and additive, and both
+worth offering upstream — if they land there, drop the patch and build from the git URL again:
+
+1. **`.mscz`** — `write_sheets` builds `score.mscx` in a temp dir, converts it to MusicXML and PDF,
+   and throws it away. The patch also converts it to `score.mscz` and keeps it. Verified: the
+   archive gains a real MuseScore container (`score.mscx`, styles, thumbnail inside).
+2. **`tempo_hint`** — `detect_beat_grid` fits a tempo, and if the beats deviate too far from a
+   constant one it raises `BeatDetectionError`, leaving the fitted BPM reachable **only inside the
+   exception's message text**. Under `best-effort` the server swallows it and sends
+   `beat_grid: null`, so any recording with rubato in it used to land on a 120 placeholder. The
+   patch carries `bpm`/`residual` on the exception and reports them as `tempo_hint` on the final
+   frame. Verified live: a deliberately-rubato recording yields
+   `tempo_hint {bpm: 108.9, residual_ms: 334}` where it previously yielded nothing, and a steady
+   recording still detects a grid with `tempo_hint: null` (no regression).
+
+`server.py` has no module logger of its own — the patch adds `import logging` rather than
+referencing a `logger` name that doesn't exist. A compile check won't catch that; it only shows up
+when tempo detection actually fails, which is the one path the patch exists for.
+
+### The tempo a grid comes from is tracked, not assumed
+
+`BeatGrid.source` is `detected` | `estimated` | `user`. The transcribe route picks the best
+available, in descending order of trust: the sidecar's detected grid, then its rejected-but-fitted
+`tempo_hint`, then `server/utils/tempo.ts` — our own autocorrelation over the saved onsets, which
+is what an unpatched sidecar falls back to. A bare 120 is now only ever the last resort, and the
+page says plainly when the number is a guess.
+
+`estimateTempo` uses autocorrelation rather than "pick the grid with the smallest onset error",
+because a finer grid always fits better and error alone has no minimum worth finding. Two traps
+already paid for: normalising the correlation by overlap length (`sum / (bins - lag)`) over-rewards
+long lags and returned 80 BPM for a textbook 120, and a peak-to-mean confidence saturates at 1 for
+periodic and random input alike — it scores grid agreement instead.
+
 ### The image is pinned to a commit, not a release — and why
 
 `/sheets` (Stage 6.4's engraving) landed on main **after v0.3.0**, and no tag carries it: on
@@ -115,6 +154,66 @@ Two things that only real data exposed, both fixed:
   the browser.** The plan suggested `spessasynth_core` for that; serving the saved events is
   simpler, identical on a fresh run and a cache hit, and removes a client-side MIDI parser.
   `spessasynth_lib` is still used for playback, which takes the raw bytes.
+### First downbeat is a whole-beat control, and why that matters
+
+Moving the downbeat by a *fraction of a beat* does not shift the barlines along with the music — it
+slides them *between* the notes, so every note becomes syncopated and the engraving fills with ties
+and rests. Measured against a real MuseScore: a clean C major scale engraved perfectly at
+firstDownbeat 0 / 0.5 / 1.0 / 1.5 s (whole beats) and came back with **notes reordered and up to
+nine stray rests** at 0.125 / 0.25 / 0.31 s. That is what "changing the downbeat changed the pitches"
+was — MuseScore splitting syncopated notes across voices, so document order stopped matching time
+order. No notes were actually lost.
+
+Two changes, both needed:
+
+1. `snapDownbeat()` moves the downbeat to the nearest **beat**, preserving the grid's phase, and the
+   roll's click-to-set-downbeat uses it. A whole-beat move leaves every note exactly where it was
+   relative to the beat, which is the real use (a downbeat detected on beat 3 instead of beat 1).
+2. `scoreLayout()` replaced the old fractional-pickup encoding. The old code wrote the anacrusis as
+   `N/16` (so a 3-beat pickup became `12/16`); MuseScore **discards** a pickup meter whose beat unit
+   differs from the main one while keeping the tick positions computed against it. Pickups are now
+   always whole beats in the main meter's unit (`3/4`, not `12/16`), and the sub-beat remainder is
+   absorbed by shifting the notes — a score has no absolute time, only positions relative to bars.
+
+Verified after the fix: all eight notes survive at every downbeat value tested, and the only
+remaining artefact is ties, which are the correct rendering of a genuinely off-beat grid.
+
+- **The player is driven by notes, not by a MIDI file.** It used to take the base64 MIDI from the
+  `transcription_complete` frame, which meant it worked on the run that streamed and was **silent
+  on every revisit** — the bytes never arrived again. Notes come from `/transcription/events`,
+  which is identical on a fresh run and a cache hit, and they also make the play-while-transcribing
+  preview and per-instrument muting possible at all.
+- **`useMidiSynth` schedules notes on the audio-context clock** (`noteOn(..., { time })`), not with
+  `setTimeout`, and reads its position from the recording's `<audio>` element on every tick — so
+  the transcription tracks the recording instead of drifting away from it. Muting a part is a
+  channel-volume change (CC 7), not "skip the note": events already queued on the audio clock
+  cannot be un-queued, so skipping would leave up to a lookahead of sound behind.
+- **`assignChannels`/`gmProgramFor` exist because every part was otherwise written as piano** — a
+  bass line and a sax both came back as programme 0, which made the audio check worthless.
+- **A canvas inside a flex column needs `min-h-0`.** A flex item defaults to `min-height: auto`, and
+  a canvas has an intrinsic size from its width/height attributes (which `draw()` sets in device
+  pixels), so it refuses to shrink, overflows its container, and squashes anything below it to zero
+  height. This cost a debugging round when the roll's scrollbar was present but invisible.
+- **Every input `draw()` reads must be in the piano roll's watch list.** `window`, `muted` and
+  `scroll` were missing once, so the zoom buttons looked completely inert whenever nothing was
+  playing — the playhead was the only thing still triggering a redraw. The e2e spec now compares
+  canvas pixels across zoom levels rather than trusting that a class changed.
+- **The BPM field is free text, clamped only on blur, with no `min` attribute.** Clamping per
+  keystroke made it unusable: typing "81" clamped the intermediate "8" up to the minimum and left
+  you editing "201".
+- **`InstrumentPicker.vue` replaced 35 chips**, modelled on `TagPicker.vue` but with one deliberate
+  difference: tags are free text, instruments are not — the sidecar validates names against the MT3
+  taxonomy and answers 422 for anything else, so the picker only ever emits values from `options`.
+  It closes its menu after each pick (typing reopens it): left open, the absolutely-positioned menu
+  sits on top of the Start button and swallows the click.
+- **The "tempo is an estimate" banner keys off `grid.source`, not a snapshot taken at load.** Every
+  edit in the tempo editor stamps `source: 'user'`, which hides it. Keyed off a boolean captured
+  once, the banner kept quoting whatever number the user had just typed and calling it a guess.
+- **daisyUI's `.alert` is a grid**, so loose text nodes and an inline `<strong>` become separate
+  grid items and the sentence breaks apart. Alert bodies are wrapped in a single `<span>`.
+- **`POST /transcribe` takes `force`**, and the page always sends it. Without it, "Transcribe again"
+  with an unchanged instrument selection is an instant cache hit that looks like a dead button —
+  and it also made the live-preview e2e assertions race a 50 ms no-op.
 - **The progress bar lives outside the setup block on purpose.** Inside it, it unmounted the instant
   the run completed, so it was never seen to reach 100% (an e2e assertion caught this).
 - **A re-render of `master.ogg` invalidates the transcription cache**, because the spec hash

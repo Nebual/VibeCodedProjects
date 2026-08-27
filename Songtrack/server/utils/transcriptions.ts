@@ -59,6 +59,7 @@ export function beatGridFromWire(wire: WireBeatGrid | null | undefined): BeatGri
     firstDownbeat: typeof wire.first_downbeat === 'number' ? wire.first_downbeat : 0,
     onsetDelay: typeof wire.onset_delay === 'number' ? wire.onset_delay : 0,
     subdivision: DEFAULT_SUBDIVISION,
+    source: 'detected',
   }
 }
 
