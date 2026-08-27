@@ -1,13 +1,7 @@
+import { mkdir } from 'node:fs/promises'
 import { createWriteStream } from 'node:fs'
-import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { eq } from 'drizzle-orm'
-import { nanoid } from 'nanoid'
-import { db } from '../../database/client'
-import { songs, takes } from '../../database/schema'
-import { ffprobe, generatePeaks, renderEditList } from '../../utils/ffmpeg'
-import { songDir } from '../../utils/paths'
-import type { EditList } from '#shared/types'
+import { allocateSong, createSongFromAudioFile } from '../../utils/songs'
 
 /**
  * Upload of a complete audio file (mp3/ogg/m4a/…) as a new song's single take.
@@ -16,10 +10,8 @@ import type { EditList } from '#shared/types'
  * parsing needed). Metadata rides along as query params, keeping the client trivially
  * simple: one POST per file, streamed to disk without ever buffering it whole in memory.
  *
- * Rendering (master.ogg + peaks) happens inline before responding so the returned song id
- * is fully playable by the time the client navigates to it. For large uploads that makes
- * each response slow, but uploads are queued client-side and strictly sequential anyway,
- * and it avoids any background-job machinery.
+ * Once the bytes are on disk, `createSongFromAudioFile` does the rest (probe, insert,
+ * render, peaks) — the same tail the YouTube import runs.
  */
 export default defineEventHandler(async (event) => {
   const actor = await requireActor(event)
@@ -34,69 +26,19 @@ export default defineEventHandler(async (event) => {
   const mimeType = typeof q.mime === 'string' ? q.mime : ''
   const filename = typeof q.filename === 'string' ? q.filename : ''
 
-  const songId = nanoid()
-  const takeId = nanoid()
-  const dir = songDir(actor.user.id, songId)
+  const ids = allocateSong(actor.user.id)
 
   const ext = guessUploadExt(filename) || guessExtFromMime(mimeType)
   if (!ext || ext === 'bin') {
     throw createError({ statusCode: 400, statusMessage: 'Unsupported audio file type' })
   }
-  const takePath = join(dir, 'takes', `${takeId}.${ext}`)
+  const takePath = join(ids.dir, 'takes', `${ids.takeId}.${ext}`)
 
   await mkdir(join(takePath, '..'), { recursive: true })
   await streamRequestBodyToFile(event.node.req, takePath)
 
-  const probe = await ffprobe(takePath).catch(() => null)
-  if (!probe || !probe.durationS) {
-    throw createError({ statusCode: 400, statusMessage: 'Not a readable audio file' })
-  }
-
-  const now = new Date()
-  db.insert(songs).values({
-    id: songId,
-    userId: actor.user.id,
-    title,
-    slug: slugify(title),
-    editList: { segments: [], filters: [] },
-    createdAt: now,
-    updatedAt: now,
-  }).run()
-
-  db.insert(takes).values({
-    id: takeId,
-    songId,
-    sourcePath: takePath,
-    timelineStart: 0,
-    durationS: probe.durationS,
-    ordinal: 0,
-    createdAt: now,
-  }).run()
-
-  const editList: EditList = {
-    segments: [{ source: takeId, start: 0, end: probe.durationS }],
-    filters: [],
-  }
-  const masterPath = join(dir, 'master.ogg')
-  const peaksPath = join(dir, 'peaks.json')
-
-  await renderEditList([{ id: takeId, path: takePath }], editList, masterPath, 'ogg')
-  const [masterProbe, peaks] = await Promise.all([ffprobe(masterPath), generatePeaks(masterPath)])
-  await writeFile(peaksPath, JSON.stringify(peaks))
-
-  db.update(songs).set({
-    masterPath,
-    peaksPath,
-    editList,
-    durationS: masterProbe.durationS,
-    sampleRate: masterProbe.sampleRate,
-    channels: masterProbe.channels,
-    updatedAt: new Date(),
-  }).where(eq(songs.id, songId)).run()
-
-  recordAuditIfImpersonating(actor, 'song.upload', songId)
-
-  return { id: songId }
+  const song = await createSongFromAudioFile({ actor, ids, title, takePath, auditAction: 'song.upload' })
+  return { id: song.id }
 })
 
 function guessExtFromMime(mime: string): string {

@@ -17,7 +17,9 @@ async function openUploadModal(page) {
 }
 
 test('multi-file upload via navbar modal creates one song per file', async ({ page }) => {
-  await page.goto('/')
+  // waitUntil: 'networkidle' matters here — without it the Upload click races Vue hydration
+  // and silently does nothing, leaving the modal closed.
+  await page.goto('/', { waitUntil: 'networkidle' })
 
   await openUploadModal(page)
 

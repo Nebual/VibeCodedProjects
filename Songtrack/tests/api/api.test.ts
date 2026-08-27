@@ -463,6 +463,66 @@ describe('albums', () => {
 /* Admin (light coverage: happy path + gate)                           */
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/* YouTube import                                                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Only the request-validation half is covered here: everything past validation shells out to
+ * yt-dlp and reaches out to YouTube, which would make this suite network-dependent and slow.
+ * The argument list and stdout parsing are unit-tested instead (tests/unit/ytdlp.test.ts),
+ * and the URL rules in tests/unit/youtube.test.ts.
+ */
+describe('youtube import (validation)', () => {
+  it('requires a session', async () => {
+    const err: any = await $fetch('/api/songs/import-youtube', {
+      method: 'POST',
+      body: { url: 'https://youtu.be/dQw4w9WgXcQ' },
+      retry: 0,
+    }).catch(e => e)
+    expect(err.statusCode).toBe(401)
+  })
+
+  it('rejects a rejected account before doing any work', async () => {
+    const err: any = await api('/api/songs/import-youtube', {
+      method: 'POST',
+      user: 'rejected',
+      body: { url: 'https://youtu.be/dQw4w9WgXcQ' },
+    })
+    expect(err.statusCode).toBe(403)
+  })
+
+  it('rejects a missing url with 400', async () => {
+    const err: any = await api('/api/songs/import-youtube', { method: 'POST', body: {} })
+    expect(err.statusCode).toBe(400)
+  })
+
+  it('rejects a non-youtube url with 400 rather than downloading it', async () => {
+    const err: any = await api('/api/songs/import-youtube', {
+      method: 'POST',
+      body: { url: 'https://vimeo.com/12345' },
+    })
+    expect(err.statusCode).toBe(400)
+    expect(err.statusMessage).toMatch(/youtube/i)
+  })
+
+  it('rejects a bare playlist url with a message naming the problem', async () => {
+    const err: any = await api('/api/songs/import-youtube', {
+      method: 'POST',
+      body: { url: 'https://www.youtube.com/playlist?list=PL1234567890' },
+    })
+    expect(err.statusCode).toBe(400)
+    expect(err.statusMessage).toMatch(/playlist/i)
+  })
+
+  it('leaves no song row behind when the url is rejected', async () => {
+    const before = sqlite.prepare('SELECT COUNT(*) AS n FROM songs').get() as { n: number }
+    await api('/api/songs/import-youtube', { method: 'POST', body: { url: 'not a url' } })
+    const after = sqlite.prepare('SELECT COUNT(*) AS n FROM songs').get() as { n: number }
+    expect(after.n).toBe(before.n)
+  })
+})
+
 describe('admin surface (light)', () => {
   it('non-admins are rejected with 403', async () => {
     const err: any = await api('/api/admin/settings')
