@@ -117,3 +117,21 @@ export function writeScoreMidi(notes: TranscribedNote[], grid: BeatGrid): Buffer
 
   return Buffer.from(midi.toArray())
 }
+
+/**
+ * Moves every note in a MIDI file earlier by `seconds`, leaving the rest of the file alone.
+ *
+ * Used to undo the silence `postAudio` prepends: the stored performance MIDI has to line up with
+ * the user's actual recording, and re-writing the file from scratch would throw away upstream's
+ * own tempo and meta events for no reason. Notes that would land before zero are clamped there
+ * rather than dropped — losing a note to arithmetic would be worse than a few milliseconds of
+ * error on one that started during the pad.
+ */
+export function shiftMidiNotes(buffer: Buffer, seconds: number): Buffer {
+  if (!seconds) return buffer
+  const midi = new Midi(new Uint8Array(buffer).buffer as ArrayBuffer)
+  for (const track of midi.tracks) {
+    for (const note of track.notes) note.time = Math.max(0, note.time - seconds)
+  }
+  return Buffer.from(midi.toArray())
+}

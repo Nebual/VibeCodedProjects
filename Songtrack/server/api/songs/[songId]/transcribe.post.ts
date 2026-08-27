@@ -6,6 +6,7 @@ import { nanoid } from 'nanoid'
 import { db } from '../../../database/client'
 import { transcriptions } from '../../../database/schema'
 import type {
+  TranscriptionEvent,
   NoteEndEvent,
   NoteStartEvent,
   TranscribedNote,
@@ -85,7 +86,12 @@ export default defineEventHandler(async (event) => {
   const abort = new AbortController()
   event.node?.req?.on?.('close', () => abort.abort())
 
-  const upstream = await postAudio(song.masterPath, { instruments, clientId, signal: abort.signal })
+  const { response: upstream, padSeconds } = await postAudio(song.masterPath, {
+    instruments,
+    clientId,
+    signal: abort.signal,
+    tmpDir: songTmpDir(actor.user.id, song.id),
+  })
   if (!upstream.body) {
     throw createError({ statusCode: 502, statusMessage: 'Transcription worker returned an empty stream' })
   }
@@ -102,7 +108,9 @@ export default defineEventHandler(async (event) => {
 
   /** Writes the MIDI, the events and the row. Must complete before the final frame is forwarded. */
   async function persist(frame: TranscriptionCompleteEvent) {
-    const midi = Buffer.from(frame.data, 'base64')
+    // Undo the silence that was prepended to coax the first note out of the model. Everything
+    // stored from here on is on the recording's own timeline.
+    const midi = shiftMidiNotes(Buffer.from(frame.data, 'base64'), padSeconds)
 
     let notes: TranscribedNote[]
     try {
@@ -120,7 +128,10 @@ export default defineEventHandler(async (event) => {
     //     sidecar, which is most of why we carry the patch. A rubato recording lands here, and
     //     a rough tempo is worth far more than a 120 placeholder that is right by accident only.
     //  3. Our own autocorrelation over the transcribed onsets, for an unpatched sidecar.
-    const grid = beatGridFromWire(frame.beat_grid)
+    const detected = beatGridFromWire(frame.beat_grid)
+    const grid = (detected
+      ? { ...detected, firstDownbeat: Math.max(0, detected.firstDownbeat - padSeconds) }
+      : null)
       ?? estimateBeatGrid(notes, frame.tempo_hint?.bpm)
       ?? estimateBeatGrid(notes)
 
@@ -161,12 +172,16 @@ export default defineEventHandler(async (event) => {
           // Parse before forwarding: the chunk carrying `transcription_complete` is held until
           // the files and the row are on disk, so a client that immediately requests a download
           // can't lose the race.
-          for (const frame of parser.push(decoder.decode(value, { stream: true }))) {
+          const frames = parser.push(decoder.decode(value, { stream: true }))
+          for (const frame of frames) {
             if (frame.type === 'start') starts.push(frame)
             else if (frame.type === 'end') ends.push(frame)
             else if (frame.type === 'transcription_complete') await persist(frame)
           }
-          controller.enqueue(value)
+          // Re-emitted rather than forwarded verbatim, because the note times the sidecar reports
+          // are `padSeconds` late — the live roll would otherwise draw everything shifted right
+          // until the finished roll replaced it.
+          controller.enqueue(padSeconds ? encoder.encode(reframe(frames)) : value)
         }
         for (const frame of parser.flush()) {
           if (frame.type === 'transcription_complete') await persist(frame)
@@ -190,6 +205,18 @@ export default defineEventHandler(async (event) => {
 
   return out
 })
+
+/** Re-serialises parsed frames with the padding removed from every time they carry. */
+function reframe(frames: TranscriptionEvent[]): string {
+  return frames.map((frame) => {
+    const shifted = frame.type === 'start'
+      ? { ...frame, start_time: Math.max(0, frame.start_time - TRANSCRIBE_PAD_S) }
+      : frame.type === 'end'
+        ? { ...frame, end_time: Math.max(0, frame.end_time - TRANSCRIBE_PAD_S) }
+        : frame
+    return `data: ${JSON.stringify(shifted)}\n\n`
+  }).join('')
+}
 
 /** A complete, already-finished SSE body — used for the cache-hit path. */
 function sseBody(frames: unknown[]): ReadableStream<Uint8Array> {

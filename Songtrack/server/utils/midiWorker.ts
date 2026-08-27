@@ -1,5 +1,5 @@
-import { readFile } from 'node:fs/promises'
-import { basename } from 'node:path'
+import { readFile, unlink } from 'node:fs/promises'
+import { basename, join } from 'node:path'
 import { fakeInstruments, fakeTranscribeResponse } from './midiFakeWorker'
 
 /**
@@ -9,6 +9,20 @@ import { fakeInstruments, fakeTranscribeResponse } from './midiFakeWorker'
  * The sidecar has no authentication of its own and is never published to a host port — see
  * docker-compose.yml. Reaching it is the Nuxt server's privilege alone.
  */
+
+/**
+ * Silence prepended to the audio before the model sees it.
+ *
+ * The model reliably misses a note that lands right at the very start of a file — measured on a
+ * clean 8-note scale beginning at t=0, it returned 7 notes and dropped the first every time.
+ * Giving it a fraction of a second of lead-in recovers it: 0.1s was already enough, and every
+ * padded run returned all 8 with the onsets simply offset by the pad. 0.2s is that with margin.
+ *
+ * Everything the sidecar reports is therefore `padSeconds` late, and the transcribe route shifts
+ * it all back so nothing downstream — the roll, the events, the stored MIDI, the beat grid — ever
+ * sees the padding.
+ */
+export const TRANSCRIBE_PAD_S = 0.2
 
 /** Which model the sidecar was launched with. Part of the spec hash, so bumping it re-transcribes. */
 export function midiWorkerModel(): string {
@@ -67,26 +81,66 @@ async function fileBlob(path: string, type: string): Promise<Blob> {
  * Sent as the `X-Client-Id` header, which is what upstream declares on both v0.3.0 and main
  * (`x_client_id: Annotated[str | None, Header()]`).
  */
+export interface TranscribeStream {
+  response: Response
+  /** Seconds of silence prepended; subtract this from every time the sidecar reports. */
+  padSeconds: number
+}
+
 export async function postAudio(
   path: string,
-  opts: { instruments: string[], clientId: string, signal?: AbortSignal },
-): Promise<Response> {
-  if (usingFakeWorker()) return fakeTranscribeResponse(opts.signal)
+  opts: { instruments: string[], clientId: string, signal?: AbortSignal, tmpDir?: string },
+): Promise<TranscribeStream> {
+  // The stub replays fixed frames from a file, so there is nothing to pad and nothing to shift.
+  if (usingFakeWorker()) return { response: fakeTranscribeResponse(opts.signal), padSeconds: 0 }
 
+  const padded = opts.tmpDir ? await padAudio(path, opts.tmpDir) : null
   const form = new FormData()
-  form.append('file', await fileBlob(path, 'audio/ogg'), basename(path))
+  form.append('file', await fileBlob(padded ?? path, 'audio/flac'), basename(padded ?? path))
   // Repeated keys, not `instruments[]` — FastAPI collects a `List[str] = Form(...)` that way.
   // An empty list means auto-detect.
   for (const instrument of opts.instruments) form.append('instruments', instrument)
   form.append('detect_tempo', 'best-effort')
 
-  const res = await fetch(`${midiWorkerUrl()}/transcribe`, {
-    method: 'POST',
-    body: form,
-    headers: { 'X-Client-Id': opts.clientId, 'Accept': 'text/event-stream' },
-    signal: opts.signal,
-  })
-  return assertOk(res, 'transcribe this song')
+  try {
+    const res = await fetch(`${midiWorkerUrl()}/transcribe`, {
+      method: 'POST',
+      body: form,
+      headers: { 'X-Client-Id': opts.clientId, 'Accept': 'text/event-stream' },
+      signal: opts.signal,
+    })
+    await assertOk(res, 'transcribe this song')
+    return { response: res, padSeconds: padded ? TRANSCRIBE_PAD_S : 0 }
+  }
+  finally {
+    // The body is already buffered into the form, so the file on disk has done its job.
+    if (padded) await unlink(padded).catch(() => {})
+  }
+}
+
+/**
+ * Writes a copy of `path` with `TRANSCRIBE_PAD_S` of silence in front.
+ *
+ * FLAC, not another ogg: the pad needs a re-encode, and going lossless avoids a second generation
+ * of lossy loss on the only copy the model ever hears. The sample rate and channel count are left
+ * alone — the model resamples to 16 kHz mono itself, and doing that here would only introduce a
+ * different resampler than the one it expects.
+ */
+async function padAudio(path: string, tmpDir: string): Promise<string | null> {
+  const out = join(tmpDir, `padded-${Date.now()}.flac`)
+  try {
+    await runFfmpeg([
+      '-y', '-i', path,
+      '-af', `adelay=${Math.round(TRANSCRIBE_PAD_S * 1000)}:all=1`,
+      '-c:a', 'flac', out,
+    ])
+    return out
+  }
+  catch {
+    // Padding is a workaround, not a requirement: if ffmpeg can't do it, transcribe the original
+    // and accept that a note starting at t=0 may go missing.
+    return null
+  }
 }
 
 /** The MT3 instrument-group taxonomy. Static for the life of the container, so cached below. */

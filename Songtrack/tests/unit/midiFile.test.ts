@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Midi } from '@tonejs/midi'
-import { notesFromMidi, writeScoreMidi } from '../../server/utils/midiFile'
+import { notesFromMidi, shiftMidiNotes, writeScoreMidi } from '../../server/utils/midiFile'
 import { quantizeNotes } from '../../server/utils/quantize'
 import type { BeatGrid, TranscribedNote } from '../../shared/types'
 
@@ -96,6 +96,31 @@ describe('writeScoreMidi / notesFromMidi round trip', () => {
     const midi = new Midi(toArrayBuffer(writeScoreMidi(notes, GRID)))
     expect(midi.tracks.find(t => t.name === 'electric_bass')!.instrument.number).toBe(33)
     expect(midi.tracks.find(t => t.name === 'tenor_sax')!.instrument.number).toBe(66)
+  })
+
+  it('shifts notes back by the padding without disturbing the rest of the file', () => {
+    // The model drops a note that starts at t=0, so the audio is padded before it is sent; the
+    // times that come back are all late by exactly that pad.
+    const midi = writeScoreMidi(scale(), GRID)
+    const before = notesFromMidi(midi)
+    const after = notesFromMidi(shiftMidiNotes(midi, 0.2))
+    expect(after).toHaveLength(before.length)
+    after.forEach((n, i) => expect(n.start).toBeCloseTo(Math.max(0, before[i]!.start - 0.2), 3))
+    // Tempo survives the round trip.
+    expect(new Midi(toArrayBuffer(shiftMidiNotes(midi, 0.2))).header.tempos[0]!.bpm)
+      .toBeCloseTo(GRID.bpm, 2)
+  })
+
+  it('clamps rather than drops a note that would land before zero', () => {
+    const notes: TranscribedNote[] = [{ pitch: 60, start: 0.05, end: 0.4, instrument: 'acoustic_piano' }]
+    const shifted = notesFromMidi(shiftMidiNotes(writeScoreMidi(notes, GRID), 0.2))
+    expect(shifted).toHaveLength(1)
+    expect(shifted[0]!.start).toBeCloseTo(0, 3)
+  })
+
+  it('is a no-op for a zero shift, so the stub path is untouched', () => {
+    const midi = writeScoreMidi(scale(), GRID)
+    expect(shiftMidiNotes(midi, 0)).toBe(midi)
   })
 
   it('writes a valid file for an empty transcription rather than throwing', () => {

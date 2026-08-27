@@ -154,6 +154,25 @@ Two things that only real data exposed, both fixed:
   the browser.** The plan suggested `spessasynth_core` for that; serving the saved events is
   simpler, identical on a fresh run and a cache hit, and removes a client-side MIDI parser.
   `spessasynth_lib` is still used for playback, which takes the raw bytes.
+### The audio is padded before the model sees it
+
+The model reliably drops a note that starts at t=0. Measured on a clean 8-note scale beginning at
+zero: unpadded it returned **7 notes**, missing the first, every time. 0.1s of leading silence
+recovered it; 0.2s (`TRANSCRIBE_PAD_S`) is that with margin, and every padded run returned all 8
+with the onsets simply offset by the pad.
+
+`postAudio` writes a padded copy with ffmpeg — FLAC, so the only copy the model hears isn't a
+second generation of lossy encoding, and at the original rate and channel count, since the model
+does its own resample to 16 kHz mono and doing it here would just introduce a different resampler.
+It returns `padSeconds`, and the transcribe route removes the pad from **everything**: the streamed
+`start`/`end` frames are re-serialised rather than forwarded verbatim (otherwise the live roll draws
+everything 200 ms right until the finished roll replaces it), the stored MIDI is shifted with
+`shiftMidiNotes`, and the detected grid's `firstDownbeat` is moved back too. Nothing downstream ever
+sees the padding. The stub path pads nothing and shifts nothing (`padSeconds` is 0).
+
+Verified end to end: 7 notes → 8, pitches exactly the source scale, and the engraving went from
+`rest D4 E4 F4 | G4 A4 B4 C5` to a clean `C4 D4 E4 F4 G4 A4 B4 C5`.
+
 ### Grid alignment: two different things, and the objective that matters
 
 Measured against a real MuseScore, on a real transcription. Both of these are counter-intuitive
@@ -257,6 +276,24 @@ remaining artefact is ties, which are the correct rendering of a genuinely off-b
   first downbeat, rather than padding the front with silence.
 - `writeScoreMidi` floors note duration at **one tick**, not at some small number of seconds: a
   1e-4 s floor is below one tick at 480 ppq and still rounds to a zero-length note.
+
+### Impersonation: `replaceUserSession` cannot clear a key under h3 v2
+
+"Exit" did nothing: the endpoint returned 200 and a fresh cookie while the session kept
+`impersonatingUserId`. Two separate traps, and both obvious fixes are silent no-ops:
+
+- `replaceUserSession({ user })` dropped the key under h3 v1. This project pins h3 2.0.1-rc, where
+  `clearSession` deletes the session from the event context and the `updateSession` that follows
+  falls back to `getSession` — which re-unseals the **incoming request cookie** and restores
+  everything it held, with the merged `{ user }` on top.
+- `setUserSession({ impersonatingUserId: null })` does nothing either: nuxt-auth-utils merges with
+  defu, and defu skips null *and* undefined rather than writing them.
+
+So there is no way to remove a session key here. `stop.post.ts` writes an empty string, which
+survives defu and is falsy, which is what `requireActor` tests for. Don't "tidy" it to null.
+
+This survived because starting impersonation was tested and stopping it was not — `tests/api/api.test.ts`
+now covers both, following the Set-Cookie the way a browser does.
 
 ### e2e state as of this session
 
