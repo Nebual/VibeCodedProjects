@@ -31,3 +31,13 @@ export function rendersDir(): string {
   mkdirSync(dir, { recursive: true })
   return dir
 }
+
+/**
+ * Everything produced by one transcription run, keyed by its spec hash: `transcription.mid`,
+ * `events.json`, `preview.ogg`, and one `sheets-<gridHash>.zip` per engraved beat grid.
+ */
+export function transcriptionDir(userId: string, songId: string, specHash: string): string {
+  const dir = join(songDir(userId, songId), 'midi', specHash)
+  mkdirSync(dir, { recursive: true })
+  return dir
+}

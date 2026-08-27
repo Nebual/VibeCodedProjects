@@ -21,6 +21,51 @@ pnpm import -- /path/to/folder --user you@example.com
 
 Idempotent (hashes file content), and preserves each file's mtime as its `created_at`.
 
+## Audio → MIDI transcription
+
+Songs can be transcribed to MIDI and engraved as sheet music. The model runs in a
+separate `midi` sidecar container (upstream [MuScriptor](https://github.com/muscriptor/muscriptor)
+plus MuseScore Studio for engraving); Nuxt owns auth, ownership, storage and caching
+and proxies the sidecar's Server-Sent Events stream straight to the browser.
+
+Three one-time setup steps on the server, none of which run from a deploy:
+
+```bash
+export HF_TOKEN=hf_...            # after accepting the licence, see the script header
+./bin/fetch-midi-model.sh medium  # populates ./cache/midi-cache (~1.2 GB, gitignored)
+./bin/build-midi-sidecar.sh   # pinned commit; see the script header
+docker compose up -d
+```
+
+The sidecar is deliberately never published to a host port — it has no authentication
+of its own, and the only thing allowed to reach it is the Songtrack container. Verify
+after a deploy that `curl --max-time 3 http://127.0.0.1:8000/health` from the host
+*fails to connect*.
+
+For local development without the sidecar, set `MIDI_FAKE_WORKER=true` to replay a
+canned event stream from `tests/e2e/fixtures/transcribe-stream.jsonl` — this is what
+the Playwright suite runs against.
+
+### What this sidecar build can and cannot do
+
+Verified against a live `muscriptor` sidecar, which is worth knowing because the version you build
+changes what works. On the pinned commit the routes are `/health`, `/instruments`,
+`/soundfonts/MuseScore_General.sf3`, `/transcribe`, `/transcribe/midi`, `/auralize` and `/sheets`;
+on the v0.3.0 tag the last of those does not exist.
+
+- **Transcription, the piano roll, the tempo editor and both MIDI downloads work.**
+- **Sheet-music engraving needs the pinned commit, not a release.** `/sheets` landed upstream after
+  v0.3.0 and no tag carries it, so `bin/build-midi-sidecar.sh` pins commit `e34b397`. Built from
+  the v0.3.0 tag instead, the Engrave button reports a 501 saying so and points at the Score MIDI.
+- **`/auralize` and the in-browser synth need `MuScriptor/assets` in the cache**, which
+  `bin/fetch-midi-model.sh` now fetches alongside the weights. If you populated the cache before
+  that, just re-run the script — the model download is already cached, so it only adds the
+  soundfonts.
+
+> **Licence note:** MuScriptor's *inference code* is MIT, but its **model weights are
+> CC BY-NC 4.0**. Personal and family use is fine. Songtrack cannot be commercialised
+> while this feature is enabled without a separate licence from Kyutai/Mirelo.
+
 ## Testing
 
 ```bash

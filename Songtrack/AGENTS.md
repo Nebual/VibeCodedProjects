@@ -27,6 +27,127 @@ green as of the end of this session. `INITIAL_PLAN.md` is the plan as originally
 been edited to reflect build decisions made along the way — where this file disagrees with it
 (notably impersonation and the auto-trim algorithm below), trust this file and the code.
 
+## Audio → MIDI (plans/AUDIO_TO_MIDI_PLAN_V2.md)
+
+Stages 1–6 of the V2 plan are built and **verified against a live muscriptor 0.3.0 sidecar**
+(model `medium`), not just against the stub.
+
+### The image is pinned to a commit, not a release — and why
+
+`/sheets` (Stage 6.4's engraving) landed on main **after v0.3.0**, and no tag carries it: on
+v0.3.0 the routes are only `/health`, `/instruments`, `/soundfonts/MuseScore_General.sf3`,
+`/transcribe`, `/transcribe/midi` and `/auralize`. So `bin/build-midi-sidecar.sh` and
+`docker-compose.yml` pin **`e34b397` ("Quantize before exporting sheet music", 2026-08-20)**, not a
+branch — a moving `main` would silently change the SSE payload shape this app treats as a contract.
+
+The v0.3.0→e34b397 diff to `server.py` was read before pinning and is purely additive: `/sheets`
+itself, plus a `quantized_midi` field on `transcription_complete` that we don't rely on. **Every
+event shape verified below against v0.3.0 still holds.** Do the same reading before moving the pin.
+
+- **A missing `/sheets` answers 405, not 404**, because unknown paths fall through to the bundled
+  SPA, which serves GET only. `postSheets` treats both as "this build can't engrave" and raises a
+  501 pointing at the Score MIDI, so an old image degrades readably instead of looking like a
+  network fault.
+- **`x-client-id` is a header** (`Annotated[str | None, Header()]` on both v0.3.0 and main), as the
+  plan says. A query parameter of that name is silently ignored — and note that FastAPI's
+  `/openapi.json` lists header params under `parameters` too, so read each entry's `in` field
+  rather than assuming they're query params.
+- **`beat_grid.beats_per_bar` is `null` even when a tempo is detected** — observed
+  `{bpm: 120.000…, beats_per_bar: null, first_downbeat: 0.0, onset_delay: 0.0}`. `beatGridFromWire`
+  defaults it to 4. Left as null it reaches the score writer as a `[null, 4]` time signature and
+  the piano roll as a NaN bar width.
+- **`quantized_midi` may be absent, null, or a string.** v0.3.0 omits the key entirely; the pinned
+  main commit sends it, but null whenever the detected grid has no `beat_subdivision`. The type is
+  optional-and-nullable for that reason. Nothing depends on it — we re-quantize from `events.json`,
+  which is also what lets the user re-bar at a corrected tempo without re-running the model.
+- **`progress` counts audio chunks, not notes.** A 4-second file yields exactly
+  `{completed:0,total:1}` then `{completed:1,total:1}`; longer files yield many.
+- **`HF_HOME=/hf-cache` hides the soundfonts.** The image prewarms them into its *own* default HF
+  cache, so pointing HF_HOME at a volume holding only the weights makes `/auralize` and
+  `/soundfonts/…` fail — the former with a JSON "cannot find the requested files in the local
+  cache", the latter with a bare `Internal Server Error` and no diagnostic body at all.
+  `bin/fetch-midi-model.sh` now also fetches `MuScriptor/assets` (public, ungated, MIT) into the
+  same cache, which fixes both. `assertSoundfontsPresent` in `midiWorker.ts` turns either failure
+  into a 503 that names the cause.
+
+### What the live run actually produced
+
+Verified end to end against the pinned build, model `medium`, on a synthetic 4-second C-major
+scale (MIDI 60,62,64,65,67,69,71,72 as quarter notes at 120 bpm):
+
+- **Transcription**: 7 notes, pitches 62–72 at 0.46/0.95/1.46/1.95/2.46/2.97/3.46 s — every pitch
+  correct, only the first note of the scale missed, on pure sine tones the model never saw in
+  training. Quantizing snapped those onsets to exactly 0.50/1.00/1.50/2.00/2.50/3.00/3.50.
+- **Engraving**: `sheets.zip` (ZIP_STORED) with `score.mid`, `score.musicxml`, `full_score.pdf` and
+  `01_acoustic_piano.pdf`. The MusicXML reads `4/4 | quarter rest, D4 E4 F4 | G4 A4 B4 C5`, all
+  quarter notes — no tied 128ths, no spurious triplets. That is Stage 6 doing its job.
+- **The wrong-tempo failure mode, on demand**: re-engraving the same events at 60 bpm turns every
+  quarter note into an eighth and collapses the piece into a single bar, exactly as the plan
+  predicts for a half-time estimate. The tempo editor's ×2 button is what fixes it.
+- **Caching**: a repeat transcription returns 2 frames; a repeat engrave is served from
+  `sheets-<gridHash>.zip` in ~20 ms, and two different grids produce two different zips.
+- **Preview + synth**: `/auralize` gives a stereo check mix and a mono synth-only render (cached in
+  `previewPath`); the 39.9 MB soundfont proxies with a working 304 revalidation and the in-browser
+  `spessasynth_lib` synth boots against it.
+
+Two things that only real data exposed, both fixed:
+
+- **The detector reports 120.00000000000003 for a clean 120 bpm.** `beatGridFromWire` rounds to 3
+  decimals — otherwise the BPM field reads "120.000000…", the score MIDI carries a 120.00024 tempo
+  event, and two identical-looking grids hash differently.
+- **Onset error cannot be scored against the subdivision step.** Real onsets sit tens of ms off
+  however right the tempo is (41 ms here, while engraving flawlessly), so a step-relative score
+  damns a good grid as soon as you pick a finer subdivision. It's scored against the *beat* now,
+  and labelled descriptively — it genuinely cannot distinguish a half-time grid from a correct one,
+  because halving the bpm yields a subset of the same grid points. The barline overlay and the
+  notation are what catch that.
+
+- **`@tonejs/midi` is CommonJS under *both* its `main` and its (mislabelled) `module` entry**, so
+  Nitro's dev ESM loader rejects `import { Midi }` from it. It's listed in
+  `nitro.externals.inline` in `nuxt.config.ts` so rollup bundles it and resolves the interop. Don't
+  remove that line; the failure is a 500 on *every* API route, not just the MIDI ones, because the
+  import graph is shared.
+- **`events.json` is derived from the final MIDI, not from the streamed `start`/`end` frames.** The
+  streamed times run ~25 ms late and the MIDI already has that removed, so parsing the file keeps
+  the lag correction in exactly one place (upstream's). `notesFromEvents` in `transcriptions.ts` is
+  the fallback for an unparseable file, and subtracts `onset_delay` itself.
+- **The page reads its finished note list from `GET /transcription/events`, not by decoding MIDI in
+  the browser.** The plan suggested `spessasynth_core` for that; serving the saved events is
+  simpler, identical on a fresh run and a cache hit, and removes a client-side MIDI parser.
+  `spessasynth_lib` is still used for playback, which takes the raw bytes.
+- **The progress bar lives outside the setup block on purpose.** Inside it, it unmounted the instant
+  the run completed, so it was never seen to reach 100% (an e2e assertion caught this).
+- **A re-render of `master.ogg` invalidates the transcription cache**, because the spec hash
+  includes the master's mtime. That's intended — but it means any editor spec that re-renders the
+  fixture song mid-suite makes a following "should be cached" assertion do a live run. The midi
+  spec asserts on *frame count* (2 for a cache hit vs 26 for the stub's replay) rather than
+  wall-clock time for exactly this reason.
+- **Sheet music is not a column.** It depends on a grid the user can change, so it's
+  content-addressed on disk as `midi/<specHash>/sheets-<gridHash>.zip` and its existence is the
+  cache check. `gridHash` rounds before hashing so a dragged BPM slider can't spawn thousands of
+  near-identical zips.
+- Score MIDI carries **both** a tempo and a time-signature meta event — without the latter
+  MuseScore assumes 4/4 whatever the notes imply — and expresses a mid-bar start as a short opening
+  bar (in 16ths, so the denominator stays a power of two) followed by a signature change at the
+  first downbeat, rather than padding the front with silence.
+- `writeScoreMidi` floors note duration at **one tick**, not at some small number of seconds: a
+  1e-4 s floor is below one tick at 480 ppq and still rounds to a zero-length note.
+
+### e2e state as of this session
+
+`tests/e2e/midi.spec.ts` (4 tests) passes both in isolation and in a full-suite run. Two
+pre-existing problems with the suite surfaced while verifying it, neither introduced here:
+
+1. **The suite cannot bootstrap a fresh database.** `_test-login` 404s unless the user already
+   exists and nothing else inserts one (only real Google OAuth does), so `.data-e2e` has to be
+   hand-bootstrapped. Deleting it makes `globalSetup` fail outright.
+2. **The suite is order- and state-dependent across runs.** The editor specs crop and re-render the
+   `test-tone` fixture, and because `.data-e2e` persists, a second run finds a 3-second fixture
+   where the first found a 10-second one — which fails `player-shortcuts` ("arrows skip 10s") and
+   several editor specs. Resetting is: delete every row in `songs` (plus `song_tags`, `takes`,
+   `renders`, `transcriptions`, `album_songs`) keeping `users`, then re-run `scripts/import.ts`
+   against `tests/e2e/fixtures`.
+
 ### Phase 5 notes
 
 - **PWA**: `@vite-pwa/nuxt` needs two non-obvious pieces beyond the module install + `pwa` config

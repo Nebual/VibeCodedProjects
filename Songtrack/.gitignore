@@ -31,3 +31,7 @@ logs
 
 samples/
 data/
+plans/
+
+# Pre-downloaded MuScriptor model weights (gigabytes; see bin/fetch-midi-model.sh)
+cache/

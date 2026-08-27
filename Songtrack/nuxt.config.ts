@@ -24,6 +24,12 @@ export default defineNuxtConfig({
     experimental: {
       websocket: false,
     },
+    externals: {
+      // @tonejs/midi ships CommonJS under *both* its `main` and its (mislabelled) `module`
+      // entry, so Nitro's dev ESM loader can't take `import { Midi }` from it. Bundling it
+      // instead lets rollup's interop resolve the named export, in dev and in the build alike.
+      inline: ['@tonejs/midi'],
+    },
   },
 
   runtimeConfig: {

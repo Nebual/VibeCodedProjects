@@ -82,3 +82,115 @@ export type UserStatus = 'pending' | 'approved' | 'rejected'
 
 export const PENDING_SONG_LIMIT = 10
 export const PENDING_SONG_WARNING_THRESHOLD = 8
+
+// ---------------------------------------------------------------------------
+// Audio → MIDI transcription
+// ---------------------------------------------------------------------------
+
+/**
+ * The metrical grid a transcription is barred against. MuScriptor detects one via
+ * `beat-this`; the user can correct it in the tempo editor without re-running the model.
+ *
+ * The wire format from the sidecar is snake_case and carries no `subdivision` — the proxy
+ * converts once, at the point the row is written, and everything downstream of
+ * `server/utils/midiWorker.ts` speaks camelCase only.
+ */
+export interface BeatGrid {
+  bpm: number
+  beatsPerBar: number
+  /** Seconds into the piece at which bar 1 beat 1 lands. May be > 0 (pickup bar). */
+  firstDownbeat: number
+  /** Seconds of streaming lag already removed from the final MIDI. Informational. */
+  onsetDelay: number
+  /** Finest notated division of a beat the grid admits: 2 = 8ths, 4 = 16ths, 3 = 8th triplets. */
+  subdivision: number
+}
+
+export const DEFAULT_SUBDIVISION = 4
+export const BEATS_PER_BAR_CHOICES = [2, 3, 4, 6] as const
+
+/** One transcribed note. Velocity is not recovered by the tokenizer — don't rely on it. */
+export interface TranscribedNote {
+  pitch: number
+  start: number
+  end: number
+  instrument: string
+}
+
+// --- The sidecar's SSE frames. One JSON object per `data:` line. ---
+
+export interface ProgressEvent {
+  type: 'progress'
+  completed: number
+  total: number
+}
+
+export interface NoteStartEvent {
+  type: 'start'
+  pitch: number
+  start_time: number
+  index: number
+  instrument: string
+}
+
+export interface NoteEndEvent {
+  type: 'end'
+  end_time: number
+  start_event_index: number
+}
+
+/**
+ * Raw wire shape of the beat grid — snake_case, no subdivision.
+ *
+ * Verified against a live muscriptor sidecar: `beats_per_bar` comes back **null** even when a
+ * tempo *is* detected (observed `{bpm: 120.000…, beats_per_bar: null, first_downbeat: 0.0}`), so
+ * it must be defaulted rather than trusted. `beatGridFromWire` is the single place that happens.
+ */
+export interface WireBeatGrid {
+  bpm: number | null
+  beats_per_bar: number | null
+  first_downbeat: number | null
+  onset_delay: number | null
+}
+
+export interface TranscriptionCompleteEvent {
+  type: 'transcription_complete'
+  /** base64 .mid — the de-lagged performance MIDI. This is the file to save. */
+  data: string
+  /**
+   * base64 .mid snapped to the detected grid. Optional: a live 0.3.0 sidecar omits the key
+   * entirely rather than sending null, so never index it without a guard. Songtrack re-quantizes
+   * from `events.json` anyway, so nothing depends on it.
+   */
+  quantized_midi?: string | null
+  beat_grid?: WireBeatGrid | null
+}
+
+export interface TranscriptionErrorEvent {
+  type: 'error'
+  message: string
+}
+
+export type TranscriptionEvent =
+  | ProgressEvent
+  | NoteStartEvent
+  | NoteEndEvent
+  | TranscriptionCompleteEvent
+  | TranscriptionErrorEvent
+
+/** Shape of `events.json` on disk: enough to re-quantize without re-running the model. */
+export interface TranscriptionEvents {
+  version: 1
+  notes: TranscribedNote[]
+}
+
+/** What `GET /api/songs/:id/transcription` returns for an already-transcribed song. */
+export interface TranscriptionSummary {
+  id: string
+  specHash: string
+  model: string
+  instruments: string[]
+  beatGrid: BeatGrid | null
+  hasPreview: boolean
+  createdAt: number
+}

@@ -22,6 +22,13 @@
       "when": 1787604065884,
       "tag": "0002_nice_warpath",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1787790901566,
+      "tag": "0003_familiar_madrox",
+      "breakpoints": true
     }
   ]
 }

@@ -21,11 +21,15 @@
   },
   "dependencies": {
     "@heroicons/vue": "^2.2.0",
+    "@tonejs/midi": "^2.0.28",
     "better-sqlite3": "^11.10.0",
     "drizzle-orm": "^0.44.5",
+    "fflate": "^0.8.3",
     "nanoid": "^5.1.5",
     "nuxt": "^4.5.2",
     "nuxt-auth-utils": "^0.5.20",
+    "spessasynth_core": "^4.3.22",
+    "spessasynth_lib": "^4.3.14",
     "vue": "^3.5.41",
     "vue-router": "^5.2.0",
     "wavesurfer.js": "^7.11.0"

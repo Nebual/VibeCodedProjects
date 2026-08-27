@@ -5,7 +5,43 @@ services:
     env_file: .env
     environment:
       DATA_DIR: /app/data
+      MIDI_WORKER_URL: http://midi:8000
     volumes:
       - ./data:/app/data
     ports:
-      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:3009:3000"
+    depends_on:
+      - midi
+
+  # Audio → MIDI transcription sidecar (upstream MuScriptor, unmodified).
+  midi:
+    image: songtrack-midi:main-e34b397
+    # Pinned to a commit, not a release: /sheets (engraving) landed after v0.3.0 and no tag
+    # carries it. See the header of bin/build-midi-sidecar.sh.
+    # No `build:` — see bin/build-midi-sidecar.sh. gman-deploy.sh runs `up --build`
+    # on every deploy and this image takes minutes to build.
+    # No `ports:` — this service has no auth of its own and must only ever be
+    # reachable from the songtrack container over the internal Docker network.
+    pull_policy: never
+    restart: unless-stopped
+    command: ["--model", "medium", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      # NB: this deliberately points away from the HF cache the image prewarms, which is where
+      # its soundfonts live — so bin/fetch-midi-model.sh must fetch MuScriptor/assets into this
+      # volume as well as the model. Without them /auralize and /soundfonts/... fail with a
+      # bare 500 ("cannot find the requested files in the local cache").
+      HF_HOME: /hf-cache
+      # Fail loudly at boot on an incomplete cache rather than silently pulling
+      # 1.2 GB onto the production disk. Populate it with bin/fetch-midi-model.sh.
+      HF_HUB_OFFLINE: "1"
+      # torch will otherwise grab every core and starve the ffmpeg renders that
+      # are this app's actual day job. The cpus limit below is the real bound;
+      # this stops torch from thrashing threads it can't run.
+      OMP_NUM_THREADS: "4"
+    volumes:
+      - ./cache/midi-cache:/hf-cache:ro
+    deploy:
+      resources:
+        limits:
+          cpus: "4.0"
+          memory: 8g

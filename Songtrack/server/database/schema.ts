@@ -1,5 +1,5 @@
 import { sqliteTable, text, integer, real, uniqueIndex, index } from 'drizzle-orm/sqlite-core'
-import type { EditList, EditSettings, NoiseRegion } from '../../shared/types'
+import type { BeatGrid, EditList, EditSettings, NoiseRegion } from '../../shared/types'
 
 export const users = sqliteTable('users', {
   id: text('id').primaryKey(),
@@ -115,4 +115,32 @@ export const albumSongs = sqliteTable('album_songs', {
   position: integer('position').notNull(),
 }, t => [
   uniqueIndex('album_songs_pk').on(t.albumId, t.songId),
+])
+
+/**
+ * One run of the transcription model over one song's master. Cached by spec hash, exactly like
+ * `renders` — the request *is* the job, so there is no queue and no job status column.
+ *
+ * Note what is NOT a column: the engraved sheet music. It depends on a beat grid the user can
+ * change, so one column could only ever hold one version of it. Grid-dependent artifacts are
+ * content-addressed on disk as `midi/<specHash>/sheets-<gridHash>.zip` instead, and their
+ * existence on disk is the cache check.
+ */
+export const transcriptions = sqliteTable('transcriptions', {
+  id: text('id').primaryKey(),
+  songId: text('song_id').notNull().references(() => songs.id),
+  /** sha256 of master path + mtime + model + sorted instrument list — see transcriptionSpecHash. */
+  specHash: text('spec_hash').notNull(),
+  model: text('model').notNull(),
+  instruments: text('instruments', { mode: 'json' }).$type<string[]>().notNull(),
+  /** De-lagged performance MIDI: what you listen to, and what /auralize is given. */
+  midiPath: text('midi_path').notNull(),
+  /** Raw note events, so a re-quantization at a different tempo never re-runs the model. */
+  eventsPath: text('events_path').notNull(),
+  previewPath: text('preview_path'),
+  /** The grid MuScriptor detected. Null when no tempo was found; the tempo editor can override it. */
+  beatGrid: text('beat_grid', { mode: 'json' }).$type<BeatGrid | null>(),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+}, t => [
+  uniqueIndex('transcriptions_song_spec_idx').on(t.songId, t.specHash),
 ])

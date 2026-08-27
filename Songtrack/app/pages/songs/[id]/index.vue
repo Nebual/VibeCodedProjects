@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { PauseIcon, PlayIcon, PencilIcon } from '@heroicons/vue/24/solid'
+import { PauseIcon, PlayIcon, PencilIcon, MusicalNoteIcon } from '@heroicons/vue/24/solid'
 
 interface SongDetail {
   id: string
@@ -113,6 +113,10 @@ async function deleteSong() {
         <h1 class="text-xl font-semibold">{{ song.title }}</h1>
         <p v-if="song.durationS" class="text-sm text-base-content/60">{{ formatDuration(song.durationS) }}</p>
       </div>
+      <NuxtLink :to="`/songs/${songId}/midi`" class="btn btn-sm btn-outline">
+        <MusicalNoteIcon class="w-3.5 h-3.5 mr-0.5" />
+        Transcribe
+      </NuxtLink>
       <NuxtLink :to="`/songs/${songId}/edit`" class="btn btn-sm btn-primary">
         <PencilIcon class="w-3.5 h-3.5 mr-0.5" />
         Edit

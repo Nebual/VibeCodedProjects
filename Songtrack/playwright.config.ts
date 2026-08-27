@@ -21,6 +21,10 @@ export default defineConfig({
       PORT: String(PORT),
       NITRO_PORT: String(PORT),
       ALLOW_TEST_LOGIN: 'true',
+      // Playwright can't run a 6 GB torch container, so the transcription sidecar is replaced by
+      // a canned replay of tests/e2e/fixtures/transcribe-stream.jsonl. Like ALLOW_TEST_LOGIN,
+      // this is set for this server and nowhere else.
+      MIDI_FAKE_WORKER: 'true',
       // Isolated from the real dev database so e2e runs never touch real data.
       DATA_DIR: '.data-e2e',
     },
