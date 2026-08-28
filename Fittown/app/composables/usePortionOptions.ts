@@ -4,10 +4,12 @@ import {
   defaultAmount,
   defaultUnitKey,
   portionAmount,
+  portionDefaultUnitKey,
   portionUnits,
   roundGrams,
   VOLUME_UNITS,
   type MeasurementSystem,
+  type PortionDefault,
 } from '#shared/portions'
 import { showsGramPortions } from '#shared/recipes'
 import type { FoodRow } from '~/composables/useDiary'
@@ -68,6 +70,7 @@ export function usePortionOptions(
   servings: Ref<FoodServing[]>,
   system: Ref<MeasurementSystem>,
   initial?: Ref<PortionSelection | null | undefined>,
+  portionDefault?: Ref<PortionDefault>,
 ) {
   const isLiquid = computed(() => !!food.value?.is_liquid)
   const unit = computed(() => baseUnit(isLiquid.value))
@@ -157,6 +160,23 @@ export function usePortionOptions(
         amount.value = roundGrams(previous.grams)
         return
       }
+    }
+
+    // Nothing logged before, so it's the user's preference that decides —
+    // "always start me on grams" is a real way to eat, and being handed
+    // "1 serving" of somebody else's idea of a serving every time isn't.
+    // Only where a weight is honest: a recipe nobody weighed has no grams to
+    // offer (see `showsGrams`), and there the food's serving is all there is.
+    const preferredPortion = portionDefault?.value
+      ? portionDefaultUnitKey(portionDefault.value, isLiquid.value)
+      : null
+    const byWeight = preferredPortion
+      ? options.value.find((o) => o.key === `u:${preferredPortion}`)
+      : undefined
+    if (byWeight) {
+      selectedKey.value = byWeight.key
+      amount.value = defaultAmount(byWeight)
+      return
     }
 
     // Otherwise the food's stated serving, else the user's preferred unit.

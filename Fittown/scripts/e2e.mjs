@@ -51,6 +51,33 @@ async function step(name, fn) {
   }
 }
 
+/**
+ * The portion picker is a button list, not a native `<select>` — see the note
+ * in `PortionPicker.vue` for why (Firefox on Android never raises the keypad
+ * after a native picker). These three helpers are what a step uses instead.
+ */
+const portionField = (page) => page.locator('label:has-text("Portion")')
+
+/** The label currently on the picker's trigger, e.g. "oz (28 g)". */
+const portionSelected = (page) =>
+  portionField(page).locator('button[aria-expanded]').innerText()
+
+async function portionOptions(page) {
+  const field = portionField(page)
+  await field.locator('button[aria-expanded]').click()
+  const labels = await field.locator('button:not([aria-expanded])').allInnerTexts()
+  await field.locator('button[aria-expanded]').click() // close again
+  return labels
+}
+
+/** Pick a portion by its label, e.g. `/^oz\b/`. */
+async function pickPortion(page, name) {
+  const field = portionField(page)
+  await field.locator('button[aria-expanded]').click()
+  await field.getByRole('button', { name }).first().click()
+  await page.waitForTimeout(200)
+}
+
 await step('sign in (dev login)', async () => {
   await page.goto(`${BASE}/login`, { waitUntil: 'networkidle' })
   await page.getByRole('button', { name: /Sign in as Dev User/i }).click()
@@ -206,7 +233,7 @@ await step('portion units convert to grams', async () => {
 
   // Pick ounces and check the app says what that works out to. 4 oz is
   // 113.4 g; anything else means the conversion table or the maths moved.
-  await page.locator('label:has-text("Portion") select').selectOption('u:oz')
+  await pickPortion(page, /^oz\b/)
   await page.waitForTimeout(400)
   await page.locator('label:has-text("Amount") input').fill('4')
   await page.waitForTimeout(400)
@@ -216,6 +243,58 @@ await step('portion units convert to grams', async () => {
     throw new Error(`no oz→g conversion shown. Page said: ${text.slice(0, 200)}`)
   }
   if (!/Logging 113 g/.test(text)) throw new Error('resolved grams not shown')
+})
+
+await step('the portion type default decides what a picker opens on', async () => {
+  const openChickenBreast = async () => {
+    await page.goto(`${BASE}/add?meal=lunch`, { waitUntil: 'networkidle' })
+    await page.getByPlaceholder('Search foods').fill('chicken breast')
+    await page.waitForTimeout(1200)
+    await page.locator('a[href^="/food/"]').first().click()
+    await page.waitForLoadState('networkidle')
+    await page.waitForTimeout(600)
+  }
+
+  const setPortionDefault = async (label) => {
+    await page.goto(`${BASE}/settings`, { waitUntil: 'networkidle' })
+    await page.waitForTimeout(600)
+    await page.getByRole('tab', { name: label }).click()
+    await page.getByRole('button', { name: /Save settings/i }).click()
+    await page.waitForTimeout(1200)
+  }
+
+  // Out of the box a food opens on its own serving.
+  await openChickenBreast()
+  const asShipped = await portionSelected(page)
+  if (!/serving|piece|cup/i.test(asShipped)) {
+    throw new Error(`expected the food's own serving by default, got: ${asShipped}`)
+  }
+
+  await setPortionDefault('100 g / 100 ml')
+  await openChickenBreast()
+  if (!/^100 g/.test(await portionSelected(page))) {
+    throw new Error(`preference ignored, picker opened on: ${await portionSelected(page)}`)
+  }
+  if (!/Logging 100 g/.test(await page.locator('main').innerText())) {
+    throw new Error('100 g preference did not resolve to 100 g')
+  }
+
+  await setPortionDefault('g / ml')
+  await openChickenBreast()
+  if ((await portionSelected(page)).trim() !== 'g') {
+    throw new Error(`expected grams, picker opened on: ${await portionSelected(page)}`)
+  }
+  // 100 g, not 1 g: a starting amount in the region of a real portion.
+  if (!/Logging 100 g/.test(await page.locator('main').innerText())) {
+    throw new Error('gram preference did not start at a usable amount')
+  }
+
+  // Back to servings, so the steps that follow see the shipped behaviour.
+  await setPortionDefault('Per serving')
+  await openChickenBreast()
+  if (!/serving|piece|cup/i.test(await portionSelected(page))) {
+    throw new Error('the preference did not go back to servings')
+  }
 })
 
 await step('body metrics and calculated calorie target', async () => {
@@ -244,7 +323,9 @@ await step('body metrics and calculated calorie target', async () => {
   await page.getByRole('button', { name: /Calculate calorie/i }).click()
   await page.waitForTimeout(600)
 
-  const dialog = page.locator('dialog.modal')
+  // `[open]` because Settings renders more than one <dialog> (the BMI
+  // explainer is on the same page); only the one showModal() opened matches.
+  const dialog = page.locator('dialog.modal[open]')
   if (!(await dialog.isVisible())) throw new Error('calculator did not open')
   const maintenance = await dialog.innerText()
   if (!/Maintain weight/.test(maintenance)) throw new Error('no maintenance figure shown')
@@ -326,7 +407,9 @@ await step('macro split edits grams', async () => {
   await page.goto(`${BASE}/settings`, { waitUntil: 'networkidle' })
   await page.waitForTimeout(800)
 
-  await page.getByRole('button', { name: /Reset to 20 \/ 50 \/ 30/ }).click()
+  // The order of the split follows MACROS in settings.vue (fat / carbs /
+  // protein today), so match the shape rather than one arrangement of it.
+  await page.getByRole('button', { name: /Reset to \d+ \/ \d+ \/ \d+/ }).click()
   await page.waitForTimeout(400)
 
   const percent = await page.getByLabel('Protein percentage').inputValue()
@@ -359,7 +442,9 @@ await step('goal weight picks the direction', async () => {
   await page.getByRole('button', { name: /Calculate calorie/i }).click()
   await page.waitForTimeout(600)
 
-  const dialog = page.locator('dialog.modal')
+  // `[open]` because Settings renders more than one <dialog> (the BMI
+  // explainer is on the same page); only the one showModal() opened matches.
+  const dialog = page.locator('dialog.modal[open]')
   await dialog.getByRole('tab', { name: 'Maintain' }).click()
   await page.waitForTimeout(300)
 
@@ -474,7 +559,7 @@ await step('add two ingredients through the food search', async () => {
     await page.waitForTimeout(600)
 
     // Grams, so the expected totals below are arithmetic rather than guesswork.
-    await page.locator('label:has-text("Portion") select').selectOption({ label: 'g' })
+    await pickPortion(page, /^g$/)
     await page.locator('label:has-text("Amount") input').fill(grams)
     await page.getByRole('button', { name: /Add to recipe/i }).click()
     await page.waitForURL(/\/recipes\/\d+/, { timeout: 15000 })
@@ -516,7 +601,7 @@ await step('an unweighed recipe offers servings, not grams', async () => {
   })
   await page.waitForTimeout(700)
 
-  const options = await page.locator('label:has-text("Portion") select option').allInnerTexts()
+  const options = await portionOptions(page)
   if (options.some((o) => /\bg\b|\boz\b|\bkg\b/.test(o))) {
     throw new Error(`gram portions offered for a recipe with no stated yield: ${options}`)
   }
@@ -524,11 +609,8 @@ await step('an unweighed recipe offers servings, not grams', async () => {
     throw new Error(`expected serving and whole recipe, got: ${options}`)
   }
   // And the default is one serving, not the whole pot.
-  const selected = await page.locator('label:has-text("Portion") select').inputValue()
-  const first = await page.locator('label:has-text("Portion") select option').first().getAttribute('value')
-  if (selected !== first) throw new Error('the picker did not default to the first option')
-  if (!/serving/i.test(await page.locator('label:has-text("Portion") select option:checked').innerText())) {
-    throw new Error('the picker should default to 1 serving')
+  if (!/serving/i.test(await portionSelected(page))) {
+    throw new Error(`the picker should default to 1 serving, got: ${await portionSelected(page)}`)
   }
 })
 
@@ -571,7 +653,7 @@ await step('stating a final weight unlocks gram portions', async () => {
     waitUntil: 'networkidle',
   })
   await page.waitForTimeout(700)
-  const options = await page.locator('label:has-text("Portion") select option').allInnerTexts()
+  const options = await portionOptions(page)
   if (!options.some((o) => /^g$/.test(o.trim()))) {
     throw new Error(`grams should be offered once the dish is weighed: ${options}`)
   }
@@ -663,7 +745,7 @@ await step('a recipe that has been eaten can be deleted, and the meal survives',
   await page.locator('a[href^="/food/"]').first().click()
   await page.waitForLoadState('networkidle')
   await page.waitForTimeout(600)
-  await page.locator('label:has-text("Portion") select').selectOption({ label: 'g' })
+  await pickPortion(page, /^g$/)
   await page.locator('label:has-text("Amount") input').fill('150')
   await page.getByRole('button', { name: /Add to recipe/i }).click()
   await page.waitForURL(/\/recipes\/\d+/, { timeout: 15000 })
@@ -730,7 +812,7 @@ async function addIngredientGrams(recipeUrlToUse, query, grams) {
   await page.locator('a[href^="/food/"]').first().click()
   await page.waitForLoadState('networkidle')
   await page.waitForTimeout(600)
-  await page.locator('label:has-text("Portion") select').selectOption({ label: 'g' })
+  await pickPortion(page, /^g$/)
   await page.locator('label:has-text("Amount") input').fill(String(grams))
   await page.getByRole('button', { name: /Add to recipe/i }).click()
   await page.waitForURL(/\/recipes\/\d+/, { timeout: 15000 })
@@ -764,7 +846,7 @@ await step('a recipe made in bulk becomes an ingredient of another', async () =>
 
   // Measured in its own servings: nobody weighed the finished dressing, so
   // grams are not on offer for it here any more than they are in the diary.
-  const options = await page.locator('label:has-text("Portion") select option').allInnerTexts()
+  const options = await portionOptions(page)
   if (options.some((o) => /^g$/.test(o.trim()))) {
     throw new Error(`grams offered for an unweighed recipe: ${options}`)
   }
@@ -842,7 +924,7 @@ await step('an optional ingredient is in the recipe but not in the total', async
   await page.waitForLoadState('networkidle')
   await page.waitForTimeout(600)
   await page.locator('label:has-text("Optional") input[type="checkbox"]').check()
-  await page.locator('label:has-text("Portion") select').selectOption({ label: 'g' })
+  await pickPortion(page, /^g$/)
   await page.locator('label:has-text("Amount") input').fill('50')
   await page.getByRole('button', { name: /Add to recipe/i }).click()
   await page.waitForURL(/\/recipes\/\d+/, { timeout: 15000 })
@@ -1202,7 +1284,7 @@ await step('an unresolved line can be given a food, and the totals follow', asyn
   await page.waitForLoadState('networkidle')
   await page.waitForTimeout(600)
 
-  await page.locator('label:has-text("Portion") select').selectOption({ label: 'g' })
+  await pickPortion(page, /^g$/)
   await page.locator('label:has-text("Amount") input').fill('200')
   await page.getByRole('button', { name: /Save ingredient/i }).click()
   await page.waitForURL(/\/recipes\/\d+/, { timeout: 15000 })
@@ -1235,7 +1317,7 @@ await step('a matched ingredient can be swapped for a different food', async () 
   await page.locator('a[href^="/food/"]').first().click()
   await page.waitForLoadState('networkidle')
   await page.waitForTimeout(600)
-  await page.locator('label:has-text("Portion") select').selectOption({ label: 'g' })
+  await pickPortion(page, /^g$/)
   await page.locator('label:has-text("Amount") input').fill('200')
   await page.getByRole('button', { name: /Add to recipe/i }).click()
   await page.waitForURL(/\/recipes\/\d+/, { timeout: 15000 })

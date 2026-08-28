@@ -14,7 +14,7 @@ import {
   type Sex,
   type WeightUnit,
 } from '#shared/body'
-import type { MeasurementSystem } from '#shared/portions'
+import type { MeasurementSystem, PortionDefault } from '#shared/portions'
 import { SHARE_TOGGLES, sharePermissions, type ShareKey } from '#shared/sharing'
 import type { DiaryCardId } from '#shared/diaryCards'
 
@@ -291,6 +291,21 @@ const FOOD_SYSTEMS = [
   { value: 'metric' as const, label: 'Metric (g, ml)' },
   { value: 'imperial' as const, label: 'Imperial (oz, fl oz)' },
 ]
+
+/**
+ * How a portion picker opens. 'g' and '100 g' read as ml for a liquid, which
+ * the labels say rather than making someone find out by opening a bottle.
+ */
+const PORTION_DEFAULTS_UI = [
+  { value: 'serving' as const, label: 'Per serving' },
+  { value: 'g' as const, label: 'g / ml' },
+  { value: '100g' as const, label: '100 g / 100 ml' },
+]
+
+const portionDefault = computed<PortionDefault>({
+  get: () => form.portion_default ?? 'serving',
+  set: (value) => { form.portion_default = value },
+})
 
 /**
  * The grouped control sets height and weight together, but the per-field
@@ -779,6 +794,22 @@ const sugarLabel = computed(() => {
               @click="foodSystem = s.value"
             >{{ s.label }}</button>
           </div>
+        </div>
+
+        <div class="form-control">
+          <span class="label-text text-xs mb-1">Portion type default</span>
+          <div role="tablist" class="tabs tabs-box tabs-sm">
+            <button
+              v-for="p in PORTION_DEFAULTS_UI" :key="p.value"
+              role="tab" class="tab flex-1"
+              :class="{ 'tab-active': portionDefault === p.value }"
+              @click="portionDefault = p.value"
+            >{{ p.label }}</button>
+          </div>
+          <p class="text-xs text-base-content/50 mt-1">
+            A food with no weight to quote — a recipe you haven't weighed —
+            still opens on a serving.
+          </p>
         </div>
 
         <p class="text-xs text-base-content/50">

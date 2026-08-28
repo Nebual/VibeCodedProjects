@@ -1,7 +1,7 @@
 import type { NutrientTotals } from '#shared/nutrients'
 import type { ReminderScheduleRule } from '#shared/reminders'
 import type { ActivityKey, HeightUnit, Sex, WeightUnit } from '#shared/body'
-import type { MeasurementSystem } from '#shared/portions'
+import type { MeasurementSystem, PortionDefault } from '#shared/portions'
 import type { EffortKey } from '#shared/activities'
 
 export interface FoodRow {
@@ -61,6 +61,8 @@ export interface Goals {
   volume_unit: 'ml' | 'floz'
   /** Which portion unit the food picker starts on. */
   food_system: MeasurementSystem
+  /** Which kind of portion it starts on: a serving, grams, or 100 g. */
+  portion_default: PortionDefault
   exercise_adds_calories: number
   // Body metrics — all null until the user fills them in on Settings.
   sex: Sex | null

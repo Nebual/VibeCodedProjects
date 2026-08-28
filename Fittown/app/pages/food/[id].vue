@@ -1,9 +1,12 @@
 <script setup lang="ts">
 import { scaleNutrients } from '#shared/nutrients'
 import { canReportFood, reportedFoodHidden } from '#shared/reported'
+import { toLocalDate } from '#shared/dates'
+import type { PortionDefault } from '#shared/portions'
 import {
   WHOLE_RECIPE_LABEL,
   applyAdjustments,
+  defaultVariantName,
   isRecipe,
   isRecipeLog,
   recipeServingGrams,
@@ -111,6 +114,9 @@ async function unreport() {
 // option stays available, because a recipe mixes units freely.
 const { data: settings } = await useFetch<{ goals: Goals }>('/api/goals')
 const system = computed(() => settings.value?.goals?.food_system ?? 'metric')
+const portionDefault = computed<PortionDefault>(
+  () => settings.value?.goals?.portion_default ?? 'serving',
+)
 
 /**
  * The portion this row was saved with, when re-opening one. Carried in the URL
@@ -215,7 +221,7 @@ const servingOptions = computed(() => {
   )
 })
 
-const picker = usePortionOptions(adjustedFood, servingOptions, system, initial)
+const picker = usePortionOptions(adjustedFood, servingOptions, system, initial, portionDefault)
 
 const preview = computed(() =>
   adjustedFood.value
@@ -333,6 +339,20 @@ const canRemove = computed(() => !!entryId.value || !!ingredientId.value)
 const variantName = ref('')
 const savingVariant = ref(false)
 
+/**
+ * The name on offer: this recipe, dated today — the real calendar day, not the
+ * diary's late-night one, because it names a recipe rather than a meal.
+ *
+ * Placeholder and empty-box default are the same string; the server rebuilds it
+ * from the date sent with the request (see `defaultVariantName`), falling back
+ * to its own day only if we don't know ours yet.
+ */
+const today = useToday()
+const variantDay = computed(() => today.value ?? toLocalDate())
+const variantPlaceholder = computed(() =>
+  defaultVariantName(food.value?.name ?? 'Recipe', variantDay.value),
+)
+
 async function saveAsVariant() {
   if (!food.value || adjustments.value.length === 0) return
   savingVariant.value = true
@@ -340,7 +360,11 @@ async function saveAsVariant() {
   try {
     const { id } = await $fetch<{ id: number }>(`/api/recipes/${food.value.id}/variants`, {
       method: 'POST',
-      body: { name: variantName.value.trim() || undefined, adjustments: adjustments.value },
+      body: {
+        name: variantName.value.trim() || undefined,
+        adjustments: adjustments.value,
+        today: variantDay.value,
+      },
     })
     await router.push(`/recipes/${id}`)
   } catch (err) {
@@ -440,7 +464,7 @@ async function saveAsVariant() {
                 v-model="variantName"
                 type="text"
                 class="input input-bordered input-sm flex-1 min-w-0"
-                :placeholder="`${food.name} (my way)`"
+                :placeholder="variantPlaceholder"
                 aria-label="Name for the variant"
               >
               <button

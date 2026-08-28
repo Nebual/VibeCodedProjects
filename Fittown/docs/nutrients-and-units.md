@@ -33,6 +33,13 @@ component, move it. Food and body measurements have *separate* preferences
 (`food_system` vs `weight_unit`/`height_unit`) because Canadian households
 routinely weigh food in grams and themselves in pounds.
 
+**`portion_default` is a third, orthogonal preference**: `'serving' | 'g' |
+'100g'` — which *kind* of portion a picker opens on, where `food_system` only
+says which weight unit. It decides the opening selection in
+`usePortionOptions()` and nothing else; a portion already logged still wins
+over it, and a recipe with no weighed yield still opens on a serving, because
+`showsGramPortions()` says the app has no grams it is entitled to quote.
+
 **The exercise library syncs on every boot, keyed by name.**
 `shared/activities.ts` is the source of truth; `syncExerciseLibrary()` upserts
 it into `exercises` on `name` (a partial unique index over

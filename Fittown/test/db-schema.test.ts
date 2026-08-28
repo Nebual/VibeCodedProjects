@@ -129,7 +129,7 @@ describe('migrating an existing database', () => {
     const columns = columnNames(inspect(), 'user_goals')
     for (const column of [
       'sex', 'birth_year', 'height_cm', 'height_unit', 'food_system',
-      'activity_level', 'goal_weight_kg', 'goal_rate_kg_per_week',
+      'portion_default', 'activity_level', 'goal_weight_kg', 'goal_rate_kg_per_week',
     ]) {
       expect(columns, `migration missed ${column}`).toContain(column)
     }
@@ -147,6 +147,8 @@ describe('migrating an existing database', () => {
     expect(goals.protein_g).toBe(180)
     expect(goals.height_unit).toBe('cm')
     expect(goals.food_system).toBe('metric')
+    // Existing users keep opening on servings, which is all they have ever done.
+    expect(goals.portion_default).toBe('serving')
     expect(goals.activity_level).toBeNull()
   })
 

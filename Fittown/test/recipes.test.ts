@@ -15,6 +15,7 @@ import {
   describeAdjustments,
   ingredientIsIncluded,
   shortFoodName,
+  defaultVariantName,
 } from '#shared/recipes'
 
 /**
@@ -391,5 +392,43 @@ describe('shortening a food name for a diary line', () => {
     // "A, long descriptive name" — the head is a letter, so keep the name and
     // clamp it instead of reporting "A".
     expect(shortFoodName('A, long descriptive name for a food')).toBe('A, long descriptive nam…')
+  })
+})
+
+describe('defaultVariantName', () => {
+  it('dates the recipe it came from', () => {
+    expect(defaultVariantName('Chili', '2026-08-27')).toBe('Chili 2026-08-27')
+  })
+
+  it('replaces an earlier datestamp instead of stacking another one', () => {
+    // The whole point: a variant of a variant of a variant stays readable.
+    expect(defaultVariantName('Chili 2026-08-01', '2026-08-27')).toBe('Chili 2026-08-27')
+    // And a name that had already stacked two of them gets cleaned up in one go.
+    expect(defaultVariantName('Chili 2026-08-01 2026-08-14', '2026-08-27'))
+      .toBe('Chili 2026-08-27')
+  })
+
+  it('drops a trailing counter or version number', () => {
+    expect(defaultVariantName('Chili 2', '2026-08-27')).toBe('Chili 2026-08-27')
+    expect(defaultVariantName('Chili (2)', '2026-08-27')).toBe('Chili 2026-08-27')
+    expect(defaultVariantName('Chili - 3', '2026-08-27')).toBe('Chili 2026-08-27')
+    expect(defaultVariantName('Chili v2.0', '2026-08-27')).toBe('Chili v 2026-08-27')
+  })
+
+  it('leaves numbers that are part of the name alone', () => {
+    expect(defaultVariantName('3 Bean Chili', '2026-08-27')).toBe('3 Bean Chili 2026-08-27')
+    expect(defaultVariantName('Vitamin B12 Blend', '2026-08-27'))
+      .toBe('Vitamin B12 Blend 2026-08-27')
+  })
+
+  it('keeps a name that is nothing but a stamp', () => {
+    // Stripping would leave a recipe called only by today's date.
+    expect(defaultVariantName('2026-08-01', '2026-08-27')).toBe('2026-08-01 2026-08-27')
+  })
+
+  it('trims surrounding whitespace and caps a very long name', () => {
+    expect(defaultVariantName('  Chili  ', '2026-08-27')).toBe('Chili 2026-08-27')
+    const long = defaultVariantName('x'.repeat(300), '2026-08-27')
+    expect(long).toBe(`${'x'.repeat(180)} 2026-08-27`)
   })
 })

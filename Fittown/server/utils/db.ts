@@ -109,6 +109,9 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     height_cm: 'REAL',
     height_unit: "TEXT NOT NULL DEFAULT 'cm'",
     food_system: "TEXT NOT NULL DEFAULT 'metric'",
+    // Which portion type a picker opens on. 'serving' is what every existing
+    // row has been doing, so the default keeps them behaving identically.
+    portion_default: "TEXT NOT NULL DEFAULT 'serving'",
     activity_level: 'TEXT',
     goal_weight_kg: 'REAL',
     goal_rate_kg_per_week: 'REAL',

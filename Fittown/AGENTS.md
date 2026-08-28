@@ -24,11 +24,10 @@ live.
 
 ## 1. Work here (docker terminal)
 
-Source is at `/workspace` on native container storage.
+Source is at `/workspace/Fittown` on native container storage.
 
 - **Node v24 every new shell** — the shell doesn't remember it:
-  `source "$HOME/.nvm/nvm.sh" && nvm use 24`. A fresh shell answers `node -v`
-  as v20; running vitest under it silently passes only the pure-logic tests.
+  `source "$HOME/.nvm/nvm.sh" && nvm install`. So `node -v` shows v24, required for the sqlite binary.
 - **Run tests without pnpm:** `node_modules/.bin/vitest run`. `pnpm` aborts in
   the sandbox (`ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY`).
 - **Not a git repo on this mount** — `git status` says so. Leave git to the
@@ -81,7 +80,9 @@ thing on purpose once to confirm they notice.
   `onNuxtReady`** — moving it reintroduces hydration mismatches.
 - **Units are display-only, everywhere**; all conversion lives in
   `shared/body.ts` / `shared/portions.ts`. Food (`food_system`) and body
-  (`weight_unit`/`height_unit`) preferences are separate.
+  (`weight_unit`/`height_unit`) preferences are separate, and `portion_default`
+  ('serving' | 'g' | '100g') is a third: which *kind* of portion a picker opens
+  on, never what gets stored.
 - **Exercise library syncs on boot, keyed by name** (`shared/activities.ts`) —
   renaming an activity makes a *new* row so historical ids stay stable.
 - **Weight is not just another biometric** — it feeds BMR/targets; don't merge

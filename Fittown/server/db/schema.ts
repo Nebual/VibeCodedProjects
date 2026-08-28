@@ -40,6 +40,11 @@ CREATE TABLE IF NOT EXISTS user_goals (
   -- separate from the body-measurement units because plenty of households
   -- weigh food in grams while weighing themselves in pounds.
   food_system     TEXT NOT NULL DEFAULT 'metric',
+  -- 'serving' | 'g' | '100g'. Which kind of portion a food picker opens on:
+  -- the food's own serving, a bare weight, or 100 g at a time. Separate from
+  -- food_system, which only says *which* weight unit — someone who weighs
+  -- everything in grams still has to say so.
+  portion_default TEXT NOT NULL DEFAULT 'serving',
   -- Add exercise calories back onto the day's remaining budget?
   exercise_adds_calories INTEGER NOT NULL DEFAULT 1,
 

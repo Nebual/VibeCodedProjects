@@ -6,6 +6,8 @@ import {
   conversionText,
   defaultAmount,
   defaultUnitKey,
+  portionDefaultUnitKey,
+  PORTION_DEFAULTS,
   portionUnits,
   roundGrams,
 } from '#shared/portions'
@@ -122,5 +124,29 @@ describe('conversion text', () => {
   it('handles fractional amounts', () => {
     const lb = MASS_UNITS.find((u) => u.key === 'lb')!
     expect(conversionText(0.5, lb, false)).toBe('0.5 × lb = 227 g')
+  })
+})
+
+describe('portion type default', () => {
+  it('maps a preference onto the unit for this food', () => {
+    expect(portionDefaultUnitKey('g', false)).toBe('g')
+    expect(portionDefaultUnitKey('g', true)).toBe('ml')
+    expect(portionDefaultUnitKey('100g', false)).toBe('100g')
+    expect(portionDefaultUnitKey('100g', true)).toBe('100ml')
+  })
+
+  it('names no unit for "serving", which is a property of the food', () => {
+    expect(portionDefaultUnitKey('serving', false)).toBeNull()
+    expect(portionDefaultUnitKey('serving', true)).toBeNull()
+  })
+
+  it('always names a unit that exists', () => {
+    for (const preference of PORTION_DEFAULTS) {
+      for (const isLiquid of [false, true]) {
+        const key = portionDefaultUnitKey(preference, isLiquid)
+        if (key === null) continue
+        expect(portionUnits(isLiquid).some((u) => u.key === key)).toBe(true)
+      }
+    }
   })
 })

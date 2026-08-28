@@ -1,5 +1,6 @@
 import { ACTIVITY_KEYS } from '#shared/body'
 import { DIARY_CARD_IDS } from '#shared/diaryCards'
+import { PORTION_DEFAULTS } from '#shared/portions'
 import { SHARE_KEYS } from '#shared/sharing'
 
 /** Numeric goal fields and their accepted ranges. */
@@ -30,6 +31,7 @@ const ENUM_GOALS: Record<string, string[]> = {
   volume_unit: ['ml', 'floz'],
   height_unit: ['cm', 'ftin'],
   food_system: ['metric', 'imperial'],
+  portion_default: [...PORTION_DEFAULTS],
   sex: ['male', 'female', 'unspecified'],
   activity_level: [...ACTIVITY_KEYS],
 }

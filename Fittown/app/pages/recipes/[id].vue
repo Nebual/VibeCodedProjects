@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { MASS_UNITS, VOLUME_UNITS, baseUnit, portionUnits, roundGrams, type PortionUnit } from '#shared/portions'
-import { MAX_INSTRUCTIONS_CHARS, showsGramPortions } from '#shared/recipes'
+import { MAX_INSTRUCTIONS_CHARS, defaultVariantName, showsGramPortions } from '#shared/recipes'
+import { toLocalDate } from '#shared/dates'
 import { sharedRecipeUrl } from '#shared/friends'
 import {
   ingredientDetail,
@@ -390,6 +391,23 @@ const namingVariant = ref(false)
 const variantName = ref('')
 const savingVariant = ref(false)
 
+/**
+ * The name on offer: this recipe, dated today.
+ *
+ * Shown as the placeholder, and what "Create" uses when the box is left empty,
+ * so it does the thing the user was just shown. The server rebuilds it from the
+ * same helper and the date sent with the request; it only differs when the name
+ * is taken already, where it adds a "(copy)" rather than making two recipes
+ * called the same thing.
+ */
+const today = useToday()
+// Before the browser has reported its timezone, its own calendar day is the
+// best available answer — and a better one than the host's.
+const variantDay = computed(() => today.value ?? toLocalDate())
+const variantPlaceholder = computed(() =>
+  defaultVariantName(recipe.value?.name ?? 'Recipe', variantDay.value),
+)
+
 function startVariant() {
   namingVariant.value = true
   variantName.value = ''
@@ -409,7 +427,7 @@ async function saveVariant() {
   try {
     const { id: newId } = await $fetch<{ id: number }>(`/api/recipes/${id.value}/variants`, {
       method: 'POST',
-      body: { name: variantName.value.trim() || undefined },
+      body: { name: variantName.value.trim() || undefined, today: variantDay.value },
     })
     await router.push(`/recipes/${newId}`)
   } catch (err) {
@@ -564,7 +582,7 @@ const logLink = computed(
           v-model="variantName"
           type="text"
           class="input input-bordered input-sm flex-1 min-w-0"
-          :placeholder="`${recipe.name} (my way)`"
+          :placeholder="variantPlaceholder"
           aria-label="Name for the variant"
           @keyup.enter="saveVariant"
         >

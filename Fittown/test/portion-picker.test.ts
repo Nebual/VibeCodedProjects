@@ -176,3 +176,84 @@ describe('usePortionOptions — preserving amount across portion switches', () =
     expect(picker.amount).toBeCloseTo(1.3, 1)
   })
 })
+
+/**
+ * The 'Portion type default' setting: which kind of portion a picker opens on
+ * for a food nobody has logged yet. Everything else — a previous log, a recipe
+ * with no weight to quote — still wins over it.
+ */
+describe('usePortionOptions — the portion type default', () => {
+  it('opens on the food\'s own serving by default, as it always has', () => {
+    const picker = usePortionOptions(ref(plainFood()), ref([]), ref('metric'))
+    expect(picker.selectedKey).toBe('serving')
+    expect(picker.grams).toBe(90)
+
+    const explicit = usePortionOptions(
+      ref(plainFood()), ref([]), ref('metric'), undefined, ref('serving'),
+    )
+    expect(explicit.selectedKey).toBe('serving')
+  })
+
+  it('opens on grams when that is the preference, ignoring the stated serving', () => {
+    const picker = usePortionOptions(
+      ref(plainFood()), ref([]), ref('metric'), undefined, ref('g'),
+    )
+    expect(picker.selectedKey).toBe('u:g')
+    // 100 g, not 1 g: a starting amount in the region of a real portion.
+    expect(picker.amount).toBe(100)
+    expect(picker.grams).toBe(100)
+  })
+
+  it('opens on 100 g as a single portion, not on 100 of them', () => {
+    const picker = usePortionOptions(
+      ref(plainFood()), ref([]), ref('metric'), undefined, ref('100g'),
+    )
+    expect(picker.selectedKey).toBe('u:100g')
+    expect(picker.amount).toBe(1)
+    expect(picker.grams).toBe(100)
+  })
+
+  it('reads as millilitres for a liquid', () => {
+    const juice: FoodRow = { ...plainFood(), is_liquid: 1 }
+    expect(
+      usePortionOptions(ref(juice), ref([]), ref('metric'), undefined, ref('g')).selectedKey,
+    ).toBe('u:ml')
+    expect(
+      usePortionOptions(ref(juice), ref([]), ref('metric'), undefined, ref('100g')).selectedKey,
+    ).toBe('u:100ml')
+  })
+
+  it('overrides the imperial default, because it names its own unit', () => {
+    // Someone who asked for grams gets grams, even with the picker otherwise
+    // set to ounces — the two settings answer different questions.
+    const picker = usePortionOptions(
+      ref(plainFood()), ref([]), ref('imperial'), undefined, ref('g'),
+    )
+    expect(picker.selectedKey).toBe('u:g')
+  })
+
+  it('still opens on a serving for a recipe with no weight to quote', () => {
+    // No `recipe_final_weight_g`: the only honest portion is a serving, and a
+    // preference cannot conjure grams the app is not entitled to state.
+    const unweighedRecipe: FoodRow = {
+      ...plainFood(),
+      source: 'recipe',
+      recipe_servings: 4,
+      recipe_final_weight_g: null,
+    } as FoodRow
+    const picker = usePortionOptions(
+      ref(unweighedRecipe), ref([]), ref('metric'), undefined, ref('g'),
+    )
+    expect(picker.selectedKey).toBe('serving')
+    expect(picker.amount).toBe(1)
+  })
+
+  it('never overrides the portion something was already logged with', () => {
+    const initial = ref({ grams: 180, serving_label: 'serving', serving_count: 2 })
+    const picker = usePortionOptions(
+      ref(plainFood()), ref([]), ref('metric'), initial, ref('100g'),
+    )
+    expect(picker.selectedKey).toBe('serving')
+    expect(picker.amount).toBe(2)
+  })
+})

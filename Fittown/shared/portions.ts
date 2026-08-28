@@ -61,6 +61,33 @@ export function defaultUnitKey(system: MeasurementSystem, isLiquid: boolean): st
 }
 
 /**
+ * What a portion picker opens on, when the food doesn't force the answer.
+ *
+ * 'serving' is how the app has always behaved — the packet's own serving, or a
+ * named portion of it — and stays the default. The other two are for people who
+ * weigh everything: they'd rather land on the scale reading than on "1 serving"
+ * of a figure someone else chose.
+ */
+export const PORTION_DEFAULTS = ['serving', 'g', '100g'] as const
+export type PortionDefault = (typeof PORTION_DEFAULTS)[number]
+
+/**
+ * Which unit key a portion preference means for this food, or null for
+ * 'serving' — which is not a unit at all, but "whatever this food calls one".
+ *
+ * Liquids get the millilitre of the same size, so a preference set once holds
+ * for a bottle of milk as well as for a block of cheese.
+ */
+export function portionDefaultUnitKey(
+  preference: PortionDefault,
+  isLiquid: boolean,
+): string | null {
+  if (preference === 'serving') return null
+  if (preference === '100g') return isLiquid ? '100ml' : '100g'
+  return isLiquid ? 'ml' : 'g'
+}
+
+/**
  * A sensible starting amount for a freshly-selected unit.
  *
  * Switching to "g" and seeing `1` in the box is useless; so is switching to

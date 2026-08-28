@@ -1,5 +1,6 @@
+import { toLocalDate } from '#shared/dates'
 import { uniqueCopyName } from '#shared/friends'
-import { RECIPE_SOURCE } from '#shared/recipes'
+import { defaultVariantName, RECIPE_SOURCE } from '#shared/recipes'
 import { assertAdjustments } from '../../../utils/adjustments'
 import { cloneRecipe, findRecipe } from '../../../utils/recipes'
 
@@ -22,6 +23,12 @@ export default defineEventHandler(async (event) => {
     ? null
     : assertText(body.name, 'name', 200)
   const adjustments = assertAdjustments(body.adjustments)
+  // The user's calendar day, for the generated name. The client sends it because
+  // the host's day and the phone's day disagree for hours every evening, and the
+  // date it offered in the placeholder is the one it has to end up with.
+  const today = body.today === undefined || body.today === null
+    ? toLocalDate()
+    : assertDate(body.today, 'today')
 
   return transact((db) => {
     const source = findRecipe(db, id, user.id)
@@ -36,7 +43,8 @@ export default defineEventHandler(async (event) => {
     // A name the user typed is used as typed, even if it collides — they can
     // see both in the list and rename either. Only the generated fallback is
     // made unique, because nobody chose it.
-    const name = requested ?? uniqueCopyName(String(source.name), taken)
+    const name = requested
+      ?? uniqueCopyName(defaultVariantName(String(source.name), today), taken)
 
     const newId = cloneRecipe(db, id, user.id, {
       name,

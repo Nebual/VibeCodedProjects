@@ -469,3 +469,31 @@ export function isRecipe(food: { source?: unknown }): boolean {
 export function isRecipeLog(food: { source?: unknown }): boolean {
   return food.source === RECIPE_LOG_SOURCE
 }
+
+/**
+ * A trailing datestamp, copy counter, or version number — anything that made a
+ * previous name say "this is the nth of these" rather than what the dish is.
+ *
+ * Only ever matched at the very end, so "3 Bean Chili" and "Vitamin B12 Blend"
+ * survive untouched; "Chili 2026-08-01", "Chili (2)" and "Chili - 3" don't.
+ */
+const TRAILING_STAMP = /[\s\-–—#().\/]*\d[\d\s\-–—#().\/]*$/
+
+/**
+ * What to call a new variant of `base`, made on `today` ('YYYY-MM-DD').
+ *
+ * Variants pile up — you keep changing how you make the same thing — so the
+ * useful default is "the dish, dated", and the date has to replace the last
+ * one rather than accumulate: three variants of "Chili" should read Chili
+ * 2026-08-01 / 2026-08-14 / 2026-08-27, not "Chili 2026-08-01 2026-08-14".
+ *
+ * Shared with the server so the name the user is offered as a placeholder and
+ * the name they get by leaving the box empty are the same string.
+ */
+export function defaultVariantName(base: string, today: string): string {
+  const trimmed = base.trim()
+  const stripped = trimmed.replace(TRAILING_STAMP, '').replace(/[\s\-–—]+$/, '').trim()
+  // A name that was *only* a stamp ("2026-08-01") has nothing left to date, so
+  // keep what was there rather than returning a bare date.
+  return `${(stripped || trimmed).slice(0, 180)} ${today}`
+}
