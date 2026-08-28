@@ -130,3 +130,8 @@ On the Settings page, lets allow customizing what cards appear on the Diary page
 
 Lets improve the flow for adding Recipe variations. Lets make the placeholder text when naming a new variant default to the existing recipe name with ' 2026-08-27' (current date) appended - after removing any existing number/dashes from the end. The default name used when hitting Create with an unfilled input should match that new placeholder.
 
+Lets add a Setting for 'Portion Type Default', the default is per serving as it has been so far, other options include g and 100g  
+On the settings page, I get a 400 when trying to save with the Diary Cards hidden section collapsed. It seems to default to sending '["body"]' instead of an actual array. Lets just not send it with the page-wide post since each Diary Cards toggle change immediately saves anyway.  
+When first focusing a portion amount input, lets cursor select the current value, so the user can just type overtop of it to replace.
+
+

@@ -245,6 +245,69 @@ await step('portion units convert to grams', async () => {
   if (!/Logging 113 g/.test(text)) throw new Error('resolved grams not shown')
 })
 
+await step('focusing the amount selects it, so typing replaces the figure', async () => {
+  await page.goto(`${BASE}/add?meal=lunch`, { waitUntil: 'networkidle' })
+  await page.getByPlaceholder('Search foods').fill('chicken breast')
+  await page.waitForTimeout(1200)
+  await page.locator('a[href^="/food/"]').first().click()
+  await page.waitForLoadState('networkidle')
+  await page.waitForTimeout(600)
+
+  // A fresh page: the box holds the portion's starting amount and nothing has
+  // focus yet, which is the moment this is about.
+  const amount = page.locator('label:has-text("Amount") input')
+  const before = await amount.inputValue()
+  await amount.click()
+  await page.keyboard.type('7')
+
+  const after = await amount.inputValue()
+  if (after !== '7') {
+    throw new Error(`typing over an amount of ${before} gave ${after}, not 7`)
+  }
+})
+
+await step('a hidden Diary card survives the page-wide save', async () => {
+  const openCards = async () => {
+    await page.goto(`${BASE}/settings`, { waitUntil: 'networkidle' })
+    await page.waitForTimeout(600)
+    const header = page.getByRole('button', { name: /Diary Card Visibility/i })
+    if ((await header.getAttribute('aria-expanded')) !== 'true') await header.click()
+    await page.waitForTimeout(300)
+  }
+  // Scoped to the card list: "Body Measurements" also names a sharing switch.
+  const bodyToggle = () =>
+    page.locator('section', { hasText: 'Diary Card Visibility' })
+      .locator('label', { hasText: 'Body Measurements' })
+      .locator('input[type="checkbox"]')
+
+  await openCards()
+  await bodyToggle().uncheck()
+  await page.waitForTimeout(900)
+
+  // Collapse it again and save the rest of the screen. The stored value is a
+  // JSON string, so sending it back with everything else used to 400 — and the
+  // toggle had already saved itself anyway.
+  await page.getByRole('button', { name: /Diary Card Visibility/i }).click()
+  await page.getByRole('button', { name: /Save settings/i }).click()
+  await page.waitForTimeout(900)
+  // The button says "Saved" only when the PUT came back clean.
+  if (!(await page.getByRole('button', { name: /^Saved$/ }).isVisible())) {
+    throw new Error('the page-wide save did not go through')
+  }
+
+  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' })
+  await page.waitForTimeout(700)
+  if (/Body Measurements/i.test(await page.locator('main').innerText())) {
+    throw new Error('the hidden card came back on the Diary')
+  }
+
+  // Put it back, so the steps that follow see a full Diary.
+  await openCards()
+  await page.getByRole('button', { name: /Show all/i }).click()
+  await page.waitForTimeout(900)
+  if (!(await bodyToggle().isChecked())) throw new Error('"Show all" left a card off')
+})
+
 await step('the portion type default decides what a picker opens on', async () => {
   const openChickenBreast = async () => {
     await page.goto(`${BASE}/add?meal=lunch`, { waitUntil: 'networkidle' })

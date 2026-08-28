@@ -101,7 +101,14 @@ async function save() {
   saving.value = true
   saved.value = false
   try {
-    await $fetch('/api/goals', { method: 'PUT', body: { ...form } })
+    // Everything except the Diary-cards list. It sits in `form` as the *stored*
+    // value — the JSON text `["body"]` — while the route wants a real array, so
+    // sending it back verbatim is a 400 on a screen that was only saving a
+    // calorie goal. Nothing is lost by leaving it out: each card toggle already
+    // saved itself the moment it flipped (see `useDiaryCards`).
+    const body = { ...form }
+    delete body.diary_cards_hidden
+    await $fetch('/api/goals', { method: 'PUT', body })
     await refresh()
     // Safe here, unlike in the seeding watcher: this is what was just stored.
     if (data.value?.goals) Object.assign(form, data.value.goals)

@@ -36,6 +36,34 @@ onMounted(() => document.addEventListener('pointerdown', onDocumentPointerDown))
 onBeforeUnmount(() => document.removeEventListener('pointerdown', onDocumentPointerDown))
 
 /**
+ * Focusing the amount selects what's in it, so the first keypress replaces the
+ * figure instead of extending it. The box is never empty — it always holds the
+ * portion's starting amount — and someone reaching for it means "not that, this
+ * much": tapping a box holding 100 and typing 2 should log 2, not 1002.
+ */
+const selectionPending = ref(false)
+
+function onAmountFocus(event: FocusEvent) {
+  ;(event.target as HTMLInputElement).select()
+  selectionPending.value = true
+}
+
+/** A press *inside* an already-focused box is the caret being placed by hand. */
+function onAmountPointerDown() {
+  selectionPending.value = false
+}
+
+/**
+ * Only the release that completes the focusing click: left alone, it drops the
+ * caret where the pointer went down and throws the selection away again.
+ */
+function onAmountMouseUp(event: MouseEvent) {
+  if (!selectionPending.value) return
+  event.preventDefault()
+  selectionPending.value = false
+}
+
+/**
  * Picking a portion option.
  *
  * This is deliberately NOT a native <select>. Firefox on Android never raises
@@ -71,6 +99,9 @@ function selectOption(option: PortionOption) {
           step="any"
           inputmode="decimal"
           class="input input-bordered w-full"
+          @focus="onAmountFocus"
+          @mousedown="onAmountPointerDown"
+          @mouseup="onAmountMouseUp"
         >
       </label>
 
