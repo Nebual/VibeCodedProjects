@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import type { Item } from '#shared/types'
 import type { TagColor, TagPatch, TagSymbol } from '#shared/tags'
-import { bestMatch, splitBulkInput } from '#shared/matching'
+import type { MatchResult } from '#shared/matching'
+import { MATCH_THRESHOLD, SUGGEST_THRESHOLD, bestMatch, splitBulkInput } from '#shared/matching'
 
 type ListApi = ReturnType<typeof useShoppingList>
 
@@ -56,8 +57,10 @@ const candidates = computed(() => props.list.live.value.map(item => ({ id: item.
 const rows = computed(() => entries.value.map(entry => ({
   entry,
   item: entry.itemId ? props.list.items.value[entry.itemId] : undefined,
+  // A lower bar than the one that claimed matches on submit: this row is already in front
+  // of the user, unresolved, so the question is only whether a candidate is worth a glance.
   suggestion: entry.status === 'unmatched'
-    ? bestMatch(entry.text, candidates.value.filter(c => !entry.rejected.includes(c.id)))
+    ? bestMatch(entry.text, candidates.value.filter(c => !entry.rejected.includes(c.id)), SUGGEST_THRESHOLD)
     : null,
 })))
 
@@ -246,6 +249,15 @@ function acceptSuggestion(entry: Entry, id: string, score: number) {
   if (item) claim(entry, item, score)
 }
 
+/**
+ * Enter is the key you press to get on with it, so it only takes a suggestion the matcher
+ * would have claimed on its own. A weaker one is an offer, and an offer deserves the tap.
+ */
+function resolveFromKeyboard(entry: Entry, suggestion: MatchResult | null) {
+  if (suggestion && suggestion.score >= MATCH_THRESHOLD) acceptSuggestion(entry, suggestion.id, suggestion.score)
+  else addAsNew(entry)
+}
+
 function addAsNew(entry: Entry) {
   const item = props.list.addItem(entry.text)
   if (!item) return
@@ -361,7 +373,7 @@ function unresolve(entry: Entry) {
                 v-model="entry.text"
                 class="input input-sm input-bordered w-full"
                 :aria-label="`Edit ${entry.raw}`"
-                @keydown.enter.prevent="suggestion ? acceptSuggestion(entry, suggestion.id, suggestion.score) : addAsNew(entry)"
+                @keydown.enter.prevent="resolveFromKeyboard(entry, suggestion)"
               >
               <button
                 v-if="suggestion"

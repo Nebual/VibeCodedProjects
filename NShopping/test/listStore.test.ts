@@ -20,7 +20,9 @@ beforeEach(() => {
   listName = `list-${counter++}`
 })
 
-const at = 1_000_000
+// A realistic wall-clock stamp, not a tidy small number: the store prunes tombstones
+// older than 30 days, and timestamps down at the epoch are all older than that.
+const at = Date.now()
 const item = (id: string, name: string, overrides: Partial<Item> = {}): Item => ({
   id, name, addedAt: at, bought: false, boughtAt: null, stateAt: at, updatedAt: at, ...overrides,
 })
@@ -93,9 +95,9 @@ describe('applyOps merging', () => {
   })
 
   it('keeps a delete from being resurrected by an equally old write', async () => {
-    await applyOps(listName, [item('a', 'Milk', { updatedAt: 500 })])
-    await applyOps(listName, [item('a', 'Milk', { updatedAt: 600, deleted: true })])
-    const list = await applyOps(listName, [item('a', 'Milk', { updatedAt: 600 })])
+    await applyOps(listName, [item('a', 'Milk', { updatedAt: at })])
+    await applyOps(listName, [item('a', 'Milk', { updatedAt: at + 1, deleted: true })])
+    const list = await applyOps(listName, [item('a', 'Milk', { updatedAt: at + 1 })])
     expect(list.items.find(i => i.id === 'a')?.deleted).toBe(true)
   })
 

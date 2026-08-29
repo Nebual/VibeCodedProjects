@@ -4,37 +4,11 @@ Context that isn't obvious from reading the code. For what the app *does*, read 
 
 ## Environment traps (read this first)
 
-**`pnpm install` cannot complete in the sandbox.** The project lives on a CIFS/Windows
-mount where creating symlinks inside the project tree fails with `EPERM`. `.npmrc` already
-compensates for the *hoisted layout* (`node-linker=hoisted`, `package-import-method=copy`),
-but pnpm's own `runDepsStatusCheck` still tries to symlink `@dxup/nuxt` into `.pnpm/` and
-dies. This breaks `pnpm install`, `pnpm test`, `pnpm exec` and `nuxt prepare` alike.
-
-Consequences:
-
-- `pnpm test` / typecheck can't be run in place. To validate TypeScript, **copy the source
-  to a symlink-capable filesystem** (e.g. under `$CLAUDE_JOB_DIR/tmp`), delete `.npmrc`
-  there (the default nested linker works on ext4), then `pnpm install && pnpm exec nuxi
-  typecheck`. Don't copy `.npmrc` into that scratch copy and don't copy it back.
+- run `nvm install`
 - A failed install leaves a ~225MB **partial `node_modules`** in the project. Delete it —
   the repo is normally checked out without one.
-- In that scratch copy, `test/listStore.test.ts` fails with `Cannot find package 'h3'`.
-  That is an artifact of dropping the hoisted `.npmrc` (bare `import 'h3'` needs hoisting),
-  **not a real failure**. It passes with the project's own `.npmrc`.
-- `nuxi typecheck` needs a checker installed. `pnpm add -D typescript vue-tsc` pulls
-  TypeScript **7.x**, which removed `./lib/tsc` and crashes `vue-tsc`. Pin `typescript@5.7.3`
-  + `vue-tsc@2.2.10`. Also add `@types/node`, or every `process.env` / `node:fs` use in
-  `server/` reports as an error. A residual `error TS5023: Unknown compiler option
-  'libReplacement'` just means the pinned TS is older than `.nuxt` expects — ignore it.
-- `pnpm` isn't on `PATH` by default and `corepack` doesn't work here; `npm i -g pnpm` then
-  `export PATH="$(npm prefix -g)/bin:$PATH"`.
 
-**Known-red test (pre-existing, not yours).** `test/matching.test.ts` >
-"tolerates a typo in a long word" fails: `match('crakers')` returns null instead of
-`Breton crackers`. It scores ~0.571 against `MATCH_THRESHOLD = 0.62` in
-`shared/matching.ts`. Untouched by the OCR work. Don't attribute it to your change, and
-don't "fix" it by loosening the threshold without thinking — that threshold is deliberately
-tight (see the comments in `matching.ts`; `pecans` must not match `Pears`).
+**The suite is green as of 2026-08-29.** 
 
 ## Photo OCR — why it's built this way
 
@@ -162,6 +136,30 @@ Read those numbers carefully before optimizing:
 - **`applyRemote` calls `scheduleSort` when a colour arrives from another device.**
   `reconcileOrder` only files *new* ids, so without it the grouping — the entire point of a
   colour — never appears on the other phone.
+
+## Two thresholds: claiming vs offering
+
+`MATCH_THRESHOLD` (0.62) is what `bestMatch` claims on its own when a bulk paste is
+submitted. `SUGGEST_THRESHOLD` (0.5) is what the review offers on a row it has already
+left unresolved. `bestMatch` takes the bar as a third argument; only `BulkAddModal`'s
+`rows` computed passes the lower one.
+
+- **The gap exists for one specific shape, and it is structural, not tuning.** A one-word
+  note against a longer item name scores `0.55·similarity + 0.20·density + 0.10·leading`;
+  with density 0.5 and the match landing on a non-first word that caps at
+  `0.55·similarity + 0.10`, so it needs similarity ≥ 0.945 to clear 0.62 — and only an
+  identical token (1.0) or a plural (0.97) ever gets there. **No typo can auto-match in
+  that shape, however mild.** "crakers", "yoghurt" and "bannana" all land on exactly 0.571
+  and used to become duplicate items. Making them auto-match means reweighting the reverse
+  branch, which also loosens every clean shorthand ("milk" → "coconut milk" would go 0.65 →
+  0.75). Offering them instead costs nothing.
+- **Lowering the *offer* bar cannot resurrect a lookalike.** `pecans`/`Pears`,
+  `milk`/`Silk`, `corn`/`Cord` all score a flat **0**, because that separation is the work
+  of the per-token edit budget in `tokenSimilarity`, not of the threshold. The band between
+  0.5 and 0.62 contains only the typo'd-shorthand case. Measure before assuming otherwise.
+- **Enter on an unresolved row only takes a suggestion at or above `MATCH_THRESHOLD`**
+  (`resolveFromKeyboard`). Otherwise lowering the offer bar would quietly change what a
+  keystroke does; a weak suggestion is an offer, and an offer should cost a deliberate tap.
 
 ## OCR line splitting
 

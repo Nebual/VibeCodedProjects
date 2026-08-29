@@ -138,8 +138,12 @@ export function getList(name: string): Promise<ListFile> {
  * Merges per-item ops into the stored list, last-writer-wins on `updatedAt`.
  * Items the caller didn't mention are left completely alone, so concurrent
  * editors only clobber each other when they touch the very same item.
+ *
+ * `async` purely so the guards below reject rather than throwing synchronously. The
+ * signature promises a promise, and a caller that holds one — rather than awaiting it
+ * inside a `try` the way the route happens to — would otherwise never see a bad batch.
  */
-export function applyOps(name: string, ops: unknown): Promise<ListFile> {
+export async function applyOps(name: string, ops: unknown): Promise<ListFile> {
   if (!Array.isArray(ops)) {
     throw createError({ statusCode: 400, statusMessage: 'ops must be an array' })
   }

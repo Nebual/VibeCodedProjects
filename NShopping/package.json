@@ -8,6 +8,7 @@
     "generate": "nuxt generate",
     "preview": "nuxt preview",
     "start": "PORT=8187 node .output/server/index.mjs",
+    "gman-deploy": "git push && ssh gman@gman '/servers/nshopping/NShopping/bin/gman-deploy.sh'",
     "test": "vitest run",
     "test:watch": "vitest",
     "postinstall": "nuxt prepare"

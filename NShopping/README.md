@@ -99,6 +99,12 @@ Plurals are folded explicitly (`pecans` → `pecan`) so the typo budget can stay
 five letters or fewer must match exactly, because at that length nearly every near
 miss is a different product — `pecans` must not match **Pears**.
 
+**Claiming vs. offering.** Matching outright and asking are held to different bars. A
+line the matcher won't claim is left unresolved with the nearest candidate offered
+beside it — *Use “Breton crackers”* — so `crakers` or `yoghurt` is one tap rather than a
+near-duplicate item you find later. The offer is always a tap: pressing Enter on the row
+only takes a suggestion strong enough to have been claimed on its own.
+
 Lines are split on newlines, commas and semicolons — and also on a `+` or `-` left
 standing *between* words, which is how a photographed list runs several items onto
 one line: `tuna - nutritional yeast + garlic` is three things, while a leading

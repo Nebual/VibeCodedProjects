@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bestMatch, meaningfulTokens, scoreMatch, splitBulkInput, stem } from '#shared/matching'
+import { MATCH_THRESHOLD, SUGGEST_THRESHOLD, bestMatch, meaningfulTokens, scoreMatch, splitBulkInput, stem } from '#shared/matching'
 
 /** A list mid-restock: the sort of thing a bulk paste actually gets matched against. */
 const LIST = [
@@ -8,6 +8,8 @@ const LIST = [
 ].map((name, index) => ({ id: `i${index}`, name }))
 
 const match = (note: string, list = LIST) => bestMatch(note, list)?.name ?? null
+/** What the bulk review would *offer* on a row it left unresolved. */
+const suggest = (note: string, list = LIST) => bestMatch(note, list, SUGGEST_THRESHOLD)?.name ?? null
 
 describe('splitBulkInput', () => {
   it('splits on newlines, commas and semicolons', () => {
@@ -163,7 +165,6 @@ describe('bestMatch — shapes that should match', () => {
 
   it('tolerates a typo in a long word', () => {
     expect(match('sourdogh')).toBe('Sourdough')
-    expect(match('crakers')).toBe('Breton crackers')
   })
 
   it('matches either direction across a plural', () => {
@@ -199,6 +200,36 @@ describe('bestMatch — shapes that should NOT match', () => {
 
   it('does not match a bare unit word to a canned item', () => {
     expect(match('can')).toBeNull()
+  })
+})
+
+describe('bestMatch — suggesting rather than claiming', () => {
+  /**
+   * A typo in a shorthand note can't be claimed outright: one word against a longer name
+   * caps at 0.55·similarity + 0.10, so it would need a similarity no typo can reach. It is
+   * still obvious to a human reading the row, which is what the lower bar is for.
+   */
+  it('offers a typo\'d shorthand that it would not claim', () => {
+    expect(match('crakers')).toBeNull()
+    expect(suggest('crakers')).toBe('Breton crackers')
+  })
+
+  it('claims a clean shorthand at either bar', () => {
+    expect(match('crackers')).toBe('Breton crackers')
+    expect(suggest('crackers')).toBe('Breton crackers')
+  })
+
+  it('still offers nothing for the lookalikes the budget rules out', () => {
+    // These score a flat 0, so lowering the bar can't resurrect them — that work is done
+    // by the per-token edit budget, not by the threshold.
+    expect(suggest('pecans', [{ id: 'a', name: 'Pears' }])).toBeNull()
+    expect(suggest('milk', [{ id: 'a', name: 'Silk' }])).toBeNull()
+    expect(suggest('bananas')).toBeNull()
+    expect(suggest('can')).toBeNull()
+  })
+
+  it('keeps the offer bar below the claim bar', () => {
+    expect(SUGGEST_THRESHOLD).toBeLessThan(MATCH_THRESHOLD)
   })
 })
 

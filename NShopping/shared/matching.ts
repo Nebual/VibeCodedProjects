@@ -20,6 +20,21 @@ export interface MatchResult {
 /** Below this a match is a guess, not a match, and the user is asked instead. */
 export const MATCH_THRESHOLD = 0.62
 
+/**
+ * The bar for *offering* a match on a row already sitting unresolved in front of the user,
+ * as against silently claiming one. The two answer different questions — "is this certainly
+ * the same thing" versus "is this worth a glance" — so they don't deserve the same number.
+ *
+ * It buys back exactly one shape. A one-word note against a longer name tops out at
+ * `0.55 · similarity + 0.10`, so it needs a similarity of 0.945 to clear MATCH_THRESHOLD,
+ * which only an identical (1.0) or plural (0.97) token ever reaches: a typo in a shorthand
+ * note — "crakers", "yoghurt", "bannana" — cannot auto-match at all, however mild, and used
+ * to become a duplicate item instead. Those all land at 0.571. Nothing else does: the
+ * lookalikes this file exists to keep apart ("pecans"/"Pears", "milk"/"Silk") score a flat
+ * 0, because that work is done by the per-token edit budget rather than by this threshold.
+ */
+export const SUGGEST_THRESHOLD = 0.5
+
 /** Words that carry no identity: "the Breton crackers" is just "Breton crackers". */
 const STOPWORDS = new Set([
   'a', 'an', 'the', 'some', 'any', 'my', 'our', 'of', 'and', 'more', 'extra', 'another',
@@ -205,15 +220,18 @@ export function scoreMatch(noteTokens: string[], itemTokens: string[]): number {
   return 0
 }
 
-/** Best-scoring candidate above the threshold, or null. Ties go to the shorter name. */
-export function bestMatch(note: string, candidates: MatchCandidate[]): MatchResult | null {
+/**
+ * Best-scoring candidate above `threshold`, or null. Ties go to the shorter name.
+ * Callers that are going to *ask* rather than act can pass SUGGEST_THRESHOLD.
+ */
+export function bestMatch(note: string, candidates: MatchCandidate[], threshold = MATCH_THRESHOLD): MatchResult | null {
   const noteTokens = meaningfulTokens(note)
   if (!noteTokens.length) return null
 
   let best: MatchResult | null = null
   for (const candidate of candidates) {
     const score = scoreMatch(noteTokens, meaningfulTokens(candidate.name))
-    if (score < MATCH_THRESHOLD) continue
+    if (score < threshold) continue
     if (!best || score > best.score || (score === best.score && candidate.name.length < best.name.length)) {
       best = { id: candidate.id, name: candidate.name, score }
     }
