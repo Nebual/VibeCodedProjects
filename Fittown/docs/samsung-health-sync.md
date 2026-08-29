@@ -3,10 +3,11 @@
 How Samsung Health / Galaxy Watch data (chiefly its estimated calories burned)
 gets into Fittown, and why the design is shaped the way it is.
 
-Status: **Phase 1 (server) built and tested.** **Phase 2 (the shell)
-scaffolded and compiles** — see `mobile/` — but is unverified beyond that: no
-emulator or physical phone was available to actually run it. Phases 3–5
-(Health Connect, background sync, UI polish) are still just this plan.
+Status: **Phase 1 (server) built and tested. Phase 2 (the shell) built,
+including real-device testing of the sign-in flow — one round found a bug,
+which is now fixed and re-verified as far as this environment allows.**
+Phases 3–5 (Health Connect, background sync, UI polish) are still just this
+plan.
 
 - Phase 1: schema, device pairing, `/api/health/sync` with the calorie
   cascade, `health_sync_log`, the reversible `workout_calorie_source`
@@ -14,13 +15,14 @@ emulator or physical phone was available to actually run it. Phases 3–5
   `test/health-sync-db.test.ts`, `test/device-auth-db.test.ts`.
 - Phase 2: a Capacitor Android project (`mobile/`) with the `fittown://pair`
   deep link, a Kotlin plugin storing the device token in
-  EncryptedSharedPreferences (`DeviceTokenPlugin.kt`), and a client plugin
-  (`app/plugins/device-auth.client.ts`) that trades it for a session at
-  `/auth/device` on launch. `./gradlew assembleDebug` succeeds and the
-  resulting APK was inspected (`aapt`, `dexdump`) to confirm both actually
-  landed in the build — that's the limit of what could be checked without a
-  device. See `mobile/README-sandbox-build.md` for what that setup took and
-  what's still unverified.
+  EncryptedSharedPreferences (`DeviceTokenPlugin.kt`), a `/pair` page, a
+  "Connect a phone" panel in Settings, and — after a real install on a real
+  phone hit the `disallowed_useragent`/cookie-jar problem described in §3 —
+  a Custom Tab-based sign-in that pairs the app automatically as the tail end
+  of Google login, no Settings trip needed for the common case. See §3 for
+  the full account, including exactly what is and isn't verified without a
+  device beyond that one round of testing. `./gradlew assembleDebug`
+  succeeds; `mobile/README-sandbox-build.md` has the sandbox setup notes.
 
 ---
 
@@ -132,27 +134,75 @@ A Capacitor shell is a WebView. So the existing `/auth/google` flow cannot be
 the app's way in, and this is not a detail that can be discovered late — it
 determines the whole onboarding design.
 
-The chosen flow avoids Google entirely on the phone:
+The mechanism underneath is a short-lived, single-use **pairing code**
+(8 chars, 10-minute TTL, cleared on claim) traded for a device token at
+`POST /api/devices/claim { code, name }`. The server mints 32 random bytes,
+returns them **once**, and stores only a SHA-256 hash. There are two ways a
+code reaches the app — a manual fallback, and the one that actually matters
+for a normal login, added after the first draft of this plan turned out to
+be wrong (see below).
+
+### The manual fallback
 
 1. The user signs in to Fittown **in their phone's real browser**, where
    Google OAuth works as it does today.
-2. Settings → *Connect a phone* → `POST /api/devices/pair-code` returns a
-   short code (8 chars, 10-minute TTL) and a `fittown://pair?code=…` deep link.
-3. The app receives the code (typed, or via the deep link if they tap it on
-   the same phone) and calls `POST /api/devices/claim { code, name }`.
-4. The server mints 32 random bytes, returns them **once**, and stores only a
-   SHA-256 hash. The app puts the token in EncryptedSharedPreferences.
+2. Settings → *Connect a phone* → `POST /api/devices/pair-code` shows the code.
+3. The app receives it — typed by hand into `/pair`, or pre-filled via a
+   `fittown://pair?code=…` deep link if they tap it on the same phone — and
+   claims it.
+
+Kept for pairing a second device, or re-pairing without another Google login.
+Not the primary path any more: it needs the user to leave the app, do
+something in Settings, and come back, which is a lot to ask for the very
+first thing a new install does.
+
+### The one that matters: automatic pairing through sign-in itself
+
+**The first draft of this plan proposed Chrome Custom Tabs as an
+alternative worth considering "if onboarding ever needs to work without a
+browser." Testing showed it isn't optional — it's required, for a more
+specific reason than the `disallowed_useragent` block.** A plain
+`<a href="/auth/google">` inside the WebView starts the flow there, and
+Capacitor's default policy pops the redirect to `accounts.google.com` out
+into the *system* browser once it hits a foreign host. That split matters
+because nuxt-auth-utils' CSRF `state` cookie was set on the leg the WebView
+made — a different cookie jar than the one the system browser uses for the
+callback. The result isn't Google's UA rejection; it's a clean 200 all the
+way to a completed Google login, followed by `state mismatch` on the
+callback, because the two requests never shared cookies. Confirmed in
+testing against the real deployment, not predicted from documentation.
+
+The fix is to never let the WebView touch any of it: `app/pages/login.vue`'s
+native-only button opens the **entire** flow — first request through
+callback — in one Chrome Custom Tab via `@capacitor/browser`'s
+`Browser.open({ url: '/auth/google?client=app' })`. One consistent cookie
+jar for both legs fixes the state check. `server/routes/auth/google.get.ts`
+sets a `fittown_oauth_app` marker cookie on the first leg (alongside, and for
+the same reason as, nuxt-auth-utils' own state cookie) and reads it back in
+`onSuccess`; if present, instead of opening a session nobody in that
+ephemeral tab is there to use, it calls `createPairCode()` — the exact same
+function Settings' pairing button calls — and redirects the Custom Tab to
+`fittown://pair?code=…`. Android hands that off to the installed app via the
+intent-filter already added for the manual flow; the app's
+`appUrlOpen` listener (`app/plugins/device-auth.client.ts`) routes it to
+`/pair`, which claims it exactly like a typed-in code would.
+
+Net effect: tap **Sign in**, do Google auth once, land back in the app
+already authenticated. One user-visible step, not two — and it was only
+reachable by first building the thing that broke and reading why.
 
 That one token then serves two consumers:
 
-- **The native sync worker**, which runs outside the WebView and has no
-  cookies: `Authorization: Bearer <token>` on `POST /api/health/sync`.
-- **The WebView's session.** On launch, a Capacitor-only Nuxt client plugin
-  asks the native layer for the token and `POST`s it to a new `/auth/device`
-  route, which verifies it and calls `setUserSession()` — exactly the shape
-  `server/routes/auth/dev.post.ts` already has. The cookie lands in the
-  WebView's jar and everything downstream is unchanged. The token never
-  appears in a URL.
+- **The native sync worker** (Phase 3/4), which runs outside the WebView and
+  has no cookies: `Authorization: Bearer <token>` on `POST /api/health/sync`.
+- **The WebView's session.** `app/plugins/device-auth.client.ts` asks the
+  native layer (`DeviceTokenPlugin.kt`, via EncryptedSharedPreferences) for
+  the token on launch and `POST`s it to `/auth/device`, which verifies it and
+  calls `setUserSession()` — exactly the shape `server/routes/auth/dev.post.ts`
+  already has. The cookie lands in the WebView's jar and everything
+  downstream is unchanged. The token never appears in a URL — only the
+  short-lived pairing *code* does, in the `fittown://pair` redirect, and it's
+  single-use.
 
 **Be honest about what this token is:** because `/auth/device` mints a full
 session, the token is session-equivalent. Mitigations are the ordinary ones —
@@ -168,11 +218,13 @@ the API directly; it has to go through `/auth/device` and become a session
 first. That keeps the blast radius of the new credential visible in two files
 rather than spread across every handler.
 
-*Alternative considered:* RFC 8252 native OAuth — Chrome Custom Tab for the
-Google flow, callback into a `fittown://` deep link with a one-time code. More
-standard, and it removes the "sign in on the browser first" step. It is also
-more moving parts and a second Google OAuth client. Worth doing if onboarding
-ever needs to work without a browser; not worth it for three people.
+**Still unverified, and can only be verified on a real device:** does
+`fittown://pair` actually hand off from a Custom Tab to the installed app the
+way it does from a plain browser link; does `Browser.open()` reliably launch
+a Custom Tab (vs. some OEM browser's own tab implementation with different
+cookie behavior) on a real Samsung phone. The state-mismatch bug was found
+by testing against production from a real phone; this design is the fix for
+what that testing found, not itself re-tested the same way yet.
 
 ## 4. Schema changes
 

@@ -1,4 +1,4 @@
-import { generatePairCode, pairCodeExpiresAt } from '../../utils/deviceAuth'
+import { createPairCode } from '../../utils/deviceAuth'
 
 /**
  * Start pairing a phone. Called from a signed-in browser (Settings ->
@@ -11,19 +11,6 @@ import { generatePairCode, pairCodeExpiresAt } from '../../utils/deviceAuth'
  */
 export default defineEventHandler(async (event) => {
   const user = await requireUser(event)
-  const db = useDb()
-
-  const code = generatePairCode()
-  const expires = pairCodeExpiresAt()
-
-  // token_hash stays NULL until claimed — see the column comment in
-  // server/db/schema.ts. This row is the "pairing outstanding" state.
-  const info = db
-    .prepare(
-      `INSERT INTO device_tokens (user_id, name, pair_code, pair_expires)
-       VALUES (?, 'Unnamed device', ?, ?)`,
-    )
-    .run(user.id, code, expires)
-
-  return { id: Number(info.lastInsertRowid), code, expires_at: expires }
+  const { code, expiresAt } = createPairCode(useDb(), user.id)
+  return { code, expires_at: expiresAt }
 })

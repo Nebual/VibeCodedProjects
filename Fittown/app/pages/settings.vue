@@ -456,6 +456,65 @@ const planSummary = computed(() => {
  */
 const pollVoted = ref(false)
 
+// --- Connected devices (docs/samsung-health-sync.md §3) --------------------
+
+interface DeviceRow {
+  id: number
+  name: string
+  last_used_at: string | null
+  last_sync_at: string | null
+}
+
+const { data: devicesData, refresh: refreshDevices } = await useFetch<{ devices: DeviceRow[] }>(
+  '/api/devices',
+)
+const devices = computed(() => devicesData.value?.devices ?? [])
+
+const pairing = ref<{ code: string; expiresAt: string } | null>(null)
+const pairingBusy = ref(false)
+const pairingSecondsLeft = ref(0)
+let pairingTimer: ReturnType<typeof setInterval> | undefined
+
+function stopPairingCountdown() {
+  clearInterval(pairingTimer)
+  pairingTimer = undefined
+}
+
+async function startPairing() {
+  pairingBusy.value = true
+  try {
+    const result = await $fetch<{ code: string; expires_at: string }>('/api/devices/pair-code', {
+      method: 'POST',
+    })
+    pairing.value = { code: result.code, expiresAt: result.expires_at }
+    stopPairingCountdown()
+    pairingTimer = setInterval(() => {
+      const left = Math.round((new Date(pairing.value!.expiresAt).getTime() - Date.now()) / 1000)
+      pairingSecondsLeft.value = Math.max(0, left)
+      if (pairingSecondsLeft.value === 0) {
+        pairing.value = null
+        stopPairingCountdown()
+      }
+    }, 1000)
+  } finally {
+    pairingBusy.value = false
+  }
+}
+
+onBeforeUnmount(stopPairingCountdown)
+
+const deviceBusy = ref<number | null>(null)
+
+async function revokeDevice(id: number) {
+  deviceBusy.value = id
+  try {
+    await $fetch(`/api/devices/${id}`, { method: 'DELETE' })
+    await refreshDevices()
+  } finally {
+    deviceBusy.value = null
+  }
+}
+
 async function signOut() {
   await $fetch('/auth/logout', { method: 'POST' })
   await clear()
@@ -1012,6 +1071,59 @@ const sugarLabel = computed(() => {
         <p v-if="pollVoted" class="text-xs text-base-content/60">
           Thanks! You voted <strong>Yes</strong>. Due to how fast AI development is, expect these to start showing the next time you login.
         </p>
+      </div>
+    </section>
+
+    <!--
+      docs/samsung-health-sync.md §3. The app's own sign-in screen pairs
+      itself automatically after Google sign-in; this is the fallback for a
+      second device, or for pairing without going through Google again.
+    -->
+    <section class="card bg-base-100 shadow-sm">
+      <div class="card-body p-4 gap-3">
+        <h2 class="font-semibold">Connected devices</h2>
+
+        <ul v-if="devices.length" class="divide-y divide-base-200 -mx-4">
+          <li
+            v-for="d in devices"
+            :key="d.id"
+            class="flex items-center justify-between gap-3 px-4 py-2"
+          >
+            <div class="min-w-0">
+              <div class="text-sm font-medium truncate">{{ d.name }}</div>
+              <div class="text-xs text-base-content/50">
+                {{ d.last_sync_at ? `Last synced ${d.last_sync_at}`
+                  : d.last_used_at ? 'Connected, never synced'
+                  : 'Never connected' }}
+              </div>
+            </div>
+            <button
+              class="btn btn-ghost btn-xs text-error shrink-0"
+              :disabled="deviceBusy === d.id"
+              @click="revokeDevice(d.id)"
+            >
+              Remove
+            </button>
+          </li>
+        </ul>
+
+        <div v-if="pairing" class="alert alert-info flex-col items-start gap-1 py-2">
+          <span class="text-xs">
+            Open the Fittown app and enter this code — good for
+            {{ Math.max(1, Math.ceil(pairingSecondsLeft / 60)) }} more minute(s):
+          </span>
+          <span class="font-mono text-2xl tracking-[0.3em]">{{ pairing.code }}</span>
+        </div>
+
+        <button
+          v-else
+          class="btn btn-outline btn-sm self-start"
+          :disabled="pairingBusy"
+          @click="startPairing"
+        >
+          <span v-if="pairingBusy" class="loading loading-spinner loading-xs" />
+          Connect a phone
+        </button>
       </div>
     </section>
 

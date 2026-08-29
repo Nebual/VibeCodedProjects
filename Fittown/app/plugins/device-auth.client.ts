@@ -1,53 +1,67 @@
-import { Capacitor, registerPlugin } from '@capacitor/core'
+import { App } from '@capacitor/app'
+import { Capacitor } from '@capacitor/core'
 
 /**
- * Bootstrap a session inside the Capacitor shell (docs/samsung-health-sync.md
- * §3, §6). Google OAuth refuses to run inside a WebView
- * (`disallowed_useragent`), so the phone app can't reach /auth/google the way
- * a real browser does. Instead: on launch, if we're running natively and
- * don't already have a session, ask the native layer (DeviceTokenPlugin.kt)
- * for the token paired at Settings -> Connect a phone
- * (POST /api/devices/claim) and trade it in at POST /auth/device — the same
- * session cookie /auth/google would have set.
+ * Two ways a device token turns into a session inside the Capacitor shell
+ * (docs/samsung-health-sync.md §3, §6). Google OAuth refuses to run inside a
+ * WebView (`disallowed_useragent`), so neither path goes through
+ * /auth/google directly — see the comment on OAUTH_APP_COOKIE in
+ * server/routes/auth/google.get.ts for how the sign-in button avoids that
+ * while still ending up here.
  *
  * A no-op in every ordinary browser: Capacitor.isNativePlatform() is false
  * there, so this plugin costs nothing beyond that one check.
- *
- * First-launch timing, worth knowing rather than discovering: the very first
- * cold launch right after pairing has no session cookie yet, so the global
- * auth middleware's server-side render shows /login before this plugin ever
- * runs. That's fine, not a bug — login.vue already has a `watchEffect` that
- * navigates away the instant `loggedIn` turns true, so once this plugin's
- * fetch resolves, the app bounces itself to `/` without anything extra here.
- * Every launch after the first reuses the WebView's persisted cookie and
- * never reaches this code path at all.
  */
-interface DeviceTokenPlugin {
-  getToken(): Promise<{ token: string | null }>
-}
-
-const DeviceToken = registerPlugin<DeviceTokenPlugin>('DeviceToken')
-
 export default defineNuxtPlugin(() => {
   if (!Capacitor.isNativePlatform()) return
 
+  // 1. Already paired, cold launch: trade the stored token for a session
+  // before the auth middleware ever gets a chance to redirect to /login.
+  //
+  // First-launch timing, worth knowing rather than discovering: the very
+  // first cold launch right after pairing has no session cookie yet, so the
+  // server-rendered response shows /login before this ever runs. That's
+  // fine, not a bug — login.vue already has a `watchEffect` that navigates
+  // away the instant `loggedIn` turns true, so once this resolves, the app
+  // bounces itself to `/` without anything extra here. Every launch after
+  // the first reuses the WebView's persisted cookie and never reaches this
+  // code path at all.
   onNuxtReady(async () => {
-    const { loggedIn, fetch: refreshSession } = useUserSession()
+    const { loggedIn } = useUserSession()
     if (loggedIn.value) return
 
     const { token } = await DeviceToken.getToken()
-    if (!token) return // Not paired yet — Settings walks the user through it.
+    if (!token) return // Not paired yet.
 
     try {
       await $fetch('/auth/device', {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
       })
-      await refreshSession()
+      await useUserSession().fetch()
     } catch {
-      // A revoked or invalid token. Surfacing this as something the user can
-      // act on (re-pair from Settings) is Phase 5 polish, not this plugin's
-      // job — the auth middleware already leaves them on /login regardless.
+      // Revoked or invalid — the auth middleware leaves the user on /login
+      // regardless; Settings (Phase 5) is where they'd notice and re-pair.
     }
+  })
+
+  // 2. The pairing deep link, fittown://pair?code=XXXXXXXX — either tapped
+  // by hand from a browser's "Connect a phone" screen, or arrived
+  // automatically as the tail end of the app's own Google sign-in
+  // (createPairCode() in server/utils/deviceAuth.ts). Route it through
+  // /pair rather than claiming here directly, so there's exactly one place
+  // (the page) that does the claim, whether the code was typed or handed to
+  // us this way.
+  App.addListener('appUrlOpen', ({ url }) => {
+    let parsed: URL
+    try {
+      parsed = new URL(url)
+    } catch {
+      return
+    }
+    if (parsed.protocol !== 'fittown:' || parsed.hostname !== 'pair') return
+
+    const code = parsed.searchParams.get('code')
+    if (code) navigateTo({ path: '/pair', query: { code } })
   })
 })

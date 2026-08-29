@@ -86,6 +86,62 @@ describe('generatePairCode', () => {
   })
 })
 
+describe('createPairCode', () => {
+  it('inserts an unclaimed row a pairing code can later claim', async () => {
+    const db = await boot()
+    seedUser(db)
+    const { createPairCode } = await deviceAuth()
+
+    const { code, expiresAt } = createPairCode(db, 1, 'Phone (Google sign-in)')
+
+    expect(code).toHaveLength(8)
+    const row = db
+      .prepare('SELECT user_id, name, token_hash, pair_code, pair_expires FROM device_tokens')
+      .get() as {
+      user_id: number
+      name: string
+      token_hash: string | null
+      pair_code: string
+      pair_expires: string
+    }
+    expect(row.user_id).toBe(1)
+    expect(row.name).toBe('Phone (Google sign-in)')
+    expect(row.token_hash).toBeNull() // unclaimed — see the schema comment
+    expect(row.pair_code).toBe(code)
+    expect(row.pair_expires).toBe(expiresAt)
+  })
+
+  it('defaults the name when the caller (e.g. Settings) does not supply one', async () => {
+    const db = await boot()
+    seedUser(db)
+    const { createPairCode } = await deviceAuth()
+
+    createPairCode(db, 1)
+
+    const row = db.prepare('SELECT name FROM device_tokens').get() as { name: string }
+    expect(row.name).toBe('Unnamed device')
+  })
+
+  it('two pairings for the same user can coexist unclaimed at once', async () => {
+    // token_hash is NULL for both, and device_tokens.token_hash is UNIQUE —
+    // this is exactly the case that column being nullable-and-unique exists
+    // to allow (server/db/schema.ts's comment on it).
+    const db = await boot()
+    seedUser(db)
+    const { createPairCode } = await deviceAuth()
+
+    createPairCode(db, 1)
+    createPairCode(db, 1)
+
+    const count = (
+      db.prepare('SELECT COUNT(*) AS n FROM device_tokens WHERE user_id = 1').get() as {
+        n: number
+      }
+    ).n
+    expect(count).toBe(2)
+  })
+})
+
 describe('requireDevice', () => {
   it('throws 401 with no Authorization header', async () => {
     const db = await boot()

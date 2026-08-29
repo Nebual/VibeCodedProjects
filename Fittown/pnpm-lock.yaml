@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@capacitor/core':
+        specifier: ^7.4.4
+        version: 7.6.8
       barcode-detector:
         specifier: ^3.2.2
         version: 3.2.2(@types/emscripten@1.41.5)
@@ -209,6 +212,9 @@ packages:
         optional: true
       commander:
         optional: true
+
+  '@capacitor/core@7.6.8':
+    resolution: {integrity: sha512-x1xfxvNcTSnj6OoYaAB0n0a0HRvi5f2YjcVnMLxpMhbHDgGDAzzN9z8cnPCYV+SKTvqGF1hezHm82Op32XaAGg==}
 
   '@clack/core@1.4.3':
     resolution: {integrity: sha512-/kr3UWNtdJfxZtPgDqUOmG2pvwlmcLGheex5yiZKdwbzZJxhV+HMNR9QNmyY5cGwTNV6LrR7Jtp+KjhUAP1qBQ==}
@@ -3056,6 +3062,9 @@ packages:
   tr46@0.0.3:
     resolution: {integrity: sha512-N3WMsuqV66lT30CrXNbEjx4GEwlow3v6rr4mCcv6prnfwhS01rkgyFdjPNBYd9br7LpXV1+Emh01fHnq2Gdgrw==}
 
+  tslib@2.8.1:
+    resolution: {integrity: sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w==}
+
   type-fest@5.8.0:
     resolution: {integrity: sha512-YGYEVz3Fm5iy/AybuA0oyNFq7H4CgQNfRp/qfe8nurE1kuCeNm3/vfm9X4Mtl+qLyaKJUh5xrFZwogr41SMjYA==}
     engines: {node: '>=20'}
@@ -3728,6 +3737,10 @@ snapshots:
   '@bomb.sh/tab@0.0.19(citty@0.2.2)':
     optionalDependencies:
       citty: 0.2.2
+
+  '@capacitor/core@7.6.8':
+    dependencies:
+      tslib: 2.8.1
 
   '@clack/core@1.4.3':
     dependencies:
@@ -6800,6 +6813,8 @@ snapshots:
   totalist@3.0.1: {}
 
   tr46@0.0.3: {}
+
+  tslib@2.8.1: {}
 
   type-fest@5.8.0:
     dependencies:

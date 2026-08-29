@@ -1,5 +1,6 @@
 import type { H3Event } from 'h3'
 import { createHash, randomBytes, randomInt } from 'node:crypto'
+import type { DatabaseSync } from 'node:sqlite'
 import type { DbUser } from './auth'
 import { useDb } from './db'
 
@@ -35,6 +36,33 @@ export function generatePairCode(): string {
 
 export function pairCodeExpiresAt(): string {
   return new Date(Date.now() + PAIR_CODE_TTL_MIN * 60_000).toISOString()
+}
+
+/**
+ * Start a pairing: an unclaimed device_tokens row with a fresh code.
+ *
+ * Two callers: Settings' "Connect a phone" button (a signed-in browser asking
+ * on the user's behalf), and the Google sign-in redirect for a request that
+ * came from the app (`onSuccess` in server/routes/auth/google.get.ts, where
+ * the user just proved who they are by finishing OAuth — see the comment
+ * there for why that still goes through a pairing code rather than opening a
+ * session directly). Both want the exact same row shape, so this is the one
+ * place that creates one.
+ */
+export function createPairCode(
+  db: DatabaseSync,
+  userId: number,
+  name = 'Unnamed device',
+): { code: string; expiresAt: string } {
+  const code = generatePairCode()
+  const expiresAt = pairCodeExpiresAt()
+
+  db.prepare(
+    `INSERT INTO device_tokens (user_id, name, pair_code, pair_expires)
+     VALUES (?, ?, ?, ?)`,
+  ).run(userId, name, code, expiresAt)
+
+  return { code, expiresAt }
 }
 
 /**

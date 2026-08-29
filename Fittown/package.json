@@ -18,6 +18,8 @@
     "gman-deploy": "git push && ssh gman@gman '/servers/fittown/Fittown/bin/deploy-fittown.sh'"
   },
   "dependencies": {
+    "@capacitor/app": "^7.1.2",
+    "@capacitor/browser": "^7.0.5",
     "@capacitor/core": "^7.4.4",
     "barcode-detector": "^3.2.2",
     "nuxt": "^4.5.2",
