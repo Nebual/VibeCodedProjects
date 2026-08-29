@@ -3,14 +3,24 @@
 How Samsung Health / Galaxy Watch data (chiefly its estimated calories burned)
 gets into Fittown, and why the design is shaped the way it is.
 
-Status: **Phase 1 (server) built and tested** — schema, device pairing,
-`/api/health/sync` with the calorie cascade, `health_sync_log`, and the
-reversible `workout_calorie_source` setting. Phases 2–5 (the Capacitor shell,
-Health Connect, background sync, UI polish) are still just this plan; they
-need an Android toolchain and a physical phone this environment doesn't have.
-See `server/utils/healthSync.ts`, `server/utils/deviceAuth.ts` and
-`test/health-sync-db.test.ts` / `test/device-auth-db.test.ts` for the built
-half.
+Status: **Phase 1 (server) built and tested.** **Phase 2 (the shell)
+scaffolded and compiles** — see `mobile/` — but is unverified beyond that: no
+emulator or physical phone was available to actually run it. Phases 3–5
+(Health Connect, background sync, UI polish) are still just this plan.
+
+- Phase 1: schema, device pairing, `/api/health/sync` with the calorie
+  cascade, `health_sync_log`, the reversible `workout_calorie_source`
+  setting. `server/utils/healthSync.ts`, `server/utils/deviceAuth.ts`,
+  `test/health-sync-db.test.ts`, `test/device-auth-db.test.ts`.
+- Phase 2: a Capacitor Android project (`mobile/`) with the `fittown://pair`
+  deep link, a Kotlin plugin storing the device token in
+  EncryptedSharedPreferences (`DeviceTokenPlugin.kt`), and a client plugin
+  (`app/plugins/device-auth.client.ts`) that trades it for a session at
+  `/auth/device` on launch. `./gradlew assembleDebug` succeeds and the
+  resulting APK was inspected (`aapt`, `dexdump`) to confirm both actually
+  landed in the build — that's the limit of what could be checked without a
+  device. See `mobile/README-sandbox-build.md` for what that setup took and
+  what's still unverified.
 
 ---
 

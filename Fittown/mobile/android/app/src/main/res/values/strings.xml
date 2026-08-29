@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Fittown</string>
+    <string name="title_activity_main">Fittown</string>
+    <string name="package_name">com.fittown.app</string>
+    <string name="custom_url_scheme">com.fittown.app</string>
+</resources>

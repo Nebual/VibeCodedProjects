@@ -1,3 +1,7 @@
+# A debug APK copied to the repo root for easy download — rebuild from
+# mobile/android rather than commit this.
+/fittown-debug.apk
+
 # Nuxt dev/build outputs
 .output
 .data
@@ -29,3 +33,14 @@ data/
 *.db
 *.db-wal
 *.db-shm
+
+# Capacitor Android shell (mobile/) — build outputs and the machine-specific
+# SDK path Gradle writes to local.properties. Source (Kotlin, manifest,
+# Gradle config) is tracked; generated/local-only files are not.
+mobile/android/**/build/
+mobile/android/.gradle/
+mobile/android/local.properties
+mobile/android/app/src/main/assets/public/
+mobile/android/app/src/main/assets/capacitor.config.json
+mobile/android/app/src/main/assets/capacitor.plugins.json
+mobile/package-lock.json
