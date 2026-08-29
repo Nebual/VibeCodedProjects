@@ -143,6 +143,8 @@ function onPortionGroupFocusOut(event: FocusEvent, entry: DiaryEntry) {
   commitPortion(entry)
 }
 
+const showQuickAdd = ref(false)
+
 function commitPortion(entry: DiaryEntry) {
   if (editingEntryId.value !== entry.id) return
   editingEntryId.value = null
