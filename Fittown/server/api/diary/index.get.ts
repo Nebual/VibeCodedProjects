@@ -115,9 +115,9 @@ export default defineEventHandler(async (event) => {
   // is computed against a different body weight than the figure stored after.
   const latest = db
     .prepare(
-      'SELECT weight_kg FROM weight_entries WHERE user_id = ? ORDER BY date DESC LIMIT 1',
+      'SELECT date, weight_kg FROM weight_entries WHERE user_id = ? ORDER BY date DESC LIMIT 1',
     )
-    .get(user.id) as { weight_kg: number } | undefined
+    .get(user.id) as { date: string; weight_kg: number } | undefined
 
   // Every tracked measurement, with the day's reading attached where there is
   // one. Sending the full type list (not just the days's entries) is what lets
@@ -233,6 +233,7 @@ export default defineEventHandler(async (event) => {
     goal_suggestion: goalSuggestion,
     weight_kg: weight?.weight_kg ?? null,
     latest_weight_kg: latest?.weight_kg ?? null,
+    latest_weight_date: latest?.date ?? null,
     biometrics,
     reminders,
   }

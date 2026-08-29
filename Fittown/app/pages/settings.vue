@@ -17,6 +17,7 @@ import {
 import type { MeasurementSystem, PortionDefault } from '#shared/portions'
 import { SHARE_TOGGLES, sharePermissions, type ShareKey } from '#shared/sharing'
 import type { DiaryCardId } from '#shared/diaryCards'
+import { fromLocalDate } from '~/utils/dates'
 
 useHead({ title: 'Settings · Fittown' })
 
@@ -257,6 +258,26 @@ const weightUnit = computed<WeightUnit>({
 const weightDraft = ref<number | null>(null)
 const weightSaved = ref(false)
 
+const logButton = useTemplateRef<HTMLButtonElement>('logButton')
+const { fireConfetti } = useConfetti()
+const lossToast = ref<{ kg: number; daysAgo: number | null } | null>(null)
+let lossToastTimer: ReturnType<typeof setTimeout> | undefined
+
+function daysBetween(laterIso: string, earlierIso: string): number {
+  return Math.round((fromLocalDate(laterIso).getTime() - fromLocalDate(earlierIso).getTime()) / 86_400_000)
+}
+
+function celebrateLoss(lostKg: number, daysAgo: number | null) {
+  const origin = logButton.value?.getBoundingClientRect()
+  fireConfetti(origin ? { x: origin.left + origin.width / 2, y: origin.top + origin.height / 2 } : undefined)
+
+  lossToast.value = { kg: lostKg, daysAgo }
+  clearTimeout(lossToastTimer)
+  lossToastTimer = setTimeout(() => { lossToast.value = null }, 5000)
+}
+
+onBeforeUnmount(() => clearTimeout(lossToastTimer))
+
 /** Seed the field with the most recent weigh-in so it's an edit, not a re-entry. */
 watchEffect(() => {
   const latest = data.value?.latest_weight
@@ -275,16 +296,30 @@ const currentWeightKg = computed(() => {
   return data.value?.latest_weight?.weight_kg ?? null
 })
 
+/**
+ * Compares the new reading against the most recent weigh-in on record — this
+ * day's own previous value if it was the last one logged, otherwise whatever
+ * came before. Same rule as the diary's weight card, so a loss celebrates
+ * consistently wherever it's logged from.
+ */
 async function saveWeight() {
   if (weightDraft.value === null || !today.value) return
   const kg = weightUnit.value === 'lb' ? lbToKg(weightDraft.value) : weightDraft.value
+  const rounded = Number(kg.toFixed(3))
+  const previous = data.value?.latest_weight ?? null
+
   await $fetch('/api/weight', {
     method: 'POST',
-    body: { date: today.value, weight_kg: Number(kg.toFixed(3)) },
+    body: { date: today.value, weight_kg: rounded },
   })
   await refresh()
   weightSaved.value = true
   setTimeout(() => (weightSaved.value = false), 2500)
+
+  if (previous !== null && rounded < previous.weight_kg - 0.001) {
+    const gap = daysBetween(today.value, previous.date)
+    celebrateLoss(previous.weight_kg - rounded, gap > 0 ? gap : null)
+  }
 }
 
 // --- Unit systems ---------------------------------------------------------
@@ -602,6 +637,7 @@ const sugarLabel = computed(() => {
             type="number" min="10" step="any" inputmode="decimal"
             class="input input-bordered input-sm join-item flex-1"
             :placeholder="weightUnit" aria-label="Weight"
+            @keyup.enter="saveWeight"
           >
           <button
             v-for="u in (['kg', 'lb'] as WeightUnit[])"
@@ -612,6 +648,7 @@ const sugarLabel = computed(() => {
             @click="weightUnit = u"
           >{{ u }}</button>
           <button
+            ref="logButton"
             class="btn btn-sm btn-primary join-item"
             :disabled="weightDraft === null || !today"
             @click="saveWeight"
@@ -625,6 +662,18 @@ const sugarLabel = computed(() => {
           {{ formatWeight(data.latest_weight.weight_kg, weightUnit) }}
           on {{ data.latest_weight.date }}.
         </p>
+      </div>
+
+      <div
+        v-if="lossToast"
+        class="toast toast-center sm:toast-end z-40 bottom-[calc(var(--dock-height)+env(safe-area-inset-bottom,0px)+0.75rem)] sm:bottom-4"
+      >
+        <div class="alert alert-success shadow-lg">
+          <AppIcon name="scale" class="w-5 h-5" />
+          <span>
+            Down {{ formatWeight(lossToast.kg, weightUnit) }} since your last weigh-in<template v-if="lossToast.daysAgo"> ({{ lossToast.daysAgo }} day{{ lossToast.daysAgo === 1 ? '' : 's' }} ago)</template>!
+          </span>
+        </div>
       </div>
     </section>
 

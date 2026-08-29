@@ -147,6 +147,8 @@ export interface DiaryDay {
   weight_kg: number | null
   /** Most recent weigh-in on any date — what the calorie estimate uses. */
   latest_weight_kg: number | null
+  /** The date that reading was logged on, for "3 days ago" on a fresh loss. */
+  latest_weight_date: string | null
   biometrics: BiometricRow[]
   reminders: ReminderRow[]
 }

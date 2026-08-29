@@ -1,8 +1,12 @@
 <script setup lang="ts">
 import { kgToLb, lbToKg, type WeightUnit } from '#shared/body'
 import type { BiometricRow } from '~/composables/useDiary'
+import { fromLocalDate } from '~/utils/dates'
 
 const props = defineProps<{
+  /** The day being logged for — used to date-stamp a fresh loss against
+   *  `latestWeightDate` as "N days ago". */
+  date: string
   /** The reading stored for this day, in kg. Null when nothing was logged. */
   weightKg: number | null
   unit: WeightUnit
@@ -10,6 +14,11 @@ const props = defineProps<{
   biometrics: BiometricRow[]
   /** Wording differs for past days: "Not logged" reads better than a prompt. */
   isToday: boolean
+  /** Most recent weigh-in on any date, in kg, before this save — what a new
+   *  reading is compared against to celebrate a loss. Null if never logged. */
+  latestWeightKg: number | null
+  /** The date that reading was logged on. Null exactly when latestWeightKg is. */
+  latestWeightDate: string | null
 }>()
 
 const emit = defineEmits<{
@@ -26,6 +35,31 @@ const emit = defineEmits<{
 const editing = ref(false)
 const draft = ref<number | null>(null)
 const weightInput = useTemplateRef<HTMLInputElement>('weightInput')
+/** The collapsed number-and-pencil row — where the new value lands once
+ *  editing closes, and so where a loss should visually burst from. */
+const weightDisplay = useTemplateRef<HTMLDivElement>('weightDisplay')
+
+const { fireConfetti } = useConfetti()
+
+/** Set only right after a save that came in under the last weigh-in; cleared
+ *  on a timer so the toast doesn't outlive its moment. */
+const lossToast = ref<{ kg: number; daysAgo: number | null } | null>(null)
+let lossToastTimer: ReturnType<typeof setTimeout> | undefined
+
+function daysBetween(laterIso: string, earlierIso: string): number {
+  return Math.round((fromLocalDate(laterIso).getTime() - fromLocalDate(earlierIso).getTime()) / 86_400_000)
+}
+
+function celebrateLoss(lostKg: number, daysAgo: number | null) {
+  const origin = weightDisplay.value?.getBoundingClientRect()
+  fireConfetti(origin ? { x: origin.left + origin.width / 2, y: origin.top + origin.height / 2 } : undefined)
+
+  lossToast.value = { kg: lostKg, daysAgo }
+  clearTimeout(lossToastTimer)
+  lossToastTimer = setTimeout(() => { lossToast.value = null }, 5000)
+}
+
+onBeforeUnmount(() => clearTimeout(lossToastTimer))
 
 watch(editing, async (open) => {
   if (!open) return
@@ -68,11 +102,34 @@ function switchUnit(next: WeightUnit) {
   emit('unit', next)
 }
 
-function saveWeight() {
+/**
+ * Compares the new reading against the most recent weigh-in on record — this
+ * day's own previous value if it was the last one logged, otherwise whatever
+ * came before. There's nothing to compare a first-ever reading against, so
+ * that case just logs quietly.
+ */
+async function saveWeight() {
   if (draft.value === null || !Number.isFinite(draft.value)) return
   const kg = props.unit === 'lb' ? lbToKg(draft.value) : draft.value
-  emit('save', Number(kg.toFixed(3)))
+  const rounded = Number(kg.toFixed(3))
+  const previous = props.latestWeightKg
+
+  emit('save', rounded)
   editing.value = false
+
+  if (previous !== null && rounded < previous - 0.001) {
+    // Days since whatever weigh-in `previous` came from — not shown when
+    // that isn't a meaningful "ago" (today's own earlier reading, or, on a
+    // past day being backfilled, a "latest" that's actually later than it).
+    const gap = props.latestWeightDate ? daysBetween(props.date, props.latestWeightDate) : null
+    const daysAgo = gap !== null && gap > 0 ? gap : null
+
+    // Wait for the edit form to close and the number-and-pencil row to be
+    // back in the DOM, so the burst centres on where the new figure lands
+    // rather than on the input it replaced.
+    await nextTick()
+    celebrateLoss(previous - rounded, daysAgo)
+  }
 }
 
 // --- Custom measurements --------------------------------------------------
@@ -144,7 +201,7 @@ const confirmingRemove = ref<number | null>(null)
       <div class="flex items-center justify-between gap-2 min-h-8">
         <span class="text-sm">Weight</span>
 
-        <div v-if="!editing" class="flex items-center gap-1">
+        <div v-if="!editing" ref="weightDisplay" class="flex items-center gap-1">
           <span v-if="shown !== null" class="text-sm tabular">
             {{ shown }} <span class="text-base-content/40">{{ unit }}</span>
           </span>
@@ -286,6 +343,18 @@ const confirmingRemove = ref<number | null>(null)
       <p v-if="!biometrics.length && !adding" class="text-xs text-base-content/50">
         Track anything else you measure — bicep, waist, resting heart rate.
       </p>
+    </div>
+
+    <div
+      v-if="lossToast"
+      class="toast toast-center sm:toast-end z-40 bottom-[calc(var(--dock-height)+env(safe-area-inset-bottom,0px)+0.75rem)] sm:bottom-4"
+    >
+      <div class="alert alert-success shadow-lg">
+        <AppIcon name="scale" class="w-5 h-5" />
+        <span>
+          Down {{ inUnit(lossToast.kg, unit) }} {{ unit }} since your last weigh-in<template v-if="lossToast.daysAgo"> ({{ lossToast.daysAgo }} day{{ lossToast.daysAgo === 1 ? '' : 's' }} ago)</template>!
+        </span>
+      </div>
     </div>
   </section>
 </template>

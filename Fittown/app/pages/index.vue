@@ -127,10 +127,13 @@ async function updateEntryPortion(id: number, body: Record<string, unknown>) {
 
       <BodyMeasurements
         v-if="cardVisible.body"
+        :date="date!"
         :weight-kg="day.weight_kg"
         :unit="day.goals.weight_unit"
         :biometrics="day.biometrics"
         :is-today="date === today"
+        :latest-weight-kg="day.latest_weight_kg"
+        :latest-weight-date="day.latest_weight_date"
         @save="setWeight"
         @clear="clearWeight"
         @unit="setWeightUnit"
