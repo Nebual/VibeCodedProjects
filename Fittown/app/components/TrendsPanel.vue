@@ -198,6 +198,16 @@ const goalWeightDisplay = computed(() => {
   return unit.value === 'lb' ? kgToLb(goal) : goal
 })
 
+/**
+ * A rate (kg or lb per week), not an absolute weight, so `kgToLb` — a plain
+ * multiplier with no offset — converts it just as validly as a point value.
+ */
+const goalRateDisplay = computed(() => {
+  const rate = data.value?.goals?.goal_rate_kg_per_week ?? null
+  if (rate === null) return null
+  return unit.value === 'lb' ? kgToLb(rate) : rate
+})
+
 // --- Custom measurements ---------------------------------------------------
 
 /**
@@ -274,6 +284,8 @@ const nothingToShow = computed(
         :to="to"
         :range-days="range"
         :goal="goalWeightDisplay"
+        :goal-rate-per-week="goalRateDisplay"
+        dots
         :class="isYear ? 'order-first' : 'order-last'"
       />
 
