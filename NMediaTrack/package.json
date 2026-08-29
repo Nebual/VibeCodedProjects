@@ -7,6 +7,7 @@
     "dev": "nuxt dev",
     "generate": "nuxt generate",
     "preview": "nuxt preview --port 8188",
+    "gman-deploy": "git push && ssh gman@gman '/servers/nmediatrack/NMediaTrack/bin/gman-deploy.sh'",
     "start": "node --env-file-if-exists=.env scripts/start.mjs",
     "postinstall": "nuxt prepare"
   },

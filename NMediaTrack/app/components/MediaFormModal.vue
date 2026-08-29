@@ -11,7 +11,13 @@ import {
 import type { MediaItem, MediaType } from '~~/shared/types'
 
 // Create or edit a media entry. Pass `item` to edit; omit to create.
-const props = defineProps<{ item?: MediaItem | null }>()
+// `initialTitle` / `initialType` seed a new entry (e.g. adding straight from the
+// search box, where the query is the name and the active tab is the type).
+const props = defineProps<{
+  item?: MediaItem | null
+  initialTitle?: string
+  initialType?: MediaType
+}>()
 const emit = defineEmits<{ close: []; saved: [item: MediaItem] }>()
 
 const { create, update, myReview } = useMedia()
@@ -94,8 +100,8 @@ watch(
   () => props.item,
   (it) => {
     const activityDate = toDateInput(it?.lastActivityAt)
-    form.title = it?.title ?? ''
-    form.type = it?.type ?? 'game'
+    form.title = it?.title ?? props.initialTitle ?? ''
+    form.type = it?.type ?? props.initialType ?? 'game'
     form.status = it?.status ?? 'backlog'
     form.companions = it ? [...it.companions] : []
     form.lastEpisode = it?.lastEpisode ?? ''

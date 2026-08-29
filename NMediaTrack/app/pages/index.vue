@@ -143,11 +143,28 @@ const counts = computed(() => {
 // --- Add / edit modal --------------------------------------------------------
 const showModal = ref(false)
 const editing = ref<MediaItem | null>(null)
+// Prefill for "add what I just searched for".
+const addTitle = ref('')
+const addType = ref<MediaType | undefined>(undefined)
+
+// Once the query is specific enough it doubles as a name, so adding anything
+// seeds the form from what you were looking at: the query as the title, the
+// active tab as the type.
+const searchQuery = computed(() => search.value.trim())
+const canAddFromSearch = computed(() => searchQuery.value.length >= 5)
 
 function openAdd() {
   editing.value = null
+  addTitle.value = canAddFromSearch.value ? searchQuery.value : ''
+  addType.value = typeFilter.value === 'all' ? undefined : typeFilter.value
   showModal.value = true
 }
+
+/** Enter in the search box adds it, but only when nothing already matches. */
+function onSearchEnter() {
+  if (canAddFromSearch.value && !filtered.value.length) openAdd()
+}
+
 function openEdit(item: MediaItem) {
   editing.value = item
   showModal.value = true
@@ -247,12 +264,23 @@ function pickRandom() {
 
       <!-- Search / status / sort -->
       <div class="flex flex-wrap items-center gap-2">
-        <input
-          v-model="search"
-          type="text"
-          placeholder="Search title, person…"
-          class="input input-bordered input-sm w-full sm:w-56"
-        />
+        <div class="flex w-full items-center gap-2 sm:w-auto">
+          <input
+            v-model="search"
+            type="text"
+            placeholder="Search title, person…"
+            class="input input-bordered input-sm w-full sm:w-56"
+            @keydown.enter="onSearchEnter"
+          />
+          <button
+            v-if="canAddFromSearch"
+            class="btn btn-sm btn-primary whitespace-nowrap"
+            :title="`Add “${searchQuery}”${filtered.length ? '' : ' — or just hit Enter'}`"
+            @click="openAdd"
+          >
+            ＋ Add
+          </button>
+        </div>
         <!-- daisyUI sizes `.select` at `clamp(3rem, 20rem, 100%)`, i.e. 320px.
              An explicit width overrides it (utilities layer beats components). -->
         <select
@@ -419,6 +447,8 @@ function pickRandom() {
     <MediaFormModal
       v-if="showModal"
       :item="editing"
+      :initial-title="addTitle"
+      :initial-type="addType"
       @close="showModal = false"
       @saved="refresh"
     />
