@@ -148,6 +148,17 @@ Read those numbers carefully before optimizing:
   first thing that touches an item which was already to buy, so `pick()` captures the
   snapshot lazily. The "already to buy" label reads `wasToBuy` instead, which is why that
   field exists.
+- **"Costco only" is a view filter and nothing else.** It hides rows wearing
+  `other-store` and is remembered in `localStorage` (`nshoppinglist:hide-other-store`),
+  but it never touches stored items, and it deliberately does *not* narrow `exactMatch` /
+  `canAdd`: typing the name of a hidden item must still be recognised as already on the
+  list, or the filter would quietly manufacture duplicates. It *does* narrow the "N to
+  buy" count — a count including things you can't buy here is the wrong number to shop
+  against — which is exactly why the `+N at another shop` button next to it isn't
+  decoration. The filter outlives a reload, so something has to say what's missing.
+- **`OTHER_STORE_FILTER_LABEL` is separate from `TAG_SYMBOL_LABELS['other-store']`** for
+  the same reason the label is separate from the id: "Costco only" is not derivable from
+  "Not at Costco", and both are the user's vocabulary, so both live in `shared/tags.ts`.
 - **`applyRemote` calls `scheduleSort` when a colour arrives from another device.**
   `reconcileOrder` only files *new* ids, so without it the grouping — the entire point of a
   colour — never appears on the other phone.
@@ -174,6 +185,28 @@ The known cost is that `milk - the 2% one` splits in two; that was accepted know
 stray line is one tap, a swallowed item isn't noticed until you're home). The OCR prompt
 asks for these characters back explicitly, so don't "tidy" that instruction out of
 `server/api/ocr.post.ts`.
+
+## Ticking off — the five-second undo
+
+`nextBoughtState` in `shared/bought.ts` is the whole of the tick/untick date logic, kept
+pure so it can be tested without booting Nuxt. `useShoppingList` holds the one piece of
+state it needs: `beforeFlip`, a client-only map of how each item looked before its last
+flip.
+
+- **The window exists because both flips destroy a date.** Ticking overwrites `boughtAt`;
+  unticking overwrites `addedAt`. So a stray tap and its correction between them lose the
+  real purchase date *and* the real add date, and no later tap can recover either.
+- **`stateAt` is restored along with the other two, and that is load-bearing.** It is what
+  stops the undo cascading: after a restore the item carries its old age again, so the
+  next flip fails the `at - item.stateAt < FLIP_UNDO_WINDOW` test and is judged normally.
+  Drop it and tick–untick–tick reads the third tap as an undo of an undo.
+- **`updatedAt` is never restored.** It's the last-writer-wins clock; freezing it would
+  leave the correction losing to the mis-tap on every other device.
+- **`FLIP_UNDO_WINDOW` matches `SORT_DELAY` on purpose** — inside it the list hasn't
+  re-sorted, so the row you tap is still the row you meant. Changing one without the other
+  means a tap can land on a row that has already moved.
+- The snapshot is memory, not data: it never reaches the server or disk, and
+  `restoreItem` clears it, since a bulk-match undo has already put the item back whole.
 
 ## Conventions worth matching
 

@@ -34,6 +34,12 @@ it was last actually bought. If you tick something off within 20 minutes of addi
 it, that's read as undoing a mistake rather than a shopping trip, and the
 "last bought" timestamp is left alone.
 
+**Mis-taps.** Tapping a row and tapping it straight back — within five seconds, before
+the list has even re-sorted — puts both dates back exactly as they were. A fumbled tap
+on the wrong row costs you nothing; without it, a stray tap would rewrite "last bought"
+to today and the honest answer to "when did we last buy coffee" would be gone. A tap
+after that window is taken at face value.
+
 **Deleting.** The per-item menu (and its Delete button, behind a confirmation) only
 appears once an item is bought, so an active list can't be gutted by a stray tap.
 
@@ -55,6 +61,12 @@ Symbols mark an item out *within* its group and never move it: a **star**, and a
 **Not at Costco** shopfront for things that need a different shop. (That label lives
 in `TAG_SYMBOL_LABELS` in `shared/tags.ts` — rename it and nothing else moves, since
 the stored id is the neutral `other-store`.)
+
+**Shopping one shop at a time.** **Costco only** in the menu hides everything wearing
+that shopfront, so the list is just what you can actually put in the trolley here — and
+the "to buy" count means the same thing. The choice sticks across reloads, since a trip
+outlasts a page load, so the list says what it is holding back: a `+3 at another shop`
+button sits next to the count and brings them straight back.
 
 **Applying them in bulk.** Tags are nearly always assigned a dozen at a time, so the
 flow is built for that: **Select & tag** in the menu turns the checkboxes into a

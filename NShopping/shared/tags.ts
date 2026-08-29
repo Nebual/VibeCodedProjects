@@ -29,6 +29,20 @@ export const TAG_SYMBOL_LABELS: Record<TagSymbol, string> = {
   'other-store': 'Not at Costco',
 }
 
+/**
+ * The one symbol a list-wide filter acts on: everything wearing it belongs to a different
+ * errand, so a trip to the main shop can hide it. Named rather than written out at the
+ * filter's call sites, so the id stays a single edit away from meaning a different shop.
+ */
+export const OTHER_STORE_SYMBOL = 'other-store' satisfies TagSymbol
+
+/**
+ * The filter is phrased as the shop you're standing in rather than as the negation of the
+ * symbol, because that's how you'd say it out loud. Like the labels above it is vocabulary,
+ * not data: rename the shop here and nothing stored moves.
+ */
+export const OTHER_STORE_FILTER_LABEL = 'Costco only'
+
 /** Colours are named for what they look like — which store area each one means is the user's call. */
 export const TAG_COLOR_LABELS: Record<TagColor, string> = {
   green: 'Green',

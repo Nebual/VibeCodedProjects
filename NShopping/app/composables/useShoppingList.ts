@@ -1,6 +1,6 @@
 import type { Item, ListResponse } from '#shared/types'
 import type { TagPatch } from '#shared/tags'
-import { CORRECTION_WINDOW } from '#shared/types'
+import { nextBoughtState } from '#shared/bought'
 import { tagRank } from '#shared/tags'
 
 /** Marking things bought shouldn't yank rows out from under a tapping finger. */
@@ -42,6 +42,12 @@ export function useShoppingList(listName: string, options: { readOnly?: boolean 
 
   /** Items edited locally but not yet accepted by the server. */
   const pending = new Map<string, Item>()
+  /**
+   * How each item looked before its last tick, keyed by id, so that flipping straight back
+   * can restore its dates rather than leaving a mis-tap's timestamps behind. One entry per
+   * item at most, and only for items the user has actually touched this session.
+   */
+  const beforeFlip = new Map<string, Item>()
 
   let sortTimer: ReturnType<typeof setTimeout> | undefined
   let syncTimer: ReturnType<typeof setTimeout> | undefined
@@ -203,16 +209,11 @@ export function useShoppingList(listName: string, options: { readOnly?: boolean 
   function setBought(item: Item, bought: boolean) {
     if (readOnly) return
     const at = now()
-    const next: Item = { ...item, bought, stateAt: at, updatedAt: at }
+    const next = nextBoughtState(item, bought, at, beforeFlip.get(item.id))
 
-    if (bought) {
-      // Ticking something off moments after adding it is a correction, not a shopping trip.
-      if (at - item.addedAt >= CORRECTION_WINDOW) next.boughtAt = at
-    }
-    else {
-      // Back on the list: this is the moment it became something to buy again.
-      next.addedAt = at
-    }
+    // Remembered *after* the decision, and unconditionally: the state being left behind is
+    // what the tap after this one would be undoing.
+    beforeFlip.set(item.id, { ...item })
 
     items.value[item.id] = next
     markDirty(next)
@@ -263,6 +264,8 @@ export function useShoppingList(listName: string, options: { readOnly?: boolean 
    */
   function restoreItem(snapshot: Item) {
     if (readOnly) return
+    // The item has been put back wholesale, so whatever a tap was going to undo is already undone.
+    beforeFlip.delete(snapshot.id)
     const next: Item = { ...snapshot, updatedAt: now() }
     items.value[next.id] = next
     if (!next.deleted && !order.value.includes(next.id)) order.value.push(next.id)

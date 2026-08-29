@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { Item } from '#shared/types'
 import type { TagPatch } from '#shared/tags'
+import { OTHER_STORE_FILTER_LABEL, OTHER_STORE_SYMBOL } from '#shared/tags'
 import { generateListName, parseBackupName } from '#shared/listName'
 
 const props = defineProps<{ name: string }>()
@@ -15,6 +16,7 @@ const { sorted, loaded, syncState, addItem, toggle, deleteItem, setTags } = list
 const bulkModal = useTemplateRef<{ open: () => void }>('bulkModal')
 
 const { preference: theme, setTheme } = useTheme()
+const { hideOtherStore, setHideOtherStore } = useStoreFilter()
 
 function clearSearch() {
   query.value = ''
@@ -32,12 +34,35 @@ onBeforeUnmount(() => clearInterval(clock))
 
 const needle = computed(() => query.value.trim().replace(/\s+/g, ' ').toLowerCase())
 
-const visible = computed(() => {
+/**
+ * The store filter and the search are kept apart on purpose. The search narrows what you
+ * are looking at for a moment; the filter says which shop you are standing in, so it also
+ * decides what "12 to buy" means — a count that included things you can't buy here would be
+ * the wrong number to shop against.
+ */
+function forThisShop(item: Item) {
+  return !hideOtherStore.value || item.symbol !== OTHER_STORE_SYMBOL
+}
+
+const searched = computed(() => {
   if (!needle.value) return sorted.value
   return sorted.value.filter(item => item.name.toLowerCase().includes(needle.value))
 })
 
-const remaining = computed(() => sorted.value.filter(item => !item.bought).length)
+const visible = computed(() => searched.value.filter(forThisShop))
+
+const remaining = computed(() => sorted.value.filter(item => !item.bought && forThisShop(item)).length)
+
+/** What the filter is holding back, so the list can own up to it rather than just look shorter. */
+const elsewhere = computed(() => sorted.value.filter(item => !item.bought && !forThisShop(item)).length)
+
+/** The narrower case: what you just searched for is on the list, but not for this shop. */
+const hiddenBySearch = computed(() => searched.value.length - visible.value.length)
+
+function toggleStoreFilter() {
+  closeDropdowns()
+  setHideOtherStore(!hideOtherStore.value)
+}
 
 /**
  * Where to draw the line between "to buy" and "already bought". Anchored to the trailing
@@ -212,6 +237,17 @@ const syncLabel = computed(() => readOnly
             </svg>
           </div>
           <ul tabindex="0" class="dropdown-content menu z-20 w-52 rounded-box border border-base-300 bg-base-100 p-2 shadow-lg">
+            <!-- First, because it's the one you reach for mid-trip rather than mid-setup. -->
+            <li>
+              <button
+                type="button"
+                :class="hideOtherStore ? 'menu-active' : ''"
+                :aria-pressed="hideOtherStore"
+                @click="toggleStoreFilter"
+              >
+                {{ OTHER_STORE_FILTER_LABEL }}
+              </button>
+            </li>
             <li v-if="!readOnly"><button type="button" @click="startSelecting">Select &amp; tag</button></li>
             <li><button type="button" @click="newList">New list</button></li>
             <li><button type="button" @click="openShare">Share</button></li>
@@ -280,8 +316,18 @@ const syncLabel = computed(() => readOnly
       </div>
 
       <template v-else>
-        <p class="mb-2 px-1 text-xs uppercase tracking-wide text-base-content/50">
-          {{ remaining }} to buy
+        <p class="mb-2 flex items-center gap-1.5 px-1 text-xs uppercase tracking-wide text-base-content/50">
+          <span>{{ remaining }} to buy</span>
+          <!-- The filter is sticky across reloads, so what it's hiding is said out loud, next
+               to the count it changes, and one tap away from coming back. -->
+          <button
+            v-if="elsewhere"
+            type="button"
+            class="btn btn-ghost btn-xs h-auto min-h-0 px-1.5 py-0.5 text-xs font-normal normal-case text-base-content/60"
+            @click="setHideOtherStore(false)"
+          >
+            +{{ elsewhere }} at another shop
+          </button>
         </p>
 
         <ul v-if="visible.length" class="flex flex-col gap-1.5">
@@ -302,8 +348,20 @@ const syncLabel = computed(() => readOnly
           </template>
         </ul>
 
+        <p v-else-if="needle && hiddenBySearch" class="py-10 text-center text-sm text-base-content/60">
+          “{{ query.trim() }}” is on the list, but for another shop.
+          <button type="button" class="link link-primary" @click="setHideOtherStore(false)">
+            Show it
+          </button>
+        </p>
         <p v-else-if="needle" class="py-10 text-center text-sm text-base-content/60">
           Nothing matches “{{ query.trim() }}”. Press Add to put it on the list.
+        </p>
+        <p v-else-if="hiddenBySearch" class="py-10 text-center text-sm text-base-content/60">
+          Everything left on this list is for another shop.
+          <button type="button" class="link link-primary" @click="setHideOtherStore(false)">
+            Show it
+          </button>
         </p>
         <p v-else class="py-10 text-center text-sm text-base-content/60">
           {{ readOnly ? 'This backup is empty.' : 'This list is empty. Search above to add your first item.' }}
