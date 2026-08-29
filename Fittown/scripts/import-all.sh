@@ -4,4 +4,6 @@
 pnpx tsx import-off.mjs
 pnpx tsx import-usda-foundation.mjs
 pnpx tsx import-usda-branded.mjs
+pnpx tsx import-fastfood-tidytuesday.mjs
+pnpx tsx import-mcdonalds-menu.mjs
 
