@@ -89,6 +89,13 @@ CREATE TABLE IF NOT EXISTS user_goals (
   -- default is all-on and hiding a card is the deliberate, rare act.
   diary_cards_hidden TEXT,
 
+  -- 'device' | 'estimate'. Which figure a device-synced workout's \`calories\`
+  -- uses: the watch's own estimate, or Fittown's MET model. Only affects rows
+  -- with workout_entries.source = 'health_connect' — see
+  -- docs/samsung-health-sync.md §2.1. 'device' by default: a household that
+  -- paired a watch presumably wants to hear from it.
+  workout_calorie_source TEXT NOT NULL DEFAULT 'device',
+
   updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -403,9 +410,82 @@ CREATE TABLE IF NOT EXISTS workout_entries (
   weight_kg    REAL,
   distance_km  REAL,
   notes        TEXT,
+
+  -- Device sync (docs/samsung-health-sync.md). All null on a hand-logged row.
+  -- 'manual' | 'health_connect'.
+  source        TEXT NOT NULL DEFAULT 'manual',
+  -- Health Connect's own record id. The upsert target for re-syncs — see
+  -- idx_workout_external below.
+  external_id   TEXT,
+  -- Session start, ISO 8601 with the device's own offset. \`date\` stays the
+  -- derived local calendar day everything else already groups by; this is
+  -- additional detail, not a replacement for it.
+  started_at    TEXT,
+  -- What the watch itself reported, kept raw and never overwritten — so
+  -- flipping user_goals.workout_calorie_source can recompute \`calories\` from
+  -- history alone, with no re-sync.
+  device_kcal   REAL,
+  -- Which step of the sync cascade produced \`calories\`:
+  -- 'device' | 'device_window' | 'estimated'. See §2.1 of the doc above.
+  calorie_basis TEXT,
+
   created_at   TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_workout_user_date ON workout_entries(user_id, date);
+
+-- ---------------------------------------------------------------------------
+-- Devices (Samsung Health / Health Connect sync — docs/samsung-health-sync.md)
+--
+-- Google OAuth refuses to run inside the Capacitor phone app's WebView, so a
+-- paired phone authenticates with one of these instead of a Google sign-in.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS device_tokens (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  -- Null while a pairing code is outstanding and unclaimed; set exactly once,
+  -- at claim time, and never again. SQLite allows more than one NULL in a
+  -- UNIQUE column, so several pending pairings can coexist. The raw token is
+  -- shown to the app once, at claim time — this hash is the only copy the
+  -- server ever keeps.
+  token_hash   TEXT UNIQUE,
+  name         TEXT NOT NULL,
+  pair_code    TEXT,
+  pair_expires TEXT,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  last_used_at TEXT,
+  last_sync_at TEXT,
+  revoked_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_device_tokens_user ON device_tokens(user_id);
+CREATE INDEX IF NOT EXISTS idx_device_tokens_pair_code
+  ON device_tokens(pair_code) WHERE pair_code IS NOT NULL;
+
+-- A device-synced workout the user deleted from Fittown. Without this, the
+-- next sync would just re-import it — deleting a device row has to mean
+-- something more durable than deleting the row.
+CREATE TABLE IF NOT EXISTS health_ignored (
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  external_id TEXT NOT NULL,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (user_id, external_id)
+);
+
+-- The last several sync payloads, verbatim. Samsung Health is reported to
+-- stop syncing to Health Connect silently after some app updates, and the
+-- calorie fields it sends are reported incomplete — this is how that gets
+-- noticed, rather than discovered as a gap in Trends weeks later. Trimmed to
+-- the most recent ~20 rows per user by the sync route itself.
+CREATE TABLE IF NOT EXISTS health_sync_log (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  received_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  payload       TEXT NOT NULL,   -- raw JSON as received
+  session_count INTEGER NOT NULL,
+  outcome       TEXT NOT NULL    -- 'ok' | the error message
+);
+CREATE INDEX IF NOT EXISTS idx_health_sync_log_user
+  ON health_sync_log(user_id, received_at);
 
 -- ---------------------------------------------------------------------------
 -- Body metrics
@@ -589,4 +669,11 @@ CREATE INDEX IF NOT EXISTS idx_foods_logged_from
 -- is applied in SQL, so this only needs to make those filters fast.
 CREATE INDEX IF NOT EXISTS idx_foods_reported
   ON foods(reported_by) WHERE reported_by IS NOT NULL;
+
+-- The idempotency guarantee for device sync: re-importing the same Health
+-- Connect session upserts instead of duplicating (docs/samsung-health-sync.md
+-- §4). Can't live in SCHEMA_SQL — external_id reaches an existing database
+-- only via ADDED_COLUMNS, and this index would fail "no such column" there.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_workout_external
+  ON workout_entries(user_id, external_id) WHERE external_id IS NOT NULL;
 `

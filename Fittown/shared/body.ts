@@ -22,6 +22,12 @@
 export const KG_PER_LB = 0.45359237
 export const CM_PER_IN = 2.54
 
+// Used to estimate a workout's calorie burn (kcal = MET x kg x hours) when
+// the user has never logged a weight at all — server/api/workouts/index.post.ts
+// and the device-sync calorie cascade (server/utils/healthSync.ts) both fall
+// back to it. A real weight, once logged, always wins.
+export const FALLBACK_WEIGHT_KG = 70
+
 export type WeightUnit = 'kg' | 'lb'
 export type HeightUnit = 'cm' | 'ftin'
 

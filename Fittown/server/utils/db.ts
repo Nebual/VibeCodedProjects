@@ -129,6 +129,8 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
     // Which Diary cards the user hid, as a JSON array of ids (see
     // shared/diaryCards.ts). Null = everything visible.
     diary_cards_hidden: 'TEXT',
+    // 'device' | 'estimate' — see docs/samsung-health-sync.md §2.1.
+    workout_calorie_source: "TEXT NOT NULL DEFAULT 'device'",
   },
   exercises: {
     met_light: 'REAL',
@@ -139,6 +141,14 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
   },
   workout_entries: {
     effort: 'TEXT',
+    // Device sync (docs/samsung-health-sync.md). Null on every existing,
+    // hand-logged row — 'manual' only reaches new rows via the column
+    // default, not a backfill.
+    source: "TEXT NOT NULL DEFAULT 'manual'",
+    external_id: 'TEXT',
+    started_at: 'TEXT',
+    device_kcal: 'REAL',
+    calorie_basis: 'TEXT',
   },
   // Recipes. Null on the 200k+ imported rows, which costs a byte each in the
   // record header and saves a second table to join on every food query.

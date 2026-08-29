@@ -2,6 +2,7 @@ import { ACTIVITY_KEYS } from '#shared/body'
 import { DIARY_CARD_IDS } from '#shared/diaryCards'
 import { PORTION_DEFAULTS } from '#shared/portions'
 import { SHARE_KEYS } from '#shared/sharing'
+import { recomputeDeviceCalories, type CalorieSource } from '../../utils/healthSync'
 
 /** Numeric goal fields and their accepted ranges. */
 const NUMERIC_GOALS: Record<string, { min: number; max: number }> = {
@@ -34,6 +35,11 @@ const ENUM_GOALS: Record<string, string[]> = {
   portion_default: [...PORTION_DEFAULTS],
   sex: ['male', 'female', 'unspecified'],
   activity_level: [...ACTIVITY_KEYS],
+  // Which figure a device-synced workout's calories use. Handled outside the
+  // generic loop below because changing it also rewrites history — see
+  // recomputeDeviceCalories() in server/utils/healthSync.ts and
+  // docs/samsung-health-sync.md §2.1.
+  workout_calorie_source: ['device', 'estimate'],
 }
 
 export default defineEventHandler(async (event) => {
@@ -98,13 +104,17 @@ export default defineEventHandler(async (event) => {
   sets.push("updated_at = datetime('now')")
   params.push(user.id)
 
-  useDb()
-    .prepare(`UPDATE user_goals SET ${sets.join(', ')} WHERE user_id = ?`)
-    .run(...params)
+  const db = useDb()
+  db.prepare(`UPDATE user_goals SET ${sets.join(', ')} WHERE user_id = ?`).run(...params)
 
-  const goals = useDb()
-    .prepare('SELECT * FROM user_goals WHERE user_id = ?')
-    .get(user.id)
+  // Recompute every device-synced workout's calories from what's already on
+  // disk (device_kcal, or MET x duration) — no re-sync needed. Idempotent, so
+  // it's safe to run whenever the field is present, not only on a real change.
+  if (body.workout_calorie_source !== undefined) {
+    recomputeDeviceCalories(db, user.id, body.workout_calorie_source as CalorieSource)
+  }
+
+  const goals = db.prepare('SELECT * FROM user_goals WHERE user_id = ?').get(user.id)
 
   return { goals }
 })

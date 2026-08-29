@@ -24,6 +24,23 @@ export function assertDate(value: unknown, field = 'date'): string {
   return value
 }
 
+/**
+ * Assert an ISO 8601 datetime carrying an explicit offset (`Z` or ±HH:MM).
+ *
+ * Deliberately rejects a naive/local datetime with no offset — a device sync
+ * payload derives each entry's calendar `date` straight from this string
+ * (server/api/health/sync.post.ts), so an unqualified timestamp would leave
+ * that date ambiguous rather than merely imprecise.
+ */
+export function assertIsoDateTime(value: unknown, field: string): string {
+  if (typeof value !== 'string') bad(`${field} must be a string`)
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/.test(value)) {
+    bad(`${field} must be an ISO 8601 datetime with an explicit offset (Z or +/-HH:MM)`)
+  }
+  if (Number.isNaN(Date.parse(value))) bad(`${field} is not a real datetime`)
+  return value
+}
+
 export function assertMeal(value: unknown): Meal {
   if (typeof value !== 'string' || !MEALS.includes(value as Meal)) {
     bad(`meal must be one of: ${MEALS.join(', ')}`)

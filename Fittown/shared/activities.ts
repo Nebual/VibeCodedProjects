@@ -564,6 +564,15 @@ export const ACTIVITIES: ActivityDef[] = [
     met: { light: 2.0, moderate: 4.8, hard: 7.8 },
   },
   { name: 'Driving (delivery / truck)', categories: ['occupational'], met: 2.0 },
+
+  // --- Device sync fallback --------------------------------------------------
+  // What an unmapped Health Connect exercise type resolves to (see
+  // shared/healthConnect.ts). A real MET, not null, because it also serves as
+  // the last step of the sync calorie cascade when a session arrives with no
+  // device-reported calories at all — docs/samsung-health-sync.md §2.1. Like
+  // every other shared activity it upserts on name, so once real workouts are
+  // logged against it, "Tracked workout" is not a name to casually rename.
+  { name: 'Tracked workout', categories: ['cardio'], met: 5.0 },
 ]
 
 // ---------------------------------------------------------------------------

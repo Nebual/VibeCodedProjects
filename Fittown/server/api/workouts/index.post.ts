@@ -7,8 +7,7 @@
  * back to a stated default only when they've never entered one.
  */
 import { EFFORT_KEYS, estimateCalories, type EffortKey } from '#shared/activities'
-
-const FALLBACK_WEIGHT_KG = 70
+import { FALLBACK_WEIGHT_KG } from '#shared/body'
 
 export default defineEventHandler(async (event) => {
   const user = await requireUser(event)
