@@ -14,6 +14,8 @@
 import { App } from '@capacitor/app'
 import { Capacitor } from '@capacitor/core'
 
+const { public: publicConfig } = useRuntimeConfig()
+
 const DISMISS_KEY_PREFIX = 'fittown.appVersionNagDismissed.'
 
 const availableVersion = ref<string | null>(null)
@@ -70,8 +72,13 @@ onMounted(async () => {
       <div class="text-sm min-w-0">
         <p class="font-medium">A newer Fittown build is available</p>
         <p class="text-base-content/70">
-          Version {{ availableVersion }} is out — this app doesn't auto-update, so
-          ask whoever built it for the updated APK.
+          Version {{ availableVersion }} is out — this app doesn't auto-update.
+          <a
+            v-if="publicConfig.appDownloadUrl"
+            :href="publicConfig.appDownloadUrl"
+            class="link"
+          >Download it</a>
+          <span v-else>Ask whoever built it for the updated APK.</span>
         </p>
       </div>
 

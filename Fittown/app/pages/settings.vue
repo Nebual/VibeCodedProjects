@@ -22,6 +22,7 @@ import { SHOW_DEVICE_PAIRING_UI } from '~/utils/featureFlags'
 
 useHead({ title: 'Settings · Fittown' })
 
+const { public: publicConfig } = useRuntimeConfig()
 const { user, clear } = useUserSession()
 const { data, refresh } = await useFetch<{
   goals: Goals
@@ -1255,6 +1256,23 @@ const sugarLabel = computed(() => {
           <span v-if="pairingBusy" class="loading loading-spinner loading-xs" />
           Connect a phone
         </button>
+      </div>
+    </section>
+
+    <section v-if="publicConfig.appDownloadUrl" class="card bg-base-100 shadow-sm">
+      <div class="card-body p-4 gap-2">
+        <h2 class="font-semibold">Android app</h2>
+        <p class="text-xs text-base-content/50">
+          Syncs your watch's workouts automatically. Sideloaded, so it never
+          auto-updates — come back here for the latest build.
+        </p>
+        <a
+          :href="publicConfig.appDownloadUrl"
+          class="btn btn-outline btn-sm justify-start gap-2"
+        >
+          <AppIcon name="watch" class="w-4 h-4" />
+          Download the app
+        </a>
       </div>
     </section>
 

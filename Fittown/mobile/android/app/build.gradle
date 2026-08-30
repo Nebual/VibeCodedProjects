@@ -8,6 +8,20 @@ apply plugin: 'kotlin-android'
 // hand out; nothing does that automatically for a sideloaded app.
 def fittownVersion = new groovy.json.JsonSlurper().parse(file('../../version.json'))
 
+// Release signing (docs/samsung-health-sync.md §6). Android refuses to
+// install an unsigned APK at all, and refuses to install an *update* over an
+// existing install unless it's signed with the same key as what's already on
+// the phone — so this has to be one persistent keystore reused for every
+// release build, not a fresh one minted per build. Credentials live in
+// keystore.properties, gitignored; a checkout without it (a fresh clone, or
+// CI) can still build the debug variant, just not a signed release one.
+def keystorePropertiesFile = rootProject.file('app/keystore.properties')
+def hasReleaseSigning = keystorePropertiesFile.exists()
+def keystoreProperties = new Properties()
+if (hasReleaseSigning) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+}
+
 android {
     namespace "com.fittown.app"
     compileSdk rootProject.ext.compileSdkVersion
@@ -24,10 +38,23 @@ android {
             ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        if (hasReleaseSigning) {
+            release {
+                storeFile file(keystoreProperties['storeFile'])
+                storePassword keystoreProperties['storePassword']
+                keyAlias keystoreProperties['keyAlias']
+                keyPassword keystoreProperties['keyPassword']
+            }
+        }
+    }
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (hasReleaseSigning) {
+                signingConfig signingConfigs.release
+            }
         }
     }
 }

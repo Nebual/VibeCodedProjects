@@ -53,6 +53,25 @@ class MainActivity : BridgeActivity() {
             view.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
             insets
         }
+        // The listener above only fires on the *next* insets dispatch — by
+        // this point in onCreate(), Capacitor has already created and
+        // attached the WebView, so the one dispatch that happens as part of
+        // that initial attach has almost certainly already passed with
+        // nothing listening. Nothing then ever asks the system for another
+        // one, so the listener sits there and never runs. This is what
+        // actually asks for it: immediately if the view is already attached
+        // (the common case here), or the moment it becomes attached if not.
+        if (webView.isAttachedToWindow) {
+            ViewCompat.requestApplyInsets(webView)
+        } else {
+            webView.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+                override fun onViewAttachedToWindow(v: View) {
+                    ViewCompat.requestApplyInsets(v)
+                    v.removeOnAttachStateChangeListener(this)
+                }
+                override fun onViewDetachedFromWindow(v: View) {}
+            })
+        }
     }
 
     // The primary sync trigger (docs/samsung-health-sync.md §6): every time

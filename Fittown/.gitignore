@@ -1,6 +1,14 @@
 # A debug APK copied to the repo root for easy download — rebuild from
 # mobile/android rather than commit this.
 /fittown-debug.apk
+/fittown-release.apk
+
+# Release signing (mobile/android/app/build.gradle). The private key and its
+# password — never commit these. Back BOTH files up somewhere outside this
+# repo: lose them and every future release build gets a new signing identity,
+# which Android treats as a different app for update purposes.
+mobile/android/app/keystore.properties
+mobile/android/app/fittown-release.keystore
 
 # Nuxt dev/build outputs
 .output

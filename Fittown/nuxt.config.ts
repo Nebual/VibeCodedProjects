@@ -39,6 +39,11 @@ export default defineNuxtConfig({
       // once here rather than sent to the client, which has no business
       // knowing the vision model's LAN address.
       recipeOcrEnabled: Boolean(process.env.NUXT_RECIPE_OCR_BASE_URL),
+      // Where Settings links to download/update the Android app — the file
+      // you host the built APK at (mobile/README-sandbox-build.md). Empty
+      // hides the link; a plain `public.` key, so Nuxt reads it from
+      // NUXT_PUBLIC_APP_DOWNLOAD_URL automatically.
+      appDownloadUrl: '',
     },
     // Filled from NUXT_OAUTH_GOOGLE_CLIENT_ID / _SECRET at runtime.
     oauth: {

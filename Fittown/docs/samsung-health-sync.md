@@ -526,16 +526,50 @@ restrictions — all of that is exactly what real-device testing exists to
 answer next, the same way it already found and fixed two real bugs in
 Phase 2.
 
-**System-bar insets.** `targetSdk 35` (Android 15) draws edge-to-edge by
-default, and apps at that target can no longer opt back out — found on a real
-device as content rendering under the status bar. `MainActivity` pads the
-WebView to `WindowInsetsCompat`'s system-bar insets rather than fighting the
-platform; no CSS/Vue changes needed, since it's a Capacitor/Android-only
-concern.
+**System-bar insets — two bugs, not one.** `targetSdk 35` (Android 15) draws
+edge-to-edge by default, and apps at that target can no longer opt back out —
+found on a real device as content rendering under the status bar.
+`MainActivity` pads the WebView to `WindowInsetsCompat`'s system-bar insets
+rather than fighting the platform. The first attempt at this (Phase 2) shipped
+with a real bug that only surfaced on the device: the padding *listener* was
+registered, but nothing ever asked Android to actually dispatch insets to it.
+By the point in `onCreate()` where the listener gets attached, Capacitor has
+already created and attached the WebView — so the one insets dispatch that
+happens as part of that initial attach had, in all likelihood, already passed
+with nothing listening, and nothing afterward ever requested a fresh one. The
+fix is `ViewCompat.requestApplyInsets()`, called immediately if the view is
+already attached (the normal case here) or from an attach-state listener if
+not. Worth remembering as a pattern: a correct-looking listener with no
+`requestApplyInsets()` nearby is a classic silent no-op, and it compiled fine
+both times — this class of bug is invisible to everything except a real
+screen.
 
-Sideloaded APKs do not auto-update. A `GET /api/app-version` the app checks on
-launch, nagging when the server is newer than the installed build, costs
-almost nothing and prevents a stale phone silently desyncing.
+**Release signing.** Debug builds use Android's auto-generated debug key,
+which is fine for one throwaway install but means every debug APK handed out
+is really its own untracked identity — Android has no problem discarding one
+and installing a fresh one over it. Release builds need a real, *persistent*
+keystore, because an update has to be signed with the same key as what's
+already on the phone or Android refuses it outright
+(`INSTALL_FAILED_UPDATE_INCOMPATIBLE`). `mobile/android/app/build.gradle`
+reads signing credentials from `mobile/android/app/keystore.properties`
+(gitignored, machine-local) if present, and just builds an unsigned-looking
+config-less release variant if not — so a fresh checkout without the keystore
+still builds, it just can't produce an installable release APK. The keystore
+and its password are the one part of this whole project that isn't
+reconstructable from the repo: back them up somewhere outside it, because
+losing them means every future "update" is actually a new app as far as
+Android is concerned, and everyone has to uninstall and reinstall.
+
+**Sideloaded APKs do not auto-update.** `GET /api/app-version` (reading
+`mobile/version.json`, the same file `app/build.gradle` reads for
+`versionName`/`versionCode`) plus `AppVersionNag.vue` — a native-only banner
+comparing the installed version (`@capacitor/app`'s `App.getInfo()`) against
+what the live server currently reports — nags when they differ. The banner,
+and a plain "Download the app" link in Settings, both point at
+`NUXT_PUBLIC_APP_DOWNLOAD_URL` — optional, unset by default (the link and the
+nag's clickable version both quietly fall back to text when it's empty), read
+by any deployment that hosts the built APK somewhere and wants Settings and
+the nag to point at it.
 
 ## 7. UI changes — all built, all live-verified
 
