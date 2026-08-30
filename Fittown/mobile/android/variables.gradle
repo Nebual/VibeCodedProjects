@@ -1,5 +1,8 @@
 ext {
-    minSdkVersion = 23
+    // Health Connect's client library requires API 26 (Android 8) — not a
+    // library quirk to override, but Health Connect's real platform floor.
+    // Was 23 (Capacitor's own default) before HealthConnectSync.kt needed it.
+    minSdkVersion = 26
     compileSdkVersion = 35
     targetSdkVersion = 35
     androidxActivityVersion = '1.9.2'
@@ -14,9 +17,12 @@ ext {
     androidxEspressoCoreVersion = '3.6.1'
     cordovaAndroidVersion = '10.1.1'
 
-    // The device-token storage plugin (DeviceTokenPlugin.kt) is the only
-    // Kotlin in this app so far — Phase 3's Health Connect plugin will add
-    // more. See docs/samsung-health-sync.md §3/§4/§6.
     kotlinVersion = '2.0.21'
     androidxSecurityCryptoVersion = '1.1.0-alpha06'
+    // Health Connect's client library has never left alpha — production apps
+    // ship on these builds regardless. See docs/samsung-health-sync.md §6.
+    healthConnectVersion = '1.1.0-alpha12'
+    kotlinxCoroutinesVersion = '1.8.1'
+    // HealthSyncWorker.kt — periodic background sync, Phase 4.
+    androidxWorkVersion = '2.9.1'
 }

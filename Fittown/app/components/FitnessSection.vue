@@ -44,7 +44,15 @@ function detail(w: WorkoutRow) {
           class="flex items-center gap-3 px-4 py-2.5"
         >
           <div class="flex-1 min-w-0">
-            <div class="truncate font-medium text-sm">{{ w.exercise_name }}</div>
+            <div class="truncate font-medium text-sm flex items-center gap-1.5">
+              <AppIcon
+                v-if="w.source === 'health_connect'"
+                name="watch"
+                class="w-3.5 h-3.5 text-base-content/40 shrink-0"
+                title="Synced from your watch"
+              />
+              <span class="truncate">{{ w.exercise_name }}</span>
+            </div>
             <div class="text-xs text-base-content/60 truncate">
               {{ detail(w) }}
               <span v-if="w.notes" class="text-base-content/40">· {{ w.notes }}</span>

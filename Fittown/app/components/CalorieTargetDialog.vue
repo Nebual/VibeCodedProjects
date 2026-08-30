@@ -38,6 +38,9 @@ const props = defineProps<{
   /** Existing plan, so reopening the dialog resumes where it left off. */
   goalWeightKg: number | null
   goalRateKgPerWeek: number | null
+  /** Has the user paired a watch? Drives the double-counting warning below —
+   *  see docs/samsung-health-sync.md §2.1. */
+  hasConnectedDevice: boolean
 }>()
 
 const emit = defineEmits<{
@@ -191,6 +194,17 @@ const projection = computed(() => {
 
 const activityName = computed(() => activityLevel(props.activity)?.label ?? 'Sedentary')
 
+/**
+ * A connected watch's synced workouts are added back onto the day's budget
+ * (exercise_adds_calories), same as a hand-logged one — but a non-sedentary
+ * activity multiplier is *also* a claim about how much you train. Above
+ * sedentary, the two are counting the same training twice.
+ * docs/samsung-health-sync.md §2.1.
+ */
+const showsDoubleCountingWarning = computed(
+  () => props.hasConnectedDevice && props.activity !== 'sedentary',
+)
+
 // --- Open / close ---------------------------------------------------------
 
 watch(
@@ -263,6 +277,16 @@ function apply() {
         <div class="text-2xl font-semibold tabular">
           {{ maintenance }} <span class="text-sm font-normal text-base-content/50">kcal</span>
         </div>
+      </div>
+
+      <div v-if="showsDoubleCountingWarning" class="alert alert-warning text-xs py-2">
+        <span>
+          Your watch is already syncing workouts into your diary, so
+          <strong>{{ activityName }}</strong> may be counting that training twice
+          &mdash; once from your watch, once from this activity level. Consider
+          <NuxtLink to="/settings" class="link" @click="emit('close')">setting activity to Sedentary</NuxtLink>
+          and letting synced workouts carry the load instead.
+        </span>
       </div>
 
       <!-- Direction -------------------------------------------------------->

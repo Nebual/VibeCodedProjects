@@ -3,11 +3,14 @@
 How Samsung Health / Galaxy Watch data (chiefly its estimated calories burned)
 gets into Fittown, and why the design is shaped the way it is.
 
-Status: **Phase 1 (server) built and tested. Phase 2 (the shell) built,
-including real-device testing of the sign-in flow — one round found a bug,
-which is now fixed and re-verified as far as this environment allows.**
-Phases 3–5 (Health Connect, background sync, UI polish) are still just this
-plan.
+Status: **All five phases built.** Phases 1, 2 and 5 are real-device tested or
+live-verified end to end; Phases 3 and 4 (Health Connect itself) are compiled
+and inspected in the built APK but have never run against a real Health
+Connect database — see §6. Phase 2's testing found one real bug (fixed);
+Phase 5's build found another (also fixed — see §7). The manual "Connect a
+phone" pairing UI (Settings, login) is deliberately hidden, not missing — not
+needed since automatic sign-in pairing works, but everything underneath it is
+intact; flip `SHOW_DEVICE_PAIRING_UI` in `app/utils/featureFlags.ts`.
 
 - Phase 1: schema, device pairing, `/api/health/sync` with the calorie
   cascade, `health_sync_log`, the reversible `workout_calorie_source`
@@ -15,14 +18,62 @@ plan.
   `test/health-sync-db.test.ts`, `test/device-auth-db.test.ts`.
 - Phase 2: a Capacitor Android project (`mobile/`) with the `fittown://pair`
   deep link, a Kotlin plugin storing the device token in
-  EncryptedSharedPreferences (`DeviceTokenPlugin.kt`), a `/pair` page, a
-  "Connect a phone" panel in Settings, and — after a real install on a real
-  phone hit the `disallowed_useragent`/cookie-jar problem described in §3 —
-  a Custom Tab-based sign-in that pairs the app automatically as the tail end
-  of Google login, no Settings trip needed for the common case. See §3 for
-  the full account, including exactly what is and isn't verified without a
-  device beyond that one round of testing. `./gradlew assembleDebug`
-  succeeds; `mobile/README-sandbox-build.md` has the sandbox setup notes.
+  EncryptedSharedPreferences (`DeviceTokenPlugin.kt`), a `/pair` page, and —
+  after a real install on a real phone hit the `disallowed_useragent`/
+  cookie-jar problem described in §3 — a Custom Tab-based sign-in that pairs
+  the app automatically as the tail end of Google login. See §3 for the full
+  account. Also fixed from real-device testing: Android 15's mandatory
+  edge-to-edge rendering had content starting under the status bar;
+  `MainActivity` now pads the WebView to the actual system-bar insets.
+- Phase 3: `HealthConnectSync.kt` — reads `ExerciseSessionRecord`s, aggregates
+  `ActiveCaloriesBurnedRecord` over each session's own window for the calorie
+  cascade's `device_window` step (confirmed via research, not assumed:
+  `ExerciseSessionRecord` carries no calories of its own — every session's
+  figure here **is** the device-window step, never the plain "device" one),
+  reads today's steps/active-calories for `daily[]`, and POSTs directly to
+  `/api/health/sync` with the stored device token — no WebView involved.
+  Requesting Health Connect permission needed a mandatory "rationale" activity
+  most guides don't mention (`HealthPermissionsRationaleActivity.kt` + the
+  manifest entries) — without it the permission prompt doesn't work at all,
+  not just a Play Store requirement.
+- Phase 4: two changes to Phase 3's read path, plus the actual background
+  trigger. First, `HealthConnectSync` now stores a Health Connect **changes
+  token** and reads incrementally from it (`getChanges()`, paginated via
+  `hasMore`/`nextChangesToken`) instead of re-reading a fixed lookback window
+  every sync; a missing or expired token (`changesTokenExpired`) falls back to
+  the original full read, which also mints the first token. Second, and only
+  possible because of the first: `DeletionChange` entries now populate
+  `deleted[]`, which had been hard-coded empty since Phase 1 — nothing before
+  this could tell that a session had disappeared, only that it was absent
+  from *this particular* read. Third, `HealthSyncWorker.kt`
+  (`androidx.work.CoroutineWorker`) runs the same `HealthConnectSync.syncNow()`
+  MainActivity's resume handler calls, on a `PeriodicWorkRequest` scheduled
+  for ~6 hours with a network constraint — the backstop for whenever the app
+  itself isn't open, exactly as planned, though Samsung's One UI is
+  independently known to be aggressive about killing scheduled background
+  work, so this is best-effort by design, not a guarantee.
+- Phase 5: everything in §7, live-verified against a running server rather
+  than only compiled — no Android toolchain involved this time, so there was
+  no reason to settle for less. Found one real bug the same way Phase 2's
+  testing found one: deleting a device-synced workout only removed the row,
+  never recording that it should *stay* removed, so the next sync silently
+  re-imported it. Confirmed as a real bug and confirmed fixed, by seeding a
+  synced workout, deleting it through the real endpoint, and re-running the
+  exact sync that used to resurrect it — the fixed version now reports it
+  `skipped`.
+
+**None of Phase 3 or 4 has run against a real Health Connect database.**
+Compiled and inspected in the built APK exactly like Phases 1–2 were — the
+manifest, and every new class and method name confirmed present in the actual
+dex bytecode, not just a clean Gradle exit code — but the exercise-type
+mapping, the aggregate query, the permission flow, the changes API's
+pagination and expiry handling, and whether `PeriodicWorkRequest` actually
+fires on a real device at all: none of that is provable without one. This is
+the phase the plan itself called "the uncertain one," and building it further
+didn't make that less true, only differently true — see §6 for the specifics.
+
+`./gradlew assembleDebug` succeeds; `mobile/README-sandbox-build.md` has the
+sandbox setup notes.
 
 ---
 
@@ -402,50 +453,148 @@ hostname is the consistent choice. Revisit if it ever ships to strangers.
 
 Native pieces, in order of risk:
 
-1. **Health Connect reader** (Kotlin, `androidx.health.connect.client`).
-   Evaluate the community `capacitor-health-connect` plugin first; write a
-   minimal custom plugin if it doesn't expose `ExerciseSessionRecord` with
-   per-session calories and the changes API. Handle the permission grant flow,
-   including `PERMISSION_READ_HEALTH_DATA_HISTORY` if reading further back
-   than 30 days.
-2. **Sync on resume** — the reliability backstop. `MainActivity.onResume()` (or
-   Capacitor's `appStateChange` → active) enqueues a `OneTimeWorkRequest` with
-   `ExistingWorkPolicy.KEEP`, debounced to skip if the last sync was under
-   ~15 minutes ago. Opening the app once a day is what makes sync dependable,
-   because —
-3. **Periodic background sync** — `PeriodicWorkRequest`, network-constrained,
-   ~4–6 hours (the 15-minute floor is far more often than calories change).
-   **Samsung's One UI is aggressive about killing background work**, so this is
-   best-effort by nature, and onboarding should walk the user through
-   exempting Fittown from battery optimisation. Both triggers call the same
-   `syncHealthData()`.
-4. **Token storage** — EncryptedSharedPreferences, exposed to the WebView
-   through a tiny plugin method for the `/auth/device` bootstrap.
+1. **Health Connect reader — built.** `HealthConnectSync.kt`, a plain Kotlin
+   object rather than a Capacitor plugin, since nothing in it needs the
+   WebView — which is also why `MainActivity.onResume()` and the
+   `HealthSyncWorker` background job (item 3) can both call its `syncNow()`
+   directly. No community plugin was evaluated in the end — the direct
+   `androidx.health.connect.client` API (1.1.0-alpha12; the library has never
+   left alpha, which is normal for it) turned out to be little enough surface
+   to write directly. Reads are **incremental**: a Health Connect changes
+   token is stored and resumed from (`getChanges()`, paginated via
+   `hasMore`/`nextChangesToken`) on every sync after the first, which is what
+   makes `deleted[]` — hard-coded empty since Phase 1 — actually populate now,
+   from `DeletionChange` entries; a missing or expired token
+   (`changesTokenExpired`) falls back to a plain 7-day `readRecords()`, which
+   also mints the token the next sync resumes from. Calories come from
+   `client.aggregate(...)` over `ActiveCaloriesBurnedRecord` — not manual
+   summing, which would double-count overlapping sources — over each
+   session's own window. **Confirmed by research before writing any code, not
+   assumed:** `ExerciseSessionRecord` carries no calories field of its own, so
+   the cascade's "device" step (a figure the session provides directly) is one
+   this integration can structurally never produce — every session synced by
+   this app arrives as `device_window` or, when the aggregate itself comes
+   back empty (which Samsung Health is independently reported to do), the
+   server's own `estimated` fallback. `PERMISSION_READ_HEALTH_DATA_HISTORY`
+   (for reading past 30 days) was not requested — the 7-day lookback doesn't
+   need it, and asking for more access than is used is worth avoiding on a
+   health-data permission screen. The permission grant flow itself needed
+   something no guide flagged in advance: Health Connect requires a
+   "rationale" activity registered in the manifest
+   (`HealthPermissionsRationaleActivity.kt`, plus both a plain intent-filter
+   for Android 13- and an `activity-alias` for 14+) or the permission prompt
+   does not work at all — confirmed as a hard requirement via research, not a
+   Play Store nicety.
+2. **Sync on resume — built.** `MainActivity.onResume()` calls
+   `HealthConnectSync.syncInBackground()`, requesting permission first if it's
+   missing. Debounced internally to skip if the last sync was under 15
+   minutes ago, so a resume seconds after the last one is a free no-op rather
+   than a wasted request. The primary trigger — item 3 is the backstop for
+   when the app isn't open, not the other way round.
+3. **Periodic background sync — built.** `HealthSyncWorker.kt`
+   (`androidx.work.CoroutineWorker`) calls the exact same
+   `HealthConnectSync.syncNow()` item 2 does — that reuse is exactly why item
+   1 was written as a plain object instead of tying it to any particular
+   trigger. Scheduled from `MainActivity.onResume()` once the app is paired
+   (`enqueueUniquePeriodicWork` with `ExistingPeriodicWorkPolicy.KEEP`, so
+   re-scheduling on every resume is a no-op once it already exists), network-
+   constrained, every 6 hours. Distinguishes "nothing to do" (not paired, no
+   permission, Health Connect unavailable — `Result.success()`, since nothing
+   about retrying changes any of that without a running Activity to fix it)
+   from an actual failed sync attempt (`Result.retry()`, WorkManager's own
+   backoff). **Samsung's One UI is independently known to be aggressive about
+   killing scheduled background work**, so this is best-effort by design, and
+   Phase 5's "onboarding should walk the user through exempting Fittown from
+   battery optimisation" is still exactly as necessary as the original plan
+   said — building the worker doesn't make Android any less likely to kill it.
+4. **Token storage — built.** EncryptedSharedPreferences via
+   `DeviceTokenStore.kt`, shared by `DeviceTokenPlugin.kt` (the WebView-facing
+   Capacitor plugin, for the `/auth/device` bootstrap) and
+   `HealthConnectSync.kt` (which has no WebView to expose a plugin to, and
+   reads the token directly to authenticate its own `POST /api/health/sync`).
+
+**None of items 1–3 has run against a real Health Connect database.**
+Everything above is confirmed to *compile* and to have landed in the built
+APK — checked by inspecting the manifest and the actual dex bytecode, the
+same way Phases 1–2 were, not by trusting a clean Gradle exit code. Whether
+Samsung Health actually populates `ExerciseSessionRecord`/
+`ActiveCaloriesBurnedRecord` the way the research behind this section
+describes, whether the permission flow completes cleanly first-try, whether
+the changes API's pagination and expiry handling behave as documented,
+whether `PeriodicWorkRequest` fires at all against Samsung's own background
+restrictions — all of that is exactly what real-device testing exists to
+answer next, the same way it already found and fixed two real bugs in
+Phase 2.
+
+**System-bar insets.** `targetSdk 35` (Android 15) draws edge-to-edge by
+default, and apps at that target can no longer opt back out — found on a real
+device as content rendering under the status bar. `MainActivity` pads the
+WebView to `WindowInsetsCompat`'s system-bar insets rather than fighting the
+platform; no CSS/Vue changes needed, since it's a Capacitor/Android-only
+concern.
 
 Sideloaded APKs do not auto-update. A `GET /api/app-version` the app checks on
 launch, nagging when the server is newer than the installed build, costs
 almost nothing and prevents a stale phone silently desyncing.
 
-## 7. UI changes
+## 7. UI changes — all built, all live-verified
+
+Every item here was checked against a real running server — seeded data,
+real HTTP calls, real rendered HTML inspected for the actual expected markup
+— not just "compiles." No Android toolchain involved this phase, so there
+was no reason to settle for compiling alone the way Phases 3–4 had to.
 
 - **Fitness card** (`app/components/FitnessSection.vue`): a watch glyph on
-  `source = 'health_connect'` rows, so a number that came from Samsung is never
-  mistaken for a MET estimate. `WorkoutRow` gains `source`.
-- **Deleting a device row** writes to `health_ignored` (§4) so it stays gone.
-- **Settings → Connected devices:** list, pair, revoke, last-sync time, and a
-  **"What the watch sent"** panel reading `health_sync_log` — the last few
-  syncs, their session counts, and the `calorie_basis` tally. This is the spike
-  made permanent, and it is the first thing to look at when the numbers go odd.
-- **Settings → calorie source:** a two-way choice, "Use my watch's estimate" vs
-  "Estimate from activity and body weight" (§2.1), with a line saying it
-  recalculates past device-logged workouts and leaves hand-logged ones alone.
-- **Calorie target dialog:** when a device is connected and `activity_level` is
-  above `sedentary`, say plainly that training is being counted twice.
-- `InstallPrompt.vue` needs **no change** — worth knowing rather than
-  discovering. Its `variant` computed returns `null` unless
-  `beforeinstallprompt` fired (it doesn't in a WebView) or the UA is iOS or
-  Firefox-Android, so the "add to home screen" banner already stays down
-  inside the app. Confirm on the real device rather than trusting this.
+  `source = 'health_connect'` rows, so a number that came from Samsung is
+  never mistaken for a MET estimate. `WorkoutRow` gains `source`, threaded
+  through from `server/api/diary/index.get.ts`. Verified: seeded one synced
+  and one manual workout on the same day, confirmed the glyph's SVG and its
+  "Synced from your watch" title rendered exactly once, on the right row.
+- **Deleting a device row writes to `health_ignored` (§4) — and this is
+  where Phase 5 found a real bug.** The delete route only ever removed the
+  `workout_entries` row; nothing recorded that it should *stay* removed, so
+  the next sync silently re-imported it — a household could delete a
+  double-logged workout and watch it come back hours later with no obvious
+  cause. Fixed in `server/api/workouts/[id].delete.ts`, and confirmed fixed
+  the same way Phase 2's bug was: seed a synced workout, delete it through
+  the real endpoint, re-run the exact sync payload that used to resurrect it
+  — `skipped: 1`, not `imported: 1`.
+- **Settings → Watch calorie source:** the two-way choice from §2.1 — "My
+  watch's estimate" vs "Estimate from activity & weight" — self-saving like
+  Sharing, shown whenever a device is actually connected (independent of the
+  hidden pairing panel, since a household that paired through the app's own
+  sign-in never sees that panel at all). Verified: flipped it live, confirmed
+  the stored value round-trips through `/api/goals`.
+- **Settings → "What the watch sent":** collapsed by default, like Diary
+  Card Visibility — reads `health_sync_log` (last ~20 rows) and classifies
+  each stored payload's sessions with the *exact* function
+  (`classifyBasis()`) the sync route itself uses to decide calorie basis, so
+  the tally shown can never drift from what actually happened to the data.
+  This is the spike from §2.1 made permanent. Verified: ran two real syncs
+  (one falling back to `estimated`, one landing as `device_window`) and
+  confirmed the panel classified each correctly, most recent first.
+- **Calorie target dialog:** warns when a device is connected and
+  `activity_level` is above `sedentary` that training may be counted twice.
+  The dialog's own content (behind a client-side `<dialog>` open) wasn't
+  clicked through in a browser — only confirmed by code review and that the
+  page hosting it renders without error. Everything upstream of it
+  (`hasConnectedDevice`, fetched unconditionally now rather than only when
+  the pairing panel is visible) was verified live.
+- `InstallPrompt.vue` needs **no change** — its `variant` computed returns
+  `null` unless `beforeinstallprompt` fired (it doesn't in a WebView) or the
+  UA is iOS or Firefox-Android, so the "add to home screen" banner already
+  stays down inside the app. Still not confirmed on a real device.
+- **Version nag** (`AppVersionNag.vue`, `GET /api/app-version`): the app
+  compares its own installed version (`@capacitor/app`'s `App.getInfo()`,
+  reading the native package info) against what the live server reports from
+  `mobile/version.json` — the same file `app/build.gradle` reads to set
+  `versionName`/`versionCode` at build time, so bumping one value keeps both
+  in sync. Verified the server endpoint returns the file's live content
+  (`5.0.0`) and the built APK actually carries `versionCode 5`,
+  `versionName 5.0.0` (checked with `aapt dump badging`, not assumed from the
+  Gradle config alone). The nag itself — dismiss-and-remember, the actual
+  banner appearing on a real out-of-date install — needs a device with an
+  older build already on it, which this environment has no way to produce.
 
 ## 8. Phasing
 

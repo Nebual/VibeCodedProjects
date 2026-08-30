@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  classifyBasis,
   localDateFromIso,
   resolveCalories,
   type SyncSession,
@@ -22,6 +23,24 @@ describe('localDateFromIso', () => {
 
   it('handles a UTC (Z) timestamp the same way', () => {
     expect(localDateFromIso('2026-08-29T07:00:00Z')).toBe('2026-08-29')
+  })
+})
+
+describe('classifyBasis', () => {
+  it('classifies exactly the same as resolveCalories decides — the sync-log panel depends on this staying true', () => {
+    expect(classifyBasis(412, 'device')).toBe('device')
+    expect(classifyBasis(280, 'device_window')).toBe('device_window')
+    expect(classifyBasis(null, 'device')).toBe('estimated')
+    expect(classifyBasis(undefined, 'device_window')).toBe('estimated')
+  })
+
+  it('treats zero as a real figure, not "missing"', () => {
+    expect(classifyBasis(0, 'device')).toBe('device')
+  })
+
+  it('falls back to "device" for any basis hint that is not exactly "device_window"', () => {
+    expect(classifyBasis(300, 'garbage')).toBe('device')
+    expect(classifyBasis(300, undefined)).toBe('device')
   })
 })
 

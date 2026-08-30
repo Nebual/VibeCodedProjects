@@ -18,6 +18,7 @@ import type { MeasurementSystem, PortionDefault } from '#shared/portions'
 import { SHARE_TOGGLES, sharePermissions, type ShareKey } from '#shared/sharing'
 import type { DiaryCardId } from '#shared/diaryCards'
 import { fromLocalDate } from '~/utils/dates'
+import { SHOW_DEVICE_PAIRING_UI } from '~/utils/featureFlags'
 
 useHead({ title: 'Settings · Fittown' })
 
@@ -457,18 +458,63 @@ const planSummary = computed(() => {
 const pollVoted = ref(false)
 
 // --- Connected devices (docs/samsung-health-sync.md §3) --------------------
+//
+// Fetched unconditionally even while the pairing panel itself is hidden
+// (SHOW_DEVICE_PAIRING_UI) — the calorie calculator's double-counting
+// warning needs to know whether a device is connected regardless of whether
+// the panel that manages them is shown.
 
 interface DeviceRow {
   id: number
   name: string
   last_used_at: string | null
   last_sync_at: string | null
+  revoked_at: string | null
 }
 
 const { data: devicesData, refresh: refreshDevices } = await useFetch<{ devices: DeviceRow[] }>(
   '/api/devices',
 )
 const devices = computed(() => devicesData.value?.devices ?? [])
+const hasConnectedDevice = computed(() => devices.value.some((d) => !d.revoked_at))
+
+/**
+ * Self-saving, like Sharing below — flipping this recomputes every synced
+ * workout's calories immediately (server/utils/healthSync.ts's
+ * recomputeDeviceCalories()), so "did that work?" deserves an instant
+ * answer, not a wait for the big Save button. docs/samsung-health-sync.md §2.1.
+ */
+const calorieSourceBusy = ref(false)
+
+async function setWorkoutCalorieSource(value: 'device' | 'estimate') {
+  if (form.workout_calorie_source === value) return
+  calorieSourceBusy.value = true
+  const previous = form.workout_calorie_source
+  form.workout_calorie_source = value
+  try {
+    await $fetch('/api/goals', { method: 'PUT', body: { workout_calorie_source: value } })
+  } catch {
+    form.workout_calorie_source = previous
+  } finally {
+    calorieSourceBusy.value = false
+  }
+}
+
+// "What the watch sent" — health_sync_log, classified the same way the sync
+// route itself decides calorie basis, so this can never show something that
+// didn't actually happen. The permanent replacement for a one-off spike —
+// docs/samsung-health-sync.md §2.1.
+interface SyncLogRow {
+  id: number
+  received_at: string
+  session_count: number
+  outcome: string
+  basis: { device: number; device_window: number; estimated: number }
+}
+
+const syncLogOpen = ref(false)
+const { data: syncLogData } = await useFetch<{ logs: SyncLogRow[] }>('/api/devices/sync-log')
+const syncLog = computed(() => syncLogData.value?.logs ?? [])
 
 const pairing = ref<{ code: string; expiresAt: string } | null>(null)
 const pairingBusy = ref(false)
@@ -1075,11 +1121,96 @@ const sugarLabel = computed(() => {
     </section>
 
     <!--
+      Shown once a device is actually connected, independent of
+      SHOW_DEVICE_PAIRING_UI — this matters to a household that paired
+      through the app's own sign-in, which never touches that hidden panel.
+      docs/samsung-health-sync.md §2.1.
+    -->
+    <section v-if="hasConnectedDevice" class="card bg-base-100 shadow-sm">
+      <div class="card-body p-4 gap-3">
+        <h2 class="font-semibold">Watch calorie source</h2>
+        <p class="text-xs text-base-content/50">
+          Which figure a synced workout's calories use. Switching recalculates
+          your past synced workouts immediately — nothing hand-logged is touched.
+        </p>
+
+        <div role="tablist" class="tabs tabs-box tabs-sm">
+          <button
+            role="tab"
+            class="tab flex-1"
+            :class="{ 'tab-active': form.workout_calorie_source === 'device' }"
+            :disabled="calorieSourceBusy"
+            @click="setWorkoutCalorieSource('device')"
+          >
+            My watch's estimate
+          </button>
+          <button
+            role="tab"
+            class="tab flex-1"
+            :class="{ 'tab-active': form.workout_calorie_source === 'estimate' }"
+            :disabled="calorieSourceBusy"
+            @click="setWorkoutCalorieSource('estimate')"
+          >
+            Estimate from activity &amp; weight
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!--
+      Collapsed by default, like Diary Card Visibility above — this is
+      diagnostic detail most people never need, until the numbers look odd
+      and this is the first thing to check. docs/samsung-health-sync.md §2.1.
+    -->
+    <section v-if="hasConnectedDevice" class="card bg-base-100 shadow-sm">
+      <div class="card-body p-4 gap-3">
+        <button
+          class="btn btn-ghost justify-between w-full -mx-2 px-2"
+          :aria-expanded="syncLogOpen"
+          @click="syncLogOpen = !syncLogOpen"
+        >
+          <span class="font-semibold">What the watch sent</span>
+          <AppIcon
+            name="chevronRight"
+            class="w-4 h-4 transition-transform"
+            :class="{ 'rotate-90': syncLogOpen }"
+          />
+        </button>
+
+        <template v-if="syncLogOpen">
+          <p v-if="!syncLog.length" class="text-xs text-base-content/50">
+            No syncs yet.
+          </p>
+
+          <ul v-else class="divide-y divide-base-200 -mx-4">
+            <li v-for="row in syncLog" :key="row.id" class="flex items-center justify-between gap-3 px-4 py-2">
+              <div class="min-w-0">
+                <div class="text-sm">{{ row.received_at }}</div>
+                <div class="text-xs text-base-content/50">
+                  {{ row.session_count }} session{{ row.session_count === 1 ? '' : 's' }}
+                  <template v-if="row.session_count">
+                    ({{ row.basis.device + row.basis.device_window }} from the watch,
+                    {{ row.basis.estimated }} estimated)
+                  </template>
+                </div>
+              </div>
+              <span
+                class="text-xs shrink-0"
+                :class="row.outcome === 'ok' ? 'text-success' : 'text-error'"
+              >{{ row.outcome === 'ok' ? 'OK' : row.outcome }}</span>
+            </li>
+          </ul>
+        </template>
+      </div>
+    </section>
+
+    <!--
       docs/samsung-health-sync.md §3. The app's own sign-in screen pairs
       itself automatically after Google sign-in; this is the fallback for a
-      second device, or for pairing without going through Google again.
+      second device, or for pairing without going through Google again — not
+      needed yet, so hidden behind SHOW_DEVICE_PAIRING_UI above.
     -->
-    <section class="card bg-base-100 shadow-sm">
+    <section v-if="SHOW_DEVICE_PAIRING_UI" class="card bg-base-100 shadow-sm">
       <div class="card-body p-4 gap-3">
         <h2 class="font-semibold">Connected devices</h2>
 
@@ -1152,6 +1283,7 @@ const sugarLabel = computed(() => {
       :today="today"
       :goal-weight-kg="form.goal_weight_kg ?? null"
       :goal-rate-kg-per-week="form.goal_rate_kg_per_week ?? null"
+      :has-connected-device="hasConnectedDevice"
       @close="calculatorOpen = false"
       @apply="applyPlan"
     />

@@ -81,7 +81,7 @@ export default defineEventHandler(async (event) => {
   const workouts = db
     .prepare(
       `SELECT w.id, w.duration_min, w.calories, w.effort, w.sets, w.reps, w.weight_kg,
-              w.distance_km, w.notes, e.name AS exercise_name, e.category, e.id AS exercise_id
+              w.distance_km, w.notes, w.source, e.name AS exercise_name, e.category, e.id AS exercise_id
        FROM workout_entries w
        JOIN exercises e ON e.id = w.exercise_id
        WHERE w.user_id = ? AND w.date = ?

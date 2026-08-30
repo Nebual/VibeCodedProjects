@@ -1,6 +1,13 @@
 apply plugin: 'com.android.application'
 apply plugin: 'kotlin-android'
 
+// The one source of truth for the installed build's version — read here for
+// versionCode/versionName, and by server/api/app-version.get.ts on the
+// deployed server, so the two can be compared for the version nag
+// (docs/samsung-health-sync.md §6/§7). Bump it by hand before every APK you
+// hand out; nothing does that automatically for a sideloaded app.
+def fittownVersion = new groovy.json.JsonSlurper().parse(file('../../version.json'))
+
 android {
     namespace "com.fittown.app"
     compileSdk rootProject.ext.compileSdkVersion
@@ -8,8 +15,8 @@ android {
         applicationId "com.fittown.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode fittownVersion.versionCode
+        versionName fittownVersion.version
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -40,6 +47,11 @@ dependencies {
     // traded in at /auth/device, so it lives in EncryptedSharedPreferences,
     // not plain SharedPreferences. docs/samsung-health-sync.md §3.
     implementation "androidx.security:security-crypto:$androidxSecurityCryptoVersion"
+    // HealthConnectSync.kt. docs/samsung-health-sync.md §6.
+    implementation "androidx.health.connect:connect-client:$healthConnectVersion"
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:$kotlinxCoroutinesVersion"
+    // HealthSyncWorker.kt — periodic background sync, Phase 4.
+    implementation "androidx.work:work-runtime-ktx:$androidxWorkVersion"
     implementation "org.jetbrains.kotlin:kotlin-stdlib:$kotlinVersion"
     implementation project(':capacitor-android')
     testImplementation "junit:junit:$junitVersion"

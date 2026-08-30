@@ -80,6 +80,8 @@ export interface Goals {
   share_exercise: number
   /** JSON array of hidden Diary card ids; null = all visible. See shared/diaryCards.ts. */
   diary_cards_hidden: string | null
+  /** 'device' | 'estimate' — which figure a synced workout's calories use. See docs/samsung-health-sync.md §2.1. */
+  workout_calorie_source: 'device' | 'estimate'
 }
 
 export interface BiometricRow {
@@ -104,6 +106,8 @@ export interface WorkoutRow {
   weight_kg: number | null
   distance_km: number | null
   notes: string | null
+  /** 'manual' (hand-logged) or 'health_connect' (synced from a watch). */
+  source: 'manual' | 'health_connect'
 }
 
 export interface GoalSuggestion {

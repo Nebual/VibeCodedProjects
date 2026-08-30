@@ -64,6 +64,20 @@ export function localDateFromIso(iso: string): string {
 }
 
 /**
+ * Which cascade step a session's `active_kcal` belongs to — the same
+ * decision resolveCalories() makes, pulled out so the "What the watch sent"
+ * panel (server/api/devices/sync-log.get.ts) can classify a *stored* payload
+ * identically instead of re-implementing the rule and risking drift.
+ */
+export function classifyBasis(
+  activeKcal: number | null | undefined,
+  activeKcalBasis: unknown,
+): CalorieBasis {
+  if (activeKcal == null) return 'estimated'
+  return activeKcalBasis === 'device_window' ? 'device_window' : 'device'
+}
+
+/**
  * The three-step calorie cascade (docs/samsung-health-sync.md §2.1): the
  * session's own figure, else what the app computed by summing the window
  * (both arrive as `active_kcal`, distinguished by `active_kcal_basis`), else
@@ -75,10 +89,10 @@ export function resolveCalories(
   weightKg: number,
   durationMin: number,
 ): { calories: number; deviceKcal: number | null; basis: CalorieBasis } {
-  if (session.active_kcal != null) {
-    const basis: CalorieBasis =
-      session.active_kcal_basis === 'device_window' ? 'device_window' : 'device'
-    return { calories: session.active_kcal, deviceKcal: session.active_kcal, basis }
+  const basis = classifyBasis(session.active_kcal, session.active_kcal_basis)
+
+  if (basis !== 'estimated') {
+    return { calories: session.active_kcal!, deviceKcal: session.active_kcal!, basis }
   }
 
   return {

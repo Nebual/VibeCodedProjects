@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Browser } from '@capacitor/browser'
 import { Capacitor } from '@capacitor/core'
+import { SHOW_DEVICE_PAIRING_UI } from '~/utils/featureFlags'
 
 definePageMeta({ layout: false })
 
@@ -90,7 +91,16 @@ async function devLogin() {
           Continue with Google
         </button>
 
-        <NuxtLink v-if="isNative" to="/pair" class="link link-hover text-xs text-base-content/60">
+        <!--
+          Hidden alongside Settings' pairing panel — see
+          SHOW_DEVICE_PAIRING_UI in app/pages/settings.vue. /pair itself
+          stays live; it's still where the automatic sign-in flow lands.
+        -->
+        <NuxtLink
+          v-if="isNative && SHOW_DEVICE_PAIRING_UI"
+          to="/pair"
+          class="link link-hover text-xs text-base-content/60"
+        >
           Have a pairing code instead?
         </NuxtLink>
 

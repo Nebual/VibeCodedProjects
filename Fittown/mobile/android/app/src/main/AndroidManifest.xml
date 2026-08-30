@@ -41,6 +41,32 @@
 
         </activity>
 
+        <!--
+          Health Connect requires this exact pair — a plain activity for
+          Android 13 and earlier, an alias with a different intent-filter for
+          14+ — pointing at *some* screen explaining why the app wants health
+          data. It's not a Play Store formality: the permission request
+          itself doesn't work without it. docs/samsung-health-sync.md §6.
+        -->
+        <activity
+            android:name=".HealthPermissionsRationaleActivity"
+            android:exported="true"
+            android:label="@string/title_activity_main">
+            <intent-filter>
+                <action android:name="androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE" />
+            </intent-filter>
+        </activity>
+
+        <activity-alias
+            android:name=".HealthPermissionsRationaleActivityAlias"
+            android:exported="true"
+            android:targetActivity=".HealthPermissionsRationaleActivity">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW_PERMISSION_USAGE" />
+                <category android:name="android.intent.category.HEALTH_PERMISSIONS" />
+            </intent-filter>
+        </activity-alias>
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
@@ -55,4 +81,14 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!--
+      Deliberately not READ_TOTAL_CALORIES_BURNED — that figure is active +
+      BMR, and the calorie cascade (docs/samsung-health-sync.md §2.1) never
+      uses it: it would double-count against the diary's own BMR-based
+      budget. Only the three records HealthConnectSync.kt actually reads.
+    -->
+    <uses-permission android:name="android.permission.health.READ_EXERCISE" />
+    <uses-permission android:name="android.permission.health.READ_STEPS" />
+    <uses-permission android:name="android.permission.health.READ_ACTIVE_CALORIES_BURNED" />
 </manifest>

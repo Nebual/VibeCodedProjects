@@ -94,5 +94,6 @@ function isActive(to: string) {
     <FriendRequestPrompt v-if="user" />
 
     <InstallPrompt />
+    <AppVersionNag />
   </div>
 </template>

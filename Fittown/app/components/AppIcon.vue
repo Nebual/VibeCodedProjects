@@ -57,6 +57,10 @@ const paths: Record<string, string> = {
   // iOS's own share-sheet glyph — a box with an arrow lifting out of it —
   // so the instruction reads as "that icon" rather than a generic download.
   share: 'M12 2v13M8 6l4-4 4 4M5 12v7a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-7',
+
+  // Marks a device-synced workout on the Fitness card. Face + band tabs only,
+  // no hands — at the ~16px this renders at, hands read as noise, not detail.
+  watch: 'M12 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10ZM10 7V4h4v3M10 17v3h4v-3',
 }
 
 const d = computed(() => paths[props.name] ?? paths.plus!)
