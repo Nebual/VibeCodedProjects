@@ -17,6 +17,17 @@ cd ocr-benchmark
 ./run.sh /path/to/PXL_20260802_194940316.jpg
 ```
 
+On a box with an Nvidia GPU instead (e.g. a GTX 1070 running the 580 driver branch),
+use the CUDA-backed image via `Dockerfile.nvidia`. It requires the nvidia driver and
+`nvidia-container-toolkit` on the host (no CUDA toolkit needed), and targets
+`sm_61` (Pascal) directly:
+
+```bash
+cd ocr-benchmark
+./run-nvidia.sh /path/to/PXL_20260802_194940316.jpg
+./run-server-nvidia.sh /path/to/PXL_20260802_194940316.jpg   # persistent-server variant
+```
+
 First build takes a few minutes (it compiles llama.cpp). The first run also downloads the
 model (~2.5GB) into `.ocr-cache/`, which is reused afterwards.
 

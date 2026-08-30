@@ -22,9 +22,17 @@ echo " OCR benchmark — model: ${HF_REPO}"
 echo " input image: ${IMG}"
 echo "==================================================================="
 echo
-echo "--- Vulkan devices (your RX 580 should appear here via RADV) ---"
-vulkaninfo --summary 2>/dev/null | grep -iE "deviceName|driverName|apiVersion" || \
-  echo "  (vulkaninfo found no device — GPU runs will fall back to CPU; check /dev/dri passthrough)"
+GPU_LABEL="GPU-Vulkan"
+if [ "${GPU_BACKEND:-vulkan}" = "cuda" ]; then
+  GPU_LABEL="GPU-CUDA"
+  echo "--- CUDA devices (your Nvidia GPU should appear here) ---"
+  nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv 2>/dev/null || \
+    echo "  (nvidia-smi found no device — GPU runs will fall back to CPU; check --gpus passthrough)"
+else
+  echo "--- Vulkan devices (your RX 580 should appear here via RADV) ---"
+  vulkaninfo --summary 2>/dev/null | grep -iE "deviceName|driverName|apiVersion" || \
+    echo "  (vulkaninfo found no device — GPU runs will fall back to CPU; check /dev/dri passthrough)"
+fi
 echo
 
 # One untimed warmup: downloads the weights AND compiles the Vulkan compute pipelines,
@@ -69,10 +77,10 @@ run_one () {
   echo
 }
 
-echo "########## GPU (Vulkan, all layers offloaded) ##########"
+echo "########## GPU (${GPU_LABEL}, all layers offloaded) ##########"
 echo
 for res in $RESOLUTIONS; do
-  run_one "GPU-Vulkan" 99 "$res"
+  run_one "$GPU_LABEL" 99 "$res"
 done
 
 echo "########## CPU (no GPU offload) ##########"
@@ -83,7 +91,7 @@ done
 
 echo "==================================================================="
 echo " Done. Compare WALL CLOCK across rows:"
-echo "   - GPU rows tell you if the RX 580 clears your latency bar."
+echo "   - GPU rows tell you if the GPU clears your latency bar."
 echo "   - CPU rows tell you if the no-GPU fallback can hit <5s."
 echo "   - Smaller long-edge = faster but lossier; find the smallest"
 echo "     resolution that still reads the handwriting correctly."

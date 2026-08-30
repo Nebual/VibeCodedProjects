@@ -1,6 +1,8 @@
 # Persistent OCR service for the take-a-photo flow: llama-server running Qwen3-VL-2B,
-# GPU-accelerated on an AMD RX 580 (Polaris) through Mesa RADV / Vulkan — no ROCm, which
-# no longer supports Polaris. Reuses the image built for ocr-benchmark/.
+# GPU-accelerated on an Nvidia GTX 1070 (Pascal / sm_61) via CUDA. Reuses the image built
+# for ocr-benchmark/. Requires the host to have the nvidia driver (580.x branch) and
+# nvidia-container-toolkit installed so `deploy.resources.reservations.devices` below can
+# pass the GPU through — no CUDA toolkit needed on the host itself.
 #
 # Model picked via ocr-benchmark/: Qwen3-VL-2B-Instruct beat Qwen2.5-VL-3B on both
 # accuracy and latency in that harness. Rebuild the image (not just restart) when bumping
@@ -14,9 +16,15 @@ services:
   ocr:
     build:
       context: ./ocr-benchmark
-    # Expose the GPU. Only /dev/dri is needed for Vulkan; /dev/kfd (ROCm) is deliberately not.
-    devices:
-      - /dev/dri:/dev/dri
+      dockerfile: Dockerfile.nvidia
+    # Expose the GPU via the Compose device-reservation API (requires nvidia-container-toolkit).
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     # Override the image's benchmark entrypoint: keep the model resident and serve HTTP.
     entrypoint: ["/usr/local/bin/llama-server"]
     command:

@@ -1,0 +1,48 @@
+# CUDA-accelerated llama.cpp for OCR benchmarking on Nvidia Pascal (GTX 1070 / sm_61).
+#
+# GTX 1070 is compute capability 6.1 (Pascal). CUDA 13 dropped Pascal support, so this
+# targets CUDA 12.6, which the 580-series driver runs fine (the driver only needs to be
+# >= the CUDA toolkit's minimum, and 580 is well ahead of 12.6's requirement). The host
+# only has to provide the nvidia driver (580.x) and the nvidia-container-toolkit so
+# `docker run --gpus all` can pass the GPU through — no CUDA toolkit needed on the host.
+FROM nvidia/cuda:12.6.3-devel-ubuntu24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV GPU_BACKEND=cuda
+
+# Build + runtime deps:
+#   build-essential/cmake/git  - compile llama.cpp
+#   libssl-dev                 - OpenSSL dev files: llama.cpp's native HTTPS downloader (for -hf) needs an SSL backend
+#   imagemagick                - resize the photo to probe the resolution/latency tradeoff
+#   bc                         - float math for wall-clock timing
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential cmake git ca-certificates pkg-config \
+      libssl-dev \
+      imagemagick bc curl jq \
+    && rm -rf /var/lib/apt/lists/*
+
+# Build llama.cpp with the CUDA backend. CMAKE_CUDA_ARCHITECTURES=61 targets the 1070's
+# Pascal SM directly, keeping compile time down (no fat binary for other GPU generations).
+# Only the two binaries we need are built, to keep the image build time down.
+WORKDIR /opt
+RUN git clone --depth 1 https://github.com/ggml-org/llama.cpp.git
+WORKDIR /opt/llama.cpp
+# GGML_CUDA_NO_VMM=ON: ggml-cuda's virtual-memory pool allocator otherwise links against
+# the CUDA *driver* API (cuMemCreate/cuMemMap/...), which lives in libcuda.so — the real
+# GPU driver library that nvidia-container-toolkit injects at `docker run --gpus` time.
+# It doesn't exist during `docker build`, so that link fails; disabling VMM keeps ggml-cuda
+# on the plain cudaMalloc path, which only needs libcudart (already in this devel image).
+RUN cmake -B build -DGGML_CUDA=ON -DGGML_CUDA_NO_VMM=ON -DCMAKE_CUDA_ARCHITECTURES=61 -DLLAMA_OPENSSL=ON -DCMAKE_BUILD_TYPE=Release \
+    && cmake --build build --config Release -j"$(nproc)" \
+         --target llama-mtmd-cli llama-cli llama-server \
+    && cp build/bin/llama-mtmd-cli build/bin/llama-cli build/bin/llama-server /usr/local/bin/
+
+# Downloaded GGUF weights land here; mount a volume on it to cache across runs.
+ENV LLAMA_CACHE=/root/.cache/llama.cpp
+
+COPY benchmark.sh /usr/local/bin/benchmark.sh
+COPY server-benchmark.sh /usr/local/bin/server-benchmark.sh
+RUN chmod +x /usr/local/bin/benchmark.sh /usr/local/bin/server-benchmark.sh
+
+WORKDIR /data
+ENTRYPOINT ["/usr/local/bin/benchmark.sh"]

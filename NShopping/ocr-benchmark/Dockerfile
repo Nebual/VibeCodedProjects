@@ -8,6 +8,7 @@
 FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
+ENV GPU_BACKEND=vulkan
 
 # Build + runtime deps:
 #   build-essential/cmake/git  - compile llama.cpp

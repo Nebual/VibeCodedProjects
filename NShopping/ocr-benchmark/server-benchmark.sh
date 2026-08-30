@@ -72,8 +72,8 @@ bench_backend () {
   fi
   echo " — ready"
 
-  # Surface which device Vulkan actually chose (guards against silent llvmpipe use).
-  grep -iE "using device|ggml_vulkan|POLARIS|llvmpipe|load_tensors: .*buffer" /tmp/server.log \
+  # Surface which device the backend actually chose (guards against silent CPU fallback).
+  grep -iE "using device|ggml_vulkan|ggml_cuda|POLARIS|llvmpipe|found.*compute capability|load_tensors: .*buffer" /tmp/server.log \
     | sed 's/^/  [server] /' | head -n 4
 
   # Untimed warmup: compiles Vulkan pipelines, faults in pages.
@@ -116,10 +116,16 @@ echo "=================================================================="
 echo " Persistent-server OCR benchmark — ${HF_REPO}"
 echo " image: ${IMG}   long-edge: ${RES}px   iters: ${ITERS}"
 echo "=================================================================="
-vulkaninfo --summary 2>/dev/null | grep -iE "deviceName|driverName" | sed 's/^/  /' || echo "  (no vulkaninfo)"
+GPU_LABEL="GPU-Vulkan"
+if [ "${GPU_BACKEND:-vulkan}" = "cuda" ]; then
+  GPU_LABEL="GPU-CUDA"
+  nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv 2>/dev/null | sed 's/^/  /' || echo "  (no nvidia-smi)"
+else
+  vulkaninfo --summary 2>/dev/null | grep -iE "deviceName|driverName" | sed 's/^/  /' || echo "  (no vulkaninfo)"
+fi
 echo
 
-bench_backend "GPU-Vulkan" 99
+bench_backend "$GPU_LABEL" 99
 bench_backend "CPU"        0
 
 echo "=================================================================="
