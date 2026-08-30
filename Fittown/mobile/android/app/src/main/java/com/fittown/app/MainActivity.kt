@@ -1,10 +1,6 @@
 package com.fittown.app
 
 import android.os.Bundle
-import android.view.View
-import androidx.core.graphics.Insets
-import androidx.core.view.ViewCompat
-import androidx.core.view.WindowInsetsCompat
 import androidx.health.connect.client.PermissionController
 import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
@@ -37,41 +33,22 @@ class MainActivity : BridgeActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         // Must be registered before super.onCreate() — that's where Capacitor
-        // builds the bridge and hands plugins to the WebView.
+        // builds the bridge and hands plugins to the WebView. That same call
+        // is also where Capacitor applies its own edge-to-edge margins
+        // (CapacitorWebView.edgeToEdgeHandler(), enabled via
+        // capacitor.config.ts's android.adjustMarginsForEdgeToEdge) — nothing
+        // to do here for that any more. A hand-rolled version of this using
+        // View.setPadding() lived here through Phase 5; it didn't just fail
+        // to clear the nav bar, it broke SPA navigation, rendering a fresh
+        // route's content *below* the previous page's rather than replacing
+        // it — padding insets a WebView's drawing area without changing its
+        // measured size, and Chromium's viewport math doesn't reliably
+        // recompute across a client-side route change when only that
+        // changes. Margins (real LayoutParams, measured before Chromium ever
+        // renders) don't have that problem, which is why this now defers to
+        // Capacitor's own handling instead of re-implementing it.
         registerPlugin(DeviceTokenPlugin::class.java)
         super.onCreate(savedInstanceState)
-
-        // Android 15 (this app's targetSdk) draws edge-to-edge by default, and
-        // apps targeting it can no longer opt back out the way older Android
-        // let you — so rather than fight the platform, pad the WebView by
-        // exactly the system bars' height instead. Without this the page
-        // content starts underneath the status bar (and, on gesture-nav
-        // devices, the bottom bar too).
-        val webView = bridge.webView
-        ViewCompat.setOnApplyWindowInsetsListener(webView) { view: View, insets: WindowInsetsCompat ->
-            val systemBars: Insets = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            view.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
-            insets
-        }
-        // The listener above only fires on the *next* insets dispatch — by
-        // this point in onCreate(), Capacitor has already created and
-        // attached the WebView, so the one dispatch that happens as part of
-        // that initial attach has almost certainly already passed with
-        // nothing listening. Nothing then ever asks the system for another
-        // one, so the listener sits there and never runs. This is what
-        // actually asks for it: immediately if the view is already attached
-        // (the common case here), or the moment it becomes attached if not.
-        if (webView.isAttachedToWindow) {
-            ViewCompat.requestApplyInsets(webView)
-        } else {
-            webView.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
-                override fun onViewAttachedToWindow(v: View) {
-                    ViewCompat.requestApplyInsets(v)
-                    v.removeOnAttachStateChangeListener(this)
-                }
-                override fun onViewDetachedFromWindow(v: View) {}
-            })
-        }
     }
 
     // The primary sync trigger (docs/samsung-health-sync.md §6): every time

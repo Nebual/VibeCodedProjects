@@ -526,23 +526,44 @@ restrictions — all of that is exactly what real-device testing exists to
 answer next, the same way it already found and fixed two real bugs in
 Phase 2.
 
-**System-bar insets — two bugs, not one.** `targetSdk 35` (Android 15) draws
-edge-to-edge by default, and apps at that target can no longer opt back out —
-found on a real device as content rendering under the status bar.
-`MainActivity` pads the WebView to `WindowInsetsCompat`'s system-bar insets
-rather than fighting the platform. The first attempt at this (Phase 2) shipped
-with a real bug that only surfaced on the device: the padding *listener* was
-registered, but nothing ever asked Android to actually dispatch insets to it.
-By the point in `onCreate()` where the listener gets attached, Capacitor has
-already created and attached the WebView — so the one insets dispatch that
-happens as part of that initial attach had, in all likelihood, already passed
-with nothing listening, and nothing afterward ever requested a fresh one. The
-fix is `ViewCompat.requestApplyInsets()`, called immediately if the view is
-already attached (the normal case here) or from an attach-state listener if
-not. Worth remembering as a pattern: a correct-looking listener with no
-`requestApplyInsets()` nearby is a classic silent no-op, and it compiled fine
-both times — this class of bug is invisible to everything except a real
-screen.
+**System-bar insets — three attempts, and the third one is the one to trust.**
+`targetSdk 35` (Android 15) draws edge-to-edge by default, and apps at that
+target can no longer opt back out — found on a real device as content
+rendering under the status bar.
+
+1. **Phase 2**: `MainActivity` set a `ViewCompat.setOnApplyWindowInsetsListener`
+   on the WebView and called `view.setPadding(...)` inside it. Shipped broken
+   in a way that only surfaced on the device: the listener was registered, but
+   nothing ever asked Android to dispatch insets to it, so it just never fired.
+2. **The fix for that**: `ViewCompat.requestApplyInsets()`, called immediately
+   if the view is already attached or from an attach-state listener if not —
+   a correct-looking listener with no `requestApplyInsets()` nearby is a
+   classic silent no-op. This one compiled fine and *did* fire. It was still
+   wrong.
+3. **What device testing found next, and why attempt 2 was the wrong
+   mechanism entirely, not just missing a call:** the status bar padding now
+   applied, but the bottom nav bar still overlapped the app, and — the more
+   telling symptom — navigating to `/pair` rendered its content *below* the
+   previous page's rather than replacing it. `View.setPadding()` insets a
+   WebView's drawing area without changing its *measured size*; Chromium's
+   own viewport math (`min-h-dvh`, specifically) doesn't reliably recompute
+   against a padding-only change across a client-side route change the way it
+   does against an actual resize. Capacitor ships its own edge-to-edge
+   handling for exactly this (`CapacitorWebView.edgeToEdgeHandler()`,
+   disabled by default, found by reading Capacitor's own source rather than
+   guessing further) — real Android **margins**, a `LayoutParams` resize
+   Chromium measures against *before* it renders anything, not a padding
+   inset applied after the fact. Turning it on
+   (`android.adjustMarginsForEdgeToEdge: 'force'` in `capacitor.config.ts`)
+   and deleting all the custom `MainActivity` code fixed both symptoms at
+   once, because they were the same bug.
+
+The pattern worth keeping: two device-testing rounds in a row where the
+*visible* symptom (status bar, then nav bar) undersold what was actually
+wrong (a fundamentally unsuited mechanism, not a missing call). When a
+platform ships an official, documented way to do the exact thing being
+hand-rolled, that's worth checking for before writing the custom version, not
+just after the custom version breaks twice.
 
 **Release signing.** Debug builds use Android's auto-generated debug key,
 which is fine for one throwaway install but means every debug APK handed out
