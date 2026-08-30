@@ -8,14 +8,20 @@
 # Pinned to the commit rather than to `main` because a moving branch would silently
 # change the SSE payload shape that server/utils/midiWorker.ts treats as a contract.
 #
-# WHY WE PATCH: two things Songtrack needs that upstream doesn't do (see
-# patches/0001-mscz-export-and-tempo-hint.patch for the full rationale):
+# WHY WE PATCH: things Songtrack needs that upstream doesn't do (see each patch's
+# header for the full rationale):
 #   1. `.mscz` — upstream builds score.mscx in a temp dir and throws it away.
 #   2. `tempo_hint` — when the beats don't fit a constant tempo, upstream raises and
 #      the BPM it *did* fit survives only inside the exception's message text. That
 #      number is a far better default than a 120 placeholder.
-# Both are small and additive, and worth offering upstream. If they land there, drop
-# the patch and go back to building straight from the git URL.
+#   (both #1 and #2 are in patches/0001-mscz-export-and-tempo-hint.patch)
+#   3. Pascal GPU support (patches/0002-pin-torch-cuda-index-for-pascal-gpus.patch)
+#      — upstream's pyproject.toml takes whatever CUDA build PyPI's default `torch`
+#      wheel currently bundles (cu130 as of 2.13.0), and that build dropped kernels
+#      for Pascal (sm_60/61/62), breaking cards like the GTX 10-series under the
+#      `midi-gpu` profile. Pins Linux installs to the cu126 index instead.
+# #1 and #2 are small and additive, and worth offering upstream; if they land there,
+# drop that patch. #3 is a local-environment workaround, not something to upstream.
 #
 # The MuseScore AppImage URL in their Dockerfile is x86_64-only. That's fine for the
 # server; on an arm64 dev machine the `AppRun --version` check fails and you need:
