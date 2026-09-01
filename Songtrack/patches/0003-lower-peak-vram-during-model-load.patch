@@ -1,0 +1,48 @@
+diff --git a/muscriptor/transcription_model.py b/muscriptor/transcription_model.py
+index 613a912..98a8902 100644
+--- a/muscriptor/transcription_model.py
++++ b/muscriptor/transcription_model.py
+@@ -183,7 +183,11 @@ def _remap_single_codebook_keys(state_dict: dict) -> dict:
+     return remapped
+ 
+ 
+-def _build_model(device: torch.device, cfg: _ModelConfig = _DEFAULT_CONFIG) -> LMModel:
++def _build_model(
++    device: torch.device,
++    cfg: _ModelConfig = _DEFAULT_CONFIG,
++    dtype: torch.dtype | None = None,
++) -> LMModel:
+     mel_cond = MelSpectrogramConditioner(
+         output_dim=cfg.dim,
+         device=device,
+@@ -225,6 +229,7 @@ def _build_model(device: torch.device, cfg: _ModelConfig = _DEFAULT_CONFIG) -> L
+         num_layers=cfg.num_layers,
+         max_period=10000,
+         device=device,
++        dtype=dtype,
+     )
+     return model
+ 
+@@ -311,10 +316,20 @@ class TranscriptionModel:
+ 
+         source = _resolve_source(weights_path)
+         weights_path = download_if_necessary(source)
+-        model = _build_model(device, _resolve_config(source, weights_path))
++        model = _build_model(device, _resolve_config(source, weights_path), dtype=dtype)
+         model.eval()
+ 
+-        state_dict = load_file(weights_path, device=str(device))
++        # Loaded onto CPU, not `device`: the checkpoint on disk is always fp32
++        # (regardless of `dtype`), so loading it straight onto the GPU would sit
++        # alongside the model this function just built — which `_build_model`
++        # now constructs directly in `dtype` — as a second, undiscounted fp32
++        # copy. For `large` that transient double-buffer (~5.5GB checkpoint +
++        # up to ~5.5GB model) is bigger than an 8GB card, and it happens before
++        # any `dtype` cast, so `dtype` alone could never avoid it. Staging on
++        # CPU keeps the GPU holding only the model's own (already-`dtype`)
++        # footprint while `load_state_dict` streams each tensor over and casts
++        # it in the same copy.
++        state_dict = load_file(weights_path, device="cpu")
+         state_dict = _remap_single_codebook_keys(state_dict)
+         model.load_state_dict(state_dict)
+         model.to(device)

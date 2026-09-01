@@ -24,8 +24,19 @@
 #      libcudart.so.13 and doesn't declare torch as a dependency, so leaving it
 #      unpinned breaks import at runtime ("libcudart.so.13: cannot open shared
 #      object file") once torch itself only ships libcudart.so.12.
+#   4. Lower peak VRAM during model load (patches/0003-lower-peak-vram-during-model-load.patch)
+#      — `TranscriptionModel.load_model()` always built the model in fp32 on the
+#      GPU, then separately loaded the (always-fp32-on-disk) checkpoint onto the
+#      GPU too, before ever applying `--dtype`. For `large` that transient
+#      double-buffer is ~11GB, more than an 8GB card has regardless of `--dtype` —
+#      the OOM happens during load, before any fp16 cast runs. Now `_build_model`
+#      constructs directly in the target dtype, and the checkpoint is staged on
+#      CPU (plentiful) instead of GPU (scarce) so `load_state_dict` casts and
+#      transfers each tensor in the same copy.
 # #1 and #2 are small and additive, and worth offering upstream; if they land there,
 # drop that patch. #3 is a local-environment workaround, not something to upstream.
+# #4 is a real upstream bug (the double-buffer exists independent of any Songtrack
+# need) and is worth offering upstream too.
 #
 # The MuseScore AppImage URL in their Dockerfile is x86_64-only. That's fine for the
 # server; on an arm64 dev machine the `AppRun --version` check fails and you need:
