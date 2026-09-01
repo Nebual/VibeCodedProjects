@@ -19,7 +19,11 @@
 #      — upstream's pyproject.toml takes whatever CUDA build PyPI's default `torch`
 #      wheel currently bundles (cu130 as of 2.13.0), and that build dropped kernels
 #      for Pascal (sm_60/61/62), breaking cards like the GTX 10-series under the
-#      `midi-gpu` profile. Pins Linux installs to the cu126 index instead.
+#      `midi-gpu` profile. Pins Linux installs to the cu126 index instead — and pins
+#      `torchaudio` to that same index, since its default PyPI wheel hard-links
+#      libcudart.so.13 and doesn't declare torch as a dependency, so leaving it
+#      unpinned breaks import at runtime ("libcudart.so.13: cannot open shared
+#      object file") once torch itself only ships libcudart.so.12.
 # #1 and #2 are small and additive, and worth offering upstream; if they land there,
 # drop that patch. #3 is a local-environment workaround, not something to upstream.
 #
