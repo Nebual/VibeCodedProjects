@@ -63,12 +63,19 @@ services:
     profiles: ["gpu"]
     pull_policy: never
     restart: unless-stopped
-    command: ["--model", "large", "--device", "cuda", "--host", "0.0.0.0", "--port", "8000"]
+    command: ["--model", "large", "--device", "cuda", "--dtype", "float16", "--host", "0.0.0.0", "--port", "8000"]
     environment:
       HF_HOME: /hf-cache
       HF_HUB_OFFLINE: "1"
-      # `large` (1.4B params, kept fp32 on CUDA) is right at the edge of an 8GB
-      # card. A CUDA OOM here that reports only tens of MiB missing, alongside
+      # `large` is 1.4B params. Upstream's CUDA default (`--dtype` omitted) keeps
+      # weight storage fp32 and only casts to fp16 for compute via autocast — that
+      # storage alone is ~5.5GB, which didn't fit an 8GB card (GTX 1070) once CUDA
+      # context and activations/KV cache are added. `--dtype float16` instead
+      # stores the transformer + embedding weights as fp16 (~2.7GB); upstream keeps
+      # the conditioning pipeline (mel-spectrogram/class embeddings) numerics in
+      # fp32 regardless (see transcription_model.py's load_model docstring), so
+      # this doesn't touch the precision-sensitive parts.
+      # A CUDA OOM here that reports only tens of MiB missing, alongside
       # unallocated-but-reserved memory of similar size, is allocator
       # fragmentation, not a true capacity shortfall — this tells PyTorch's
       # allocator to grow/merge segments instead of hitting that wall.
