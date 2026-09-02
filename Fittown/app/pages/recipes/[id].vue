@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { MASS_UNITS, VOLUME_UNITS, baseUnit, portionUnits, roundGrams, type PortionUnit } from '#shared/portions'
+import { MASS_UNITS, VOLUME_UNITS, baseUnit, loggedPortion, portionUnits, roundGrams, type PortionUnit } from '#shared/portions'
 import { MAX_INSTRUCTIONS_CHARS, defaultVariantName, showsGramPortions } from '#shared/recipes'
 import { toLocalDate } from '#shared/dates'
 import { sharedRecipeUrl } from '#shared/friends'
@@ -181,8 +181,12 @@ function editLink(ingredient: RecipeIngredient) {
     ingredient: String(ingredient.id),
     g: String(ingredient.grams),
   })
-  if (ingredient.serving_label) params.set('sl', ingredient.serving_label)
-  if (ingredient.serving_count) params.set('sc', String(ingredient.serving_count))
+  const unit = loggedPortion(
+    ingredient.grams, ingredient.serving_label, ingredient.serving_count,
+    !!ingredient.food.is_liquid,
+  )
+  params.set('sl', unit.label)
+  if (unit.count) params.set('sc', String(unit.count))
   if (ingredient.amount_formula) params.set('af', ingredient.amount_formula)
   // So the Optional switch over there opens in the state it is in over here.
   if (ingredient.is_optional) params.set('opt', '1')

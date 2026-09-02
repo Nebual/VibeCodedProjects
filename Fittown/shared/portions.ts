@@ -191,6 +191,32 @@ export function portionAmount(targetGrams: number, unitSize: number): number {
   return Math.round(exact * 100) / 100
 }
 
+/**
+ * The `sl`/`sc` pair to carry when reopening *this exact entry* to edit its
+ * amount (see `MealSection.vue` and `recipes/[id].vue`'s `editLink()`).
+ *
+ * A plain weight is stored with `serving_label: null` — `usePortionOptions()`'s
+ * `selection` only names oz/cup/servings/etc, not grams/millilitres — which
+ * makes "logged in grams" indistinguishable, once written, from "no unit was
+ * ever recorded". On reopening, that ambiguity used to resolve in favour of
+ * re-expressing the weight as a fraction of the food's own stated serving
+ * (the behaviour `usePortionOptions()` wants when a *different* food's amount
+ * is carried over — see `changeLink()`), so a food logged as "50 g" came back
+ * showing "0.33 × serving" instead of 50 g.
+ *
+ * Only safe here, reopening the same food the amount was logged against: a
+ * missing label can only mean the base unit, so name it explicitly.
+ */
+export function loggedPortion(
+  grams: number,
+  servingLabel: string | null,
+  servingCount: number | null,
+  isLiquid: boolean,
+): { label: string; count: number | null } {
+  if (servingLabel) return { label: servingLabel, count: servingCount }
+  return { label: baseUnit(isLiquid), count: grams || null }
+}
+
 /** "2 × oz = 57 g" — the sentence that makes a non-base unit trustworthy. */
 export function conversionText(
   amount: number,

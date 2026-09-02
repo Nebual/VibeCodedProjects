@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { showsGramPortions } from '#shared/recipes'
-import { portionUnits, type PortionUnit } from '#shared/portions'
+import { loggedPortion, portionUnits, type PortionUnit } from '#shared/portions'
 import type { DiaryEntry, MealName } from '~/composables/useDiary'
 
 const props = defineProps<{
@@ -49,8 +49,11 @@ function editLink(entry: DiaryEntry) {
     meal: props.meal,
     g: String(entry.grams),
   })
-  if (entry.serving_label) params.set('sl', entry.serving_label)
-  if (entry.serving_count) params.set('sc', String(entry.serving_count))
+  const unit = loggedPortion(
+    entry.grams, entry.serving_label, entry.serving_count, !!entry.food.is_liquid,
+  )
+  params.set('sl', unit.label)
+  if (unit.count) params.set('sc', String(unit.count))
   if (entry.amount_formula) params.set('af', entry.amount_formula)
   return `/food/${entry.food.id}?${params}`
 }

@@ -6,6 +6,7 @@ import {
   conversionText,
   defaultAmount,
   defaultUnitKey,
+  loggedPortion,
   portionDefaultUnitKey,
   PORTION_DEFAULTS,
   portionUnits,
@@ -124,6 +125,27 @@ describe('conversion text', () => {
   it('handles fractional amounts', () => {
     const lb = MASS_UNITS.find((u) => u.key === 'lb')!
     expect(conversionText(0.5, lb, false)).toBe('0.5 × lb = 227 g')
+  })
+})
+
+describe('loggedPortion — reopening an entry to edit its amount', () => {
+  it('names the base unit explicitly when nothing was recorded, so it reads back as grams', () => {
+    // A food with a stated serving previously came back as a fraction of it,
+    // since a null label used to mean "reinterpret this weight" rather than
+    // "this was grams".
+    expect(loggedPortion(50, null, null, false)).toEqual({ label: 'g', count: 50 })
+  })
+
+  it('uses millilitres for a liquid', () => {
+    expect(loggedPortion(240, null, null, true)).toEqual({ label: 'ml', count: 240 })
+  })
+
+  it('passes a real named serving through untouched', () => {
+    expect(loggedPortion(180, 'serving', 2, false)).toEqual({ label: 'serving', count: 2 })
+  })
+
+  it('has nothing to restore for a zero-weight entry', () => {
+    expect(loggedPortion(0, null, null, false)).toEqual({ label: 'g', count: null })
   })
 })
 
