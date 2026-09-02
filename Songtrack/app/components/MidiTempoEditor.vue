@@ -20,6 +20,8 @@ const props = defineProps<{
   notes: TranscribedNote[]
   /** True while the page is waiting for the user to click a new first downbeat on the roll. */
   pickingDownbeat: boolean
+  /** The grid as it stood right after transcription finished — what "Clear" reverts to. */
+  original: BeatGrid | null
 }>()
 
 const grid = defineModel<BeatGrid>({ required: true })
@@ -96,6 +98,58 @@ function onBpmBlur() {
   const bpm = Number.isFinite(parsed) ? clampBpm(parsed) : grid.value.bpm
   setGrid({ bpm })
   bpmText.value = String(bpm)
+}
+
+/**
+ * The downbeat field mirrors the BPM one: free text while typing, only applied once it parses to
+ * something plausible, clamped to a non-negative number on blur.
+ */
+const downbeatText = ref(grid.value.firstDownbeat.toFixed(3))
+const editingDownbeat = ref(false)
+
+watch(() => grid.value.firstDownbeat, (v) => {
+  if (!editingDownbeat.value) downbeatText.value = v.toFixed(3)
+})
+
+function onDownbeatInput(value: string) {
+  downbeatText.value = value
+  const parsed = Number.parseFloat(value)
+  if (Number.isFinite(parsed) && parsed >= 0) setGrid({ firstDownbeat: parsed })
+}
+
+function onDownbeatBlur() {
+  editingDownbeat.value = false
+  const parsed = Number.parseFloat(downbeatText.value)
+  const firstDownbeat = Number.isFinite(parsed) ? Math.max(0, parsed) : grid.value.firstDownbeat
+  setGrid({ firstDownbeat })
+  downbeatText.value = firstDownbeat.toFixed(3)
+}
+
+/**
+ * Whether the downbeat has drifted from where transcription left it — by typing, picking on the
+ * roll, or "Align to notes". Derived rather than tracked, so every way of moving it shows Clear.
+ */
+const downbeatChanged = computed(() => (
+  props.original !== null && Math.abs(grid.value.firstDownbeat - props.original.firstDownbeat) > 1e-6
+))
+
+/**
+ * Reverts only the downbeat, not the whole grid — a BPM correction made alongside it must survive.
+ * The source only reverts to "not user's own" when nothing else was touched either; otherwise it
+ * would misrepresent an edited BPM as still the model's guess.
+ */
+function clearDownbeat() {
+  const original = props.original
+  if (!original) return
+  const stillMatchesOriginal = grid.value.bpm === original.bpm
+    && grid.value.beatsPerBar === original.beatsPerBar
+    && grid.value.subdivision === original.subdivision
+  grid.value = {
+    ...grid.value,
+    firstDownbeat: original.firstDownbeat,
+    source: stillMatchesOriginal ? original.source : 'user',
+  }
+  downbeatText.value = original.firstDownbeat.toFixed(3)
 }
 
 /**
@@ -193,15 +247,34 @@ const errorQuality = computed(() => {
       </label>
 
       <div class="form-control flex flex-col gap-1">
-        <span class="label-text text-xs">First downbeat</span>
-        <button
-          class="btn btn-sm"
-          :class="pickingDownbeat ? 'btn-primary' : 'btn-outline'"
-          data-testid="pick-downbeat"
-          @click="emit('pickDownbeat')"
-        >
-          {{ pickingDownbeat ? 'Click the roll…' : `${grid.firstDownbeat.toFixed(3)}s` }}
-        </button>
+        <span class="label-text text-xs">First downbeat (s)</span>
+        <div class="join">
+          <input
+            :value="downbeatText"
+            type="number" step="0.001" min="0"
+            class="input input-bordered input-sm w-24 join-item"
+            data-testid="downbeat-input"
+            @focus="editingDownbeat = true"
+            @input="onDownbeatInput(($event.target as HTMLInputElement).value)"
+            @blur="onDownbeatBlur"
+          >
+          <button
+            class="btn btn-sm join-item"
+            :class="pickingDownbeat ? 'btn-primary' : 'btn-outline'"
+            data-testid="pick-downbeat"
+            @click="emit('pickDownbeat')"
+          >
+            {{ pickingDownbeat ? 'Click the roll…' : 'Pick' }}
+          </button>
+          <button
+            v-if="downbeatChanged"
+            class="btn btn-sm btn-ghost join-item"
+            data-testid="clear-downbeat"
+            @click="clearDownbeat"
+          >
+            Clear
+          </button>
+        </div>
       </div>
 
       <div class="form-control flex flex-col gap-1">

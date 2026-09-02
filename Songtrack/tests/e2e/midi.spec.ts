@@ -179,6 +179,72 @@ test('each instrument can be switched off in the preview', async ({ page }) => {
   await expect(piano).toHaveClass(/btn-primary/)
 })
 
+/** Counts MTrk chunks: @tonejs/midi always writes one conductor track plus one per instrument. */
+async function countMidiTracks(page: import('@playwright/test').Page, url: string): Promise<number> {
+  return page.evaluate(async (u) => {
+    const bytes = new Uint8Array(await (await fetch(u)).arrayBuffer())
+    let count = 0
+    for (let i = 0; i < bytes.length - 4; i++) {
+      if (bytes[i] === 0x4D && bytes[i + 1] === 0x54 && bytes[i + 2] === 0x72 && bytes[i + 3] === 0x6B) count++
+    }
+    return count
+  }, url)
+}
+
+test('muting an instrument excludes it from both MIDI downloads', async ({ page }) => {
+  await page.goto('/')
+  const songId = await fixtureSong(page)
+  await page.evaluate(id => fetch(`/api/songs/${id}/transcribe`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ instruments: [] }),
+  }).then(r => r.text()), songId)
+
+  await page.goto(`/songs/${songId}/midi`, { waitUntil: 'networkidle' })
+  await expect(page.getByTestId('download-exclude-hint')).toHaveCount(0)
+
+  // Unfiltered: piano + bass, one track each, plus the conductor track.
+  const scoreHref = () => page.getByTestId('download-score-midi').getAttribute('href')
+  const perfHref = () => page.getByTestId('download-performance-midi').getAttribute('href')
+  expect(await countMidiTracks(page, (await scoreHref())!)).toBe(3)
+  expect(await countMidiTracks(page, (await perfHref())!)).toBe(3)
+
+  await page.getByTestId('mute-acoustic_bass').click()
+  await expect(page.getByTestId('download-exclude-hint')).toContainText('acoustic bass')
+  await expect.poll(async () => (await scoreHref())!).toContain('exclude=acoustic_bass')
+  await expect.poll(async () => (await perfHref())!).toContain('exclude=acoustic_bass')
+
+  expect(await countMidiTracks(page, (await scoreHref())!)).toBe(2)
+  expect(await countMidiTracks(page, (await perfHref())!)).toBe(2)
+})
+
+test('the first downbeat can be typed directly, and Clear reverts it', async ({ page }) => {
+  await page.goto('/')
+  const songId = await fixtureSong(page)
+  await page.evaluate(id => fetch(`/api/songs/${id}/transcribe`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ instruments: [] }),
+  }).then(r => r.text()), songId)
+
+  await page.goto(`/songs/${songId}/midi`, { waitUntil: 'networkidle' })
+  const input = page.getByTestId('downbeat-input')
+  await expect(input).toHaveValue('0.000')
+  await expect(page.getByTestId('clear-downbeat')).toHaveCount(0)
+
+  await input.click()
+  await input.press('Control+a')
+  await input.pressSequentially('0.25', { delay: 30 })
+  await input.blur()
+  await expect(input).toHaveValue('0.250')
+
+  const clear = page.getByTestId('clear-downbeat')
+  await expect(clear).toBeVisible()
+  await clear.click()
+  await expect(input).toHaveValue('0.000')
+  await expect(clear).toHaveCount(0)
+})
+
 test('the tempo editor recomputes onset error locally, with no server round trip', async ({ page }) => {
   await page.goto('/')
   const songId = await fixtureSong(page)
@@ -382,7 +448,7 @@ test('the BPM field can be typed into, and the downbeat snaps to a whole beat', 
   await page.getByTestId('pick-downbeat').click()
   const box = (await page.getByTestId('piano-roll').boundingBox())!
   await page.mouse.click(box.x + box.width * 0.4, box.y + box.height / 2)
-  const seconds = Number.parseFloat(await page.getByTestId('pick-downbeat').innerText())
+  const seconds = Number.parseFloat(await page.getByTestId('downbeat-input').inputValue())
   const beat = 60 / 81
   expect(Math.abs(seconds / beat - Math.round(seconds / beat))).toBeLessThan(0.02)
 })

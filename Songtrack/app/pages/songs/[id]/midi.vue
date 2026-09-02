@@ -2,6 +2,7 @@
 import { unzipSync } from 'fflate'
 import type { BeatGrid, TranscribedNote, TranscriptionEvent, TranscriptionSummary } from '#shared/types'
 import { DEFAULT_SUBDIVISION } from '#shared/types'
+import { instrumentLabel } from '#shared/utils/instruments'
 
 /**
  * Song-scoped, not a standalone uploader: `POST /api/songs/upload` already accepts
@@ -43,6 +44,8 @@ const total = ref(0)
 const liveNotes = ref<TranscribedNote[]>([])
 const finalNotes = ref<TranscribedNote[]>([])
 const grid = ref<BeatGrid | null>(null)
+/** The grid exactly as `finish()` set it, before any tempo-editor tweaks — what "Clear" reverts to. */
+const originalGrid = ref<BeatGrid | null>(null)
 
 const ZOOM_CHOICES = [
   { seconds: 5, label: '5s' },
@@ -165,6 +168,7 @@ async function finish() {
     bpm: 120, beatsPerBar: 4, firstDownbeat: 0, onsetDelay: 0, subdivision: DEFAULT_SUBDIVISION,
     source: 'estimated',
   }
+  originalGrid.value = { ...grid.value }
   done.value = true
   showSetup.value = false
 }
@@ -209,6 +213,14 @@ const gridQuery = computed(() => {
   if (!g) return ''
   return `?bpm=${g.bpm}&beatsPerBar=${g.beatsPerBar}&firstDownbeat=${g.firstDownbeat}&subdivision=${g.subdivision}`
 })
+
+/**
+ * Downloads follow the player's "Hear:" toggles: whatever you've muted for preview is left out of
+ * the MIDI too, rather than adding a second, separate instrument picker just for export.
+ */
+const excludeQuery = computed(() => (
+  mutedInstruments.value.length ? `&exclude=${mutedInstruments.value.map(encodeURIComponent).join(',')}` : ''
+))
 
 /**
  * The synth render is a real round trip: the sidecar renders it and ffmpeg re-encodes it, which
@@ -391,21 +403,30 @@ onScopeDispose(() => { for (const f of sheets.value) URL.revokeObjectURL(f.url) 
         </button>
       </div>
 
-      <MidiTempoEditor v-model="grid" :notes="finalNotes" :picking-downbeat="pickingDownbeat" @pick-downbeat="pickingDownbeat = true" />
+      <MidiTempoEditor
+        v-model="grid"
+        :notes="finalNotes"
+        :picking-downbeat="pickingDownbeat"
+        :original="originalGrid"
+        @pick-downbeat="pickingDownbeat = true"
+      />
 
       <div class="flex flex-col gap-2 p-3 rounded-box bg-base-200">
         <h3 class="font-semibold text-sm">Downloads</h3>
+        <p v-if="mutedInstruments.length" class="text-xs text-base-content/60" data-testid="download-exclude-hint">
+          Excluding what's muted above: {{ mutedInstruments.map(instrumentLabel).join(', ') }}.
+        </p>
         <div class="flex flex-wrap items-center gap-2">
           <!-- Emphasis on Score MIDI: notation is what people are usually after, and handing
                them the performance file to import is how this feature disappoints. -->
           <a
             class="btn btn-sm btn-primary"
-            :href="`/api/songs/${songId}/transcription/midi${gridQuery}&variant=score`"
+            :href="`/api/songs/${songId}/transcription/midi${gridQuery}&variant=score${excludeQuery}`"
             data-testid="download-score-midi"
           >Score MIDI</a>
           <a
             class="btn btn-sm btn-outline"
-            :href="`/api/songs/${songId}/transcription/midi?variant=performance`"
+            :href="`/api/songs/${songId}/transcription/midi?variant=performance${excludeQuery}`"
             data-testid="download-performance-midi"
           >Performance MIDI</a>
           <button

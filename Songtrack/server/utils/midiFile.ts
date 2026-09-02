@@ -76,7 +76,26 @@ export function writeScoreMidi(notes: TranscribedNote[], grid: BeatGrid): Buffer
     midi.header.timeSignatures.push({ ticks: 0, timeSignature: [grid.beatsPerBar, 4] })
   }
 
-  // One track per instrument keeps the parts separable — the sheets archive gets one PDF each.
+  addInstrumentTracks(midi, notes, shift)
+
+  return Buffer.from(midi.toArray())
+}
+
+/**
+ * Writes notes out as a *performance* MIDI — real onset times, no quantization or grid.
+ *
+ * Only needed for a filtered download (some instruments excluded): the unfiltered performance
+ * download streams the sidecar's own saved file directly instead, which is why this doesn't try
+ * to reproduce its meta events — nothing downstream of a performance file reads them.
+ */
+export function writePerformanceMidi(notes: TranscribedNote[]): Buffer {
+  const midi = new Midi()
+  addInstrumentTracks(midi, notes)
+  return Buffer.from(midi.toArray())
+}
+
+/** One track per instrument keeps the parts separable — the sheets archive gets one PDF each. */
+function addInstrumentTracks(midi: Midi, notes: TranscribedNote[], shift = 0): void {
   const byInstrument = new Map<string, TranscribedNote[]>()
   for (const note of notes) {
     const list = byInstrument.get(note.instrument)
@@ -114,8 +133,6 @@ export function writeScoreMidi(notes: TranscribedNote[], grid: BeatGrid): Buffer
 
   // A completely empty transcription still has to produce a valid file rather than throw.
   if (midi.tracks.length === 0) midi.addTrack().name = 'empty'
-
-  return Buffer.from(midi.toArray())
 }
 
 /**

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { Midi } from '@tonejs/midi'
-import { notesFromMidi, shiftMidiNotes, writeScoreMidi } from '../../server/utils/midiFile'
+import { notesFromMidi, shiftMidiNotes, writePerformanceMidi, writeScoreMidi } from '../../server/utils/midiFile'
 import { quantizeNotes } from '../../server/utils/quantize'
 import type { BeatGrid, TranscribedNote } from '../../shared/types'
 
@@ -133,6 +133,31 @@ describe('writeScoreMidi / notesFromMidi round trip', () => {
     const notes = [{ pitch: 60, start: 1, end: 1, instrument: 'acoustic_piano' }]
     const read = notesFromMidi(writeScoreMidi(notes, GRID))
     expect(read[0]!.end).toBeGreaterThan(read[0]!.start)
+  })
+})
+
+describe('writePerformanceMidi', () => {
+  it('produces a real MIDI file with the original, unquantized times', () => {
+    const notes = scale()
+    const read = notesFromMidi(writePerformanceMidi(notes))
+    expect(read.map(n => n.pitch)).toEqual(notes.map(n => n.pitch))
+    read.forEach((n, i) => expect(n.start).toBeCloseTo(notes[i]!.start, 3))
+  })
+
+  it('splits instruments into separate tracks, same as the score writer', () => {
+    const notes: TranscribedNote[] = [
+      { pitch: 60, start: 0, end: 0.5, instrument: 'acoustic_piano' },
+      { pitch: 38, start: 0, end: 0.1, instrument: 'drums' },
+    ]
+    const midi = new Midi(toArrayBuffer(writePerformanceMidi(notes)))
+    expect(midi.tracks).toHaveLength(2)
+    expect(midi.tracks.find(t => t.name === 'drums')?.channel).toBe(9)
+  })
+
+  it('writes a valid file for an empty note list rather than throwing', () => {
+    const buf = writePerformanceMidi([])
+    expect(buf.subarray(0, 4).toString('ascii')).toBe('MThd')
+    expect(notesFromMidi(buf)).toEqual([])
   })
 })
 
