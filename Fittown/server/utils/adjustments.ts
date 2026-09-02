@@ -35,6 +35,7 @@ export function assertAdjustments(value: unknown): RecipeAdjustment[] {
           min: 0.01,
           max: 1000,
         }),
+        amount_formula: optionalText(entry.amount_formula, 100),
       }
     }
 
@@ -59,6 +60,9 @@ export function assertAdjustments(value: unknown): RecipeAdjustment[] {
       serving_count: entry.serving_count === undefined
         ? undefined
         : optionalNumber(entry.serving_count, `${where}.serving_count`, { min: 0.01, max: 1000 }),
+      amount_formula: entry.amount_formula === undefined
+        ? undefined
+        : optionalText(entry.amount_formula, 100),
     }
   })
 }

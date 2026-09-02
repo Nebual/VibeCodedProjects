@@ -63,3 +63,23 @@ describe('diary_cards_hidden column', () => {
     expect(row.diary_cards_hidden).toBeNull()
   })
 })
+
+describe('amount_formula on a diary entry', () => {
+  it('stores the arithmetic beside the number it came to', async () => {
+    const db = await boot()
+    db.prepare("INSERT INTO users (email, name) VALUES ('a@b.c', 'A')").run()
+    db.prepare(
+      "INSERT INTO foods (name, source) VALUES ('Rice', 'custom')",
+    ).run()
+    db.prepare(
+      `INSERT INTO diary_entries (user_id, date, meal, food_id, grams, amount_formula)
+       VALUES (1, '2026-09-01', 'lunch', 1, 200, '50x4')`,
+    ).run()
+
+    const row = db
+      .prepare('SELECT grams, amount_formula FROM diary_entries WHERE id = 1')
+      .get() as { grams: number; amount_formula: string | null }
+    expect(row.grams).toBe(200)
+    expect(row.amount_formula).toBe('50x4')
+  })
+})

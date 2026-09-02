@@ -286,6 +286,15 @@ CREATE TABLE IF NOT EXISTS recipe_ingredients (
   -- The bit of the line that isn't an amount or a name — "a lot of", "minced",
   -- "1 to 2 tbsp". Shown to the user to interpret; never parsed again.
   note           TEXT,
+  -- What the user typed into the amount box, when it was arithmetic rather
+  -- than a figure: '50x4', '(100+50)/3'. Display-only, and only for the input
+  -- itself — every calculation uses \`grams\`. Null on the overwhelming
+  -- majority of rows, which were typed as plain numbers.
+  --
+  -- It is shown again only if it still evaluates to the stored amount (see
+  -- fieldText() in shared/mathExpr.ts), so it can never make the box disagree
+  -- with the figure the app uses.
+  amount_formula TEXT,
   sort_order     INTEGER NOT NULL DEFAULT 0,
 
   -- Optional ingredients: "50 g bacon on top", "almond flour instead of flour".
@@ -327,6 +336,9 @@ CREATE TABLE IF NOT EXISTS diary_entries (
   grams         REAL NOT NULL,
   serving_label TEXT,
   serving_count REAL,
+  -- The arithmetic the amount was typed as, if any. See the note on
+  -- recipe_ingredients.amount_formula.
+  amount_formula TEXT,
   sort_order    INTEGER NOT NULL DEFAULT 0,
   created_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );

@@ -56,6 +56,8 @@ export interface IngredientRow {
   raw_text: string | null
   /** Amount descriptor or prep note — "a lot of", "minced". */
   note: string | null
+  /** The arithmetic the amount was typed as. For the input box only. */
+  amount_formula: string | null
   sort_order: number
   /** Does the UI offer a switch for this one? */
   is_optional: number
@@ -116,7 +118,7 @@ export function listIngredients(db: DatabaseSync, recipeFoodId: number): Ingredi
   const rows = db
     .prepare(
       `SELECT ri.id AS ingredient_id, ri.grams, ri.serving_label, ri.serving_count,
-              ri.raw_text, ri.note, ri.sort_order, ri.food_id AS ri_food_id,
+              ri.raw_text, ri.note, ri.amount_formula, ri.sort_order, ri.food_id AS ri_food_id,
               ri.is_optional, ri.is_included,
               ${foodCols()}
        FROM recipe_ingredients ri
@@ -134,6 +136,7 @@ export function listIngredients(db: DatabaseSync, recipeFoodId: number): Ingredi
       serving_count: servingCount,
       raw_text: rawText,
       note,
+      amount_formula: amountFormula,
       sort_order: sortOrder,
       ri_food_id: foodId,
       is_optional: isOptional,
@@ -147,6 +150,7 @@ export function listIngredients(db: DatabaseSync, recipeFoodId: number): Ingredi
       serving_count: servingCount === null ? null : Number(servingCount),
       raw_text: (rawText as string | null) ?? null,
       note: (note as string | null) ?? null,
+      amount_formula: (amountFormula as string | null) ?? null,
       sort_order: Number(sortOrder),
       is_optional: Number(isOptional ?? 0),
       // Absent reads as included, matching the column default and
@@ -676,6 +680,7 @@ export function recipeDetail(
       serving_count: ingredient.serving_count,
       raw_text: ingredient.raw_text,
       note: ingredient.note,
+      amount_formula: ingredient.amount_formula,
       sort_order: ingredient.sort_order,
       is_optional: ingredient.is_optional,
       is_included: ingredient.is_included,
@@ -717,6 +722,7 @@ interface SourceIngredient {
   serving_count: number | null
   raw_text: string | null
   note: string | null
+  amount_formula: string | null
   sort_order: number
   is_optional: number
   is_included: number
@@ -810,7 +816,7 @@ export function cloneRecipe(
   const ingredients = db
     .prepare(
       `SELECT ri.id, ri.food_id, ri.grams, ri.serving_label, ri.serving_count,
-              ri.raw_text, ri.note, ri.sort_order,
+              ri.raw_text, ri.note, ri.amount_formula, ri.sort_order,
               ri.is_optional, ri.is_included,
               f.owner_user_id, f.source
        FROM recipe_ingredients ri
@@ -835,8 +841,8 @@ export function cloneRecipe(
   const insert = db.prepare(
     `INSERT INTO recipe_ingredients
        (recipe_food_id, food_id, grams, serving_label, serving_count,
-        raw_text, note, sort_order, is_optional, is_included)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        raw_text, note, amount_formula, sort_order, is_optional, is_included)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
 
   for (const ingredient of ingredients) {
@@ -878,6 +884,12 @@ export function cloneRecipe(
       // something rather than failing the whole copy.
       foodId === null ? (ingredient.raw_text ?? 'Unnamed ingredient') : ingredient.raw_text,
       ingredient.note,
+      // An adjustment that set a new amount carries its own formula; one that
+      // did not leaves the recipe's — a carried formula that no longer matches
+      // the new amount is a case `fieldText()`'s invariant handles on redisplay.
+      // `=== undefined`, not `??`, so an adjustment that explicitly cleared the
+      // formula (a bump, a unit switch, a retyped plain number) stays cleared.
+      change?.amount_formula === undefined ? ingredient.amount_formula : change.amount_formula,
       ingredient.sort_order,
       // Carried, not defaulted: a copy that forgot these would count somebody's
       // suggested bacon, and a frozen meal would silently regain an ingredient
@@ -911,6 +923,7 @@ export function cloneRecipe(
       addition.serving_count ?? null,
       null,
       null,
+      addition.amount_formula ?? null,
       extraOrder,
       0,
       1,
@@ -1153,14 +1166,15 @@ export function resnapshotForLog(
 
   const update = db.prepare(
     `UPDATE recipe_ingredients
-     SET grams = ?, serving_label = ?, serving_count = ?, food_id = ?, is_included = ?
+     SET grams = ?, serving_label = ?, serving_count = ?, amount_formula = ?,
+         food_id = ?, is_included = ?
      WHERE id = ? AND recipe_food_id = ?`,
   )
   const insert = db.prepare(
     `INSERT INTO recipe_ingredients
-       (recipe_food_id, food_id, grams, serving_label, serving_count, sort_order,
-        is_optional, is_included)
-     VALUES (?, ?, ?, ?, ?, ?, 0, 1)`,
+       (recipe_food_id, food_id, grams, serving_label, serving_count,
+        amount_formula, sort_order, is_optional, is_included)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1)`,
   )
 
   const rows = listIngredients(db, snapshotId)
@@ -1181,6 +1195,7 @@ export function resnapshotForLog(
         adjustment.grams,
         adjustment.serving_label ?? null,
         adjustment.serving_count ?? null,
+        adjustment.amount_formula ?? null,
         order,
       )
       order += 1
@@ -1193,6 +1208,7 @@ export function resnapshotForLog(
       adjustment.grams ?? row.grams,
       adjustment.serving_label === undefined ? row.serving_label : adjustment.serving_label,
       adjustment.serving_count === undefined ? row.serving_count : adjustment.serving_count,
+      adjustment.amount_formula === undefined ? row.amount_formula : adjustment.amount_formula,
       adjustment.food_id ?? (row.food?.id as number | undefined) ?? null,
       adjustment.included === undefined ? row.is_included : (adjustment.included ? 1 : 0),
       row.id,

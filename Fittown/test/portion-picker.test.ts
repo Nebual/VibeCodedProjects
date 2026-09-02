@@ -257,3 +257,81 @@ describe('usePortionOptions — the portion type default', () => {
     expect(picker.amount).toBe(2)
   })
 })
+
+describe('the arithmetic an amount was typed as', () => {
+  it('rides along in the selection the page saves', () => {
+    const picker = usePortionOptions(
+      ref(plainFood()), ref([]), ref('metric'), ref(null), ref('serving'),
+    )
+    picker.amount = 200
+    picker.amountFormula = '50x4'
+    expect(picker.selection.amount_formula).toBe('50x4')
+  })
+
+  it('comes back when a saved row is reopened', () => {
+    const initial = ref({
+      grams: 180, serving_label: 'serving', serving_count: 2, amount_formula: '1+1',
+    })
+    const picker = usePortionOptions(
+      ref(plainFood()), ref([]), ref('metric'), initial, ref('serving'),
+    )
+    expect(picker.amount).toBe(2)
+    expect(picker.amountFormula).toBe('1+1')
+  })
+
+  it('is dropped when it no longer evaluates to the amount', () => {
+    // A recipe copy whose amount was adjusted after the formula was written.
+    const initial = ref({
+      grams: 180, serving_label: 'serving', serving_count: 2, amount_formula: '50x4',
+    })
+    const picker = usePortionOptions(
+      ref(plainFood()), ref([]), ref('metric'), initial, ref('serving'),
+    )
+    expect(picker.amount).toBe(2)
+    expect(picker.amountFormula).toBeNull()
+  })
+
+  it('is dropped by a portion switch, which recomputes the amount', () => {
+    const picker = usePortionOptions(
+      ref(plainFood()), ref([]), ref('metric'), ref(null), ref('serving'),
+    )
+    picker.amount = 2
+    picker.amountFormula = '1+1'
+    select(picker, 'u:g') // 2 × 90 g serving → 180 g
+    expect(picker.amount).toBe(180)
+    expect(picker.amountFormula).toBeNull()
+  })
+
+  /**
+   * Grams is the commonest amount unit, and it is reached by a different
+   * branch of the restore than a named serving is — a food with no stated
+   * serving of its own, so the picker has nothing to land on but the gram
+   * option. This is the branch Finding 1 found broken: it restored the
+   * amount but silently dropped the formula.
+   */
+  describe('restoring a formula on the gram branch (no stated serving)', () => {
+    const noServingFood = (): FoodRow => ({ ...plainFood(), serving_grams: null })
+
+    it('comes back when a saved gram row is reopened', () => {
+      const initial = ref({
+        grams: 200, serving_label: null, serving_count: null, amount_formula: '50x4',
+      })
+      const picker = usePortionOptions(ref(noServingFood()), ref([]), ref('metric'), initial)
+
+      expect(picker.selectedKey).toBe('u:g')
+      expect(picker.amount).toBe(200)
+      expect(picker.amountFormula).toBe('50x4')
+    })
+
+    it('is dropped when it no longer evaluates to the stored gram amount', () => {
+      const initial = ref({
+        grams: 200, serving_label: null, serving_count: null, amount_formula: '50x3',
+      })
+      const picker = usePortionOptions(ref(noServingFood()), ref([]), ref('metric'), initial)
+
+      expect(picker.selectedKey).toBe('u:g')
+      expect(picker.amount).toBe(200)
+      expect(picker.amountFormula).toBeNull()
+    })
+  })
+})

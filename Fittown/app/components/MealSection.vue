@@ -51,6 +51,7 @@ function editLink(entry: DiaryEntry) {
   })
   if (entry.serving_label) params.set('sl', entry.serving_label)
   if (entry.serving_count) params.set('sc', String(entry.serving_count))
+  if (entry.amount_formula) params.set('af', entry.amount_formula)
   return `/food/${entry.food.id}?${params}`
 }
 
@@ -62,10 +63,12 @@ function editLink(entry: DiaryEntry) {
 /** Which entry's portion is open for a quick edit, plus its unsaved draft. */
 const editingEntryId = ref<number | null>(null)
 const amountDraft = ref(0)
+/** The arithmetic behind `amountDraft`, when it was typed as one. */
+const formulaDraft = ref<string | null>(null)
 const unitDraft = ref<PortionUnit>({ key: 'g', label: 'g', size: 1 })
-const portionInputEl = ref<HTMLInputElement | null>(null)
-function setPortionInputEl(el: Element | null) {
-  portionInputEl.value = el as HTMLInputElement | null
+const portionInputEl = ref<{ focus: () => void; select: () => void } | null>(null)
+function setPortionInputEl(el: unknown) {
+  portionInputEl.value = el as { focus: () => void; select: () => void } | null
 }
 
 watch(editingEntryId, async (opened) => {
@@ -116,6 +119,7 @@ function startEditPortion(entry: DiaryEntry) {
   editingEntryId.value = entry.id
   unitDraft.value = unit
   amountDraft.value = displayAmount(entry, unit)
+  formulaDraft.value = entry.amount_formula
 }
 
 /** Switching units mid-edit re-expresses the same weight rather than keeping
@@ -124,6 +128,8 @@ function switchDraftUnit(unit: PortionUnit) {
   const grams = amountDraft.value * unitDraft.value.size
   unitDraft.value = unit
   amountDraft.value = Math.round((grams / unit.size) * 100) / 100
+  // A unit switch recomputes the amount rather than accepting a typed one.
+  formulaDraft.value = null
 }
 
 function cancelEditPortion() {
@@ -159,7 +165,12 @@ function commitPortion(entry: DiaryEntry) {
     && servingCount === (entry.serving_count ?? null)
   if (unchanged) return
 
-  emit('update-portion', entry.id, { grams, serving_label: servingLabel, serving_count: servingCount })
+  emit('update-portion', entry.id, {
+    grams,
+    serving_label: servingLabel,
+    serving_count: servingCount,
+    amount_formula: formulaDraft.value,
+  })
 }
 </script>
 
@@ -189,18 +200,16 @@ function commitPortion(entry: DiaryEntry) {
               class="flex items-center gap-1.5 flex-wrap"
               @focusout="onPortionGroupFocusOut($event, entry)"
             >
-              <input
+              <MathNumberInput
                 :ref="setPortionInputEl"
-                v-model.number="amountDraft"
-                type="number"
-                min="0"
-                step="any"
-                inputmode="decimal"
+                v-model="amountDraft"
+                v-model:formula="formulaDraft"
+                preview="chip"
                 class="input input-bordered input-xs w-20 text-right tabular"
                 :aria-label="`Amount of ${entry.food.name}`"
                 @keydown.enter="commitPortion(entry)"
                 @keydown.esc="cancelEditPortion"
-              >
+              />
               <select
                 class="select select-bordered select-xs w-24 truncate"
                 :aria-label="`Unit for ${entry.food.name}`"

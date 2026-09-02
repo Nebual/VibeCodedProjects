@@ -27,7 +27,7 @@ const form = reactive({
   is_liquid: false,
   /** What the entered numbers describe — a serving, or a flat 100 g. */
   basis: 'serving' as 'serving' | 'hundred',
-  basis_grams: 100,
+  basis_grams: 100 as number | null,
   kcal: null as number | null,
   protein_g: null as number | null,
   carbs_g: null as number | null,
@@ -320,11 +320,11 @@ const macroFields = [
 
         <label v-if="form.basis === 'serving'" class="form-control">
           <span class="label-text text-xs mb-1">Serving size ({{ unit }})</span>
-          <input
-            v-model.number="form.basis_grams"
-            type="number" min="0" step="any" inputmode="decimal"
+          <MathNumberInput
+            v-model="form.basis_grams"
             class="input input-bordered"
-          >
+            wrapper-class="w-full"
+          />
         </label>
 
         <label class="form-control">
@@ -334,22 +334,22 @@ const macroFields = [
               — will use {{ derivedKcal }} from macros
             </span>
           </span>
-          <input
-            v-model.number="form.kcal"
-            type="number" min="0" step="any" inputmode="decimal"
+          <MathNumberInput
+            v-model="form.kcal"
             class="input input-bordered"
+            wrapper-class="w-full"
             :placeholder="derivedKcal !== null ? String(derivedKcal) : ''"
-          >
+          />
         </label>
 
         <div class="grid grid-cols-2 gap-2">
           <label v-for="f in macroFields" :key="f.key" class="form-control">
             <span class="label-text text-xs mb-1">{{ f.label }} ({{ f.unit }})</span>
-            <input
-              v-model.number="form[f.key]"
-              type="number" min="0" step="any" inputmode="decimal"
+            <MathNumberInput
+              v-model="form[f.key]"
               class="input input-bordered input-sm w-full"
-            >
+              wrapper-class="w-full"
+            />
           </label>
         </div>
 
@@ -364,17 +364,17 @@ const macroFields = [
               class="form-control"
             >
               <span class="label-text text-xs mb-1">{{ nutrientLabel(key) }} ({{ nutrientUnit(key) }})</span>
-              <input
-                v-model.number="extraNutrients[key]"
-                type="number" min="0" step="any" inputmode="decimal"
+              <MathNumberInput
+                v-model="extraNutrients[key]"
                 class="input input-bordered input-sm w-full"
-              >
+                wrapper-class="w-full"
+              />
             </label>
           </div>
         </template>
 
         <p class="text-xs text-base-content/50">
-          Values are for {{ form.basis === 'serving' ? `one ${form.basis_grams} ${unit} serving` : `100 ${unit}` }}.
+          Values are for {{ form.basis === 'serving' ? `one ${form.basis_grams ?? '…'} ${unit} serving` : `100 ${unit}` }}.
         </p>
       </div>
     </section>

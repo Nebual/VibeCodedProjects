@@ -35,6 +35,10 @@ export default defineEventHandler(async (event) => {
     sets.push('serving_count = ?')
     params.push(optionalNumber(body.serving_count, 'serving_count', { min: 0.01, max: 1000 }))
   }
+  if (body.amount_formula !== undefined) {
+    sets.push('amount_formula = ?')
+    params.push(optionalText(body.amount_formula, 100))
+  }
 
   const adjustments = assertAdjustments(body.adjustments)
 

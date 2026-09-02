@@ -99,6 +99,40 @@ await step('search and log a food', async () => {
   await page.waitForTimeout(900)
 })
 
+await step('an amount typed as arithmetic logs its result and reads back as the sum', async () => {
+  await page.goto(`${BASE}/add?meal=lunch`, { waitUntil: 'networkidle' })
+  await page.getByPlaceholder('Search foods').fill('chicken breast')
+  await page.waitForTimeout(1200)
+  await page.locator('a[href^="/food/"]').first().click()
+  await page.waitForLoadState('networkidle')
+  await page.waitForTimeout(600)
+
+  // Left on the food's own default portion — the formula rides on
+  // `serving_label`/`serving_count`, which only carry through a reopen when
+  // the picker lands back on the same named option (see `usePortionOptions`).
+  const amount = page.locator('label:has-text("Amount") input').first()
+  await amount.fill('3x2')
+  // The preview is the promise the field makes before you commit to it.
+  await page.getByText('= 6').first().waitFor({ timeout: 2000 })
+  await page.getByRole('button', { name: /Add to Lunch/i }).click()
+  await page.waitForURL(/\/\?d=/, { timeout: 15000 })
+  await page.waitForTimeout(900)
+
+  // Reopening it shows the sum again, not the figure it came to.
+  await page.locator('section:has(h2:text("Lunch")) a[href^="/food/"]').last().click()
+  await page.waitForLoadState('networkidle')
+  await page.waitForTimeout(600)
+  const reopened = page.locator('label:has-text("Amount") input').first()
+  if ((await reopened.inputValue()) !== '3x2') {
+    throw new Error(`Amount box read "${await reopened.inputValue()}", expected "3x2"`)
+  }
+
+  // Leave the browser back on the diary — the next step expects to be there
+  // already, the same way this step found it.
+  await page.goto(`${BASE}/`, { waitUntil: 'networkidle' })
+  await page.waitForTimeout(600)
+})
+
 await step('quick-add water', async () => {
   await page.getByRole('button', { name: /\+\s*(500 ml|16 oz)/ }).click()
   await page.waitForTimeout(900)
@@ -195,7 +229,9 @@ await step('edit an entry portion', async () => {
   await page.locator('section a[href^="/food/"]').first().click()
   await page.waitForLoadState('networkidle')
   await page.waitForTimeout(600)
-  await page.locator('input[type=number]').first().fill('2')
+  // The Amount field is a text input (it has to accept arithmetic), not a
+  // native `<input type=number>` — see `MathNumberInput.vue`.
+  await page.locator('label:has-text("Amount") input').first().fill('2')
   await page.getByRole('button', { name: /Save changes/i }).click()
   await page.waitForTimeout(1300)
 })
@@ -703,8 +739,8 @@ await step('logging a serving carries its share of the nutrition', async () => {
 await step('stating a final weight unlocks gram portions', async () => {
   await page.goto(recipeUrl, { waitUntil: 'networkidle' })
   await page.waitForTimeout(700)
-  await page.locator('label:has-text("Final weight") input[type="number"]').fill('400')
-  await page.locator('label:has-text("Final weight") input[type="number"]').blur()
+  await page.locator('label:has-text("Final weight") input').fill('400')
+  await page.locator('label:has-text("Final weight") input').blur()
   await page.waitForTimeout(1200)
 
   const text = await page.locator('main').innerText()
@@ -759,8 +795,8 @@ async function loggedRow(mealLabel, name) {
 async function setFinalWeight(url, grams) {
   await page.goto(url, { waitUntil: 'networkidle' })
   await page.waitForTimeout(700)
-  await page.locator('label:has-text("Final weight") input[type="number"]').fill(String(grams))
-  await page.locator('label:has-text("Final weight") input[type="number"]').blur()
+  await page.locator('label:has-text("Final weight") input').fill(String(grams))
+  await page.locator('label:has-text("Final weight") input').blur()
   await page.waitForTimeout(1400)
 }
 

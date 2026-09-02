@@ -118,7 +118,7 @@ thing on purpose once to confirm they notice.
 - **An ingredient may have no food** (`food_id` nullable, `raw_text` carries the
   line) **and 0 g is a real amount**. `listIngredients()` decides "unmatched"
   from `ri.food_id IS NULL`. `rollUpRecipe()` skips `null`/`<=0` in *both* weight
-  and coverage. Copies carry `raw_text`/`note`.
+  and coverage. Copies carry `raw_text`/`note`/`amount_formula`.
 - **A logged recipe is frozen** (`source = 'recipe_log'`): the diary points at a
   snapshot, not the live recipe. `isRecipe()`/`showsGramPortions()` test
   `RECIPE_SOURCES` membership. Snapshots are never FTS-indexed. `/api/foods/recent`

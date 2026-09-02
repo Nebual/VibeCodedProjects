@@ -169,6 +169,8 @@ export type RecipeAdjustment =
     food_id?: number
     serving_label?: string | null
     serving_count?: number | null
+    /** The arithmetic this amount was typed as, for redisplay only. */
+    amount_formula?: string | null
   }
   | {
     op: 'add'
@@ -176,6 +178,8 @@ export type RecipeAdjustment =
     grams: number
     serving_label?: string | null
     serving_count?: number | null
+    /** The arithmetic this amount was typed as, for redisplay only. */
+    amount_formula?: string | null
   }
 
 /** The shape `applyAdjustments()` needs to work on, beyond the roll-up's own. */

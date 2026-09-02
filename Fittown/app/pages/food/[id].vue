@@ -132,6 +132,10 @@ const initial = computed<PortionSelection | null>(() => {
     grams,
     serving_label: (route.query.sl as string) || null,
     serving_count: Number.isFinite(count) && count > 0 ? count : null,
+    // How the amount was typed, so reopening a row shows '50x4' rather than
+    // 200. Carried in the URL like the rest of the portion — this screen is
+    // linked to, not handed state.
+    amount_formula: (route.query.af as string) || null,
   }
 })
 

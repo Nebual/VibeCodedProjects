@@ -22,6 +22,7 @@ export default defineEventHandler(async (event) => {
   const entry = db
     .prepare(
       `SELECT d.id, d.date, d.meal, d.grams, d.serving_label, d.serving_count,
+              d.amount_formula,
               d.food_id, f.source, f.name, f.recipe_log_note, f.logged_from_food_id
        FROM diary_entries d JOIN foods f ON f.id = d.food_id
        WHERE d.id = ? AND d.user_id = ?`,

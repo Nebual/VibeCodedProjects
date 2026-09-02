@@ -39,6 +39,10 @@ export default defineEventHandler(async (event) => {
     sets.push('note = ?')
     params.push(optionalText(body.note, 200))
   }
+  if (body.amount_formula !== undefined) {
+    sets.push('amount_formula = ?')
+    params.push(optionalText(body.amount_formula, 100))
+  }
 
   // Switching one off, or on, for the recipe as a whole — as distinct from
   // skipping it once when logging a meal, which never touches the recipe.

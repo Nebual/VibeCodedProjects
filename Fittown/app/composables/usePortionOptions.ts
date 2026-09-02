@@ -12,6 +12,7 @@ import {
   type PortionDefault,
 } from '#shared/portions'
 import { showsGramPortions } from '#shared/recipes'
+import { fieldText } from '#shared/mathExpr'
 import type { FoodRow } from '~/composables/useDiary'
 
 /**
@@ -44,6 +45,8 @@ export interface PortionSelection {
   grams: number
   serving_label: string | null
   serving_count: number | null
+  /** The arithmetic the amount was typed as — for the input box only. */
+  amount_formula: string | null
 }
 
 /**
@@ -126,6 +129,15 @@ export function usePortionOptions(
   const selectedKey = ref<string>('')
   const amount = ref(1)
 
+  /**
+   * The arithmetic behind `amount`, when it was typed as a sum.
+   *
+   * Bound to the portion that was selected when it was written: the box holds an
+   * amount *in that unit*, so switching units invalidates it. `onPortionChange()`
+   * clears it for exactly that reason.
+   */
+  const amountFormula = ref<string | null>(null)
+
   watchEffect(() => {
     if (!food.value || selectedKey.value || options.value.length === 0) return
 
@@ -139,6 +151,14 @@ export function usePortionOptions(
       if (match && previous.serving_count) {
         selectedKey.value = match.key
         amount.value = previous.serving_count
+        // The matching invariant lives in one place: fieldText(). A formula is
+        // adopted only if it still comes to the amount just landed on — a copy
+        // whose amount was adjusted since keeps the plain number instead.
+        amountFormula.value =
+          previous.amount_formula
+          && fieldText(amount.value, previous.amount_formula) === previous.amount_formula
+            ? previous.amount_formula
+            : null
         return
       }
 
@@ -158,6 +178,14 @@ export function usePortionOptions(
       if (base) {
         selectedKey.value = base.key
         amount.value = roundGrams(previous.grams)
+        // Same invariant as the named-serving branch above — grams is the
+        // commonest amount unit, and a formula stored against it deserves the
+        // same restore.
+        amountFormula.value =
+          previous.amount_formula
+          && fieldText(amount.value, previous.amount_formula) === previous.amount_formula
+            ? previous.amount_formula
+            : null
         return
       }
     }
@@ -230,6 +258,9 @@ export function usePortionOptions(
   function onPortionChange(previousGrams?: number) {
     const option = selected.value
     if (!option) return
+    // The amount is being recomputed, not typed, so whatever sum produced the
+    // old figure no longer describes the new one.
+    amountFormula.value = null
     if (previousGrams !== undefined) {
       amount.value = portionAmount(previousGrams, option.size)
     } else {
@@ -245,6 +276,7 @@ export function usePortionOptions(
       grams: grams.value,
       serving_label: named ? option!.label : null,
       serving_count: named ? amount.value : null,
+      amount_formula: amountFormula.value,
     }
   })
 
@@ -264,6 +296,7 @@ export function usePortionOptions(
     options,
     selectedKey,
     amount,
+    amountFormula,
     selected,
     grams,
     conversion,

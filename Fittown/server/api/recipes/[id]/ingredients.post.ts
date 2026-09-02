@@ -42,6 +42,7 @@ export default defineEventHandler(async (event) => {
     max: 1000,
   })
   const note = optionalText(body.note, 200)
+  const amountFormula = optionalText(body.amount_formula, 100)
 
   // An optional ingredient added now is a *suggestion* — "50 g bacon on top" —
   // so it starts switched off and the recipe's totals are the base dish. A
@@ -98,8 +99,8 @@ export default defineEventHandler(async (event) => {
       .prepare(
         `INSERT INTO recipe_ingredients
            (recipe_food_id, food_id, grams, serving_label, serving_count,
-            raw_text, note, sort_order, is_optional, is_included)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            raw_text, note, amount_formula, sort_order, is_optional, is_included)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         recipeId,
@@ -109,6 +110,7 @@ export default defineEventHandler(async (event) => {
         servingCount,
         rawText,
         note,
+        amountFormula,
         nextIngredientOrder(db, recipeId),
         isOptional,
         included,

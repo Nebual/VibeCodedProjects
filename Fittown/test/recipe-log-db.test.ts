@@ -336,3 +336,24 @@ describe('copying still works the way it did', () => {
     expect(kcalPer100(db, copy)).toBeCloseTo(kcalPer100(db, omelette), 6)
   })
 })
+
+describe('amount_formula on a frozen meal', () => {
+  it('carries the amount formula onto the frozen copy', async () => {
+    const db = await boot()
+    const { createRecipeFood, recomputeRecipe, snapshotRecipeForLog } = await recipes()
+    const ids = seed(db)
+
+    const omelette = createRecipeFood(db, 1, 'Omelette', 1)
+    addIngredient(db, omelette, ids.egg, 200)
+    db.prepare("UPDATE recipe_ingredients SET amount_formula = '2x3' WHERE recipe_food_id = ?")
+      .run(omelette)
+    recomputeRecipe(db, omelette)
+
+    const snapshot = snapshotRecipeForLog(db, omelette, 1)
+
+    const row = db
+      .prepare('SELECT amount_formula FROM recipe_ingredients WHERE recipe_food_id = ?')
+      .get(snapshot.id) as { amount_formula: string | null }
+    expect(row.amount_formula).toBe('2x3')
+  })
+})

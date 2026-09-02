@@ -40,8 +40,12 @@ or turned into a nutrition-less placeholder food. A line with no numeric amount
   pinch of salt counts as weight declaring no vitamin K and blanks the whole
   recipe's vitamin K.
 - **Copies carry unmatched lines.** `copyRecipeInto()` LEFT joins and brings
-  `raw_text`, `note` and `recipe_instructions` across. A deep copy that dropped
-  them hands someone a vinaigrette with no salt and nothing on screen to say so.
+  `raw_text`, `note`, `amount_formula` and `recipe_instructions` across. A deep
+  copy that dropped them hands someone a vinaigrette with no salt and nothing
+  on screen to say so — and a copied ingredient whose amount was typed as a sum
+  would otherwise read back as the bare number. A `set` adjustment on a frozen
+  meal may carry its own `amount_formula` too, independent of the ingredient it
+  adjusts (see below).
 
 ## A logged recipe is frozen
 

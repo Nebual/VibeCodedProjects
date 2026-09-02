@@ -30,13 +30,15 @@ const emit = defineEmits<{ 'update:adjustments': [adjustments: RecipeAdjustment[
 /** Per-row edits, keyed by ingredient id. Absent means untouched. */
 interface Edit {
   amount?: number
+  /** The arithmetic `amount` was typed as, when it was one. */
+  amount_formula?: string | null
   unit?: PortionUnit
   included?: boolean
   food?: FoodRow
 }
 const edits = ref(new Map<number, Edit>())
 /** Foods added to this meal that the recipe never had. */
-const extras = ref<{ food: FoodRow; grams: number }[]>([])
+const extras = ref<{ food: FoodRow; grams: number; formula: string | null }[]>([])
 
 // Re-seeded whenever the recipe underneath changes, so a fetch landing late
 // doesn't leave edits pointing at rows that are no longer there.
@@ -95,11 +97,24 @@ function currentAmount(ingredient: RecipeIngredient): number {
 
 const amountUnit = (ingredient: RecipeIngredient) => activeUnit(ingredient).label
 
+/** What the amount box's formula prop shows: the pending edit's formula if
+ *  there is one, else the ingredient's own. */
+function currentFormula(ingredient: RecipeIngredient): string | null {
+  const edit = edits.value.get(ingredient.id)
+  if (edit?.amount_formula !== undefined) return edit.amount_formula
+  return ingredient.amount_formula ?? null
+}
+
 /** Switching units keeps the underlying amount the same — 3 eggs and 150 g are
  *  the same weight, just expressed differently — not the number in the box. */
 function changeUnit(ingredient: RecipeIngredient, unit: PortionUnit) {
   const grams = currentAmount(ingredient) * activeUnit(ingredient).size
-  edit(ingredient.id, { unit, amount: Math.round((grams / unit.size) * 100) / 100 })
+  edit(ingredient.id, {
+    unit,
+    amount: Math.round((grams / unit.size) * 100) / 100,
+    // A unit switch recomputes the amount rather than accepting a typed one.
+    amount_formula: null,
+  })
 }
 
 /**
@@ -110,7 +125,8 @@ function changeUnit(ingredient: RecipeIngredient, unit: PortionUnit) {
  * with. A step of 1 matches what the native control already did here.
  */
 function bump(ingredient: RecipeIngredient, delta: number) {
-  edit(ingredient.id, { amount: Math.max(0, currentAmount(ingredient) + delta) })
+  // A stepper produces a number, not a sum.
+  edit(ingredient.id, { amount: Math.max(0, currentAmount(ingredient) + delta), amount_formula: null })
 }
 
 const isIncluded = (ingredient: RecipeIngredient) => {
@@ -169,6 +185,7 @@ const adjustments = computed<RecipeAdjustment[]>(() => {
           // rather than "150 g", the same way any other portion does.
           serving_label: isBaseUnit ? null : unit.label,
           serving_count: isBaseUnit ? null : amount,
+          amount_formula: change.amount_formula ?? null,
         }
         : {}),
       ...(swapped ? { food_id: change.food!.id } : {}),
@@ -177,7 +194,12 @@ const adjustments = computed<RecipeAdjustment[]>(() => {
   }
 
   for (const extra of extras.value) {
-    out.push({ op: 'add', food_id: extra.food.id, grams: extra.grams })
+    out.push({
+      op: 'add',
+      food_id: extra.food.id,
+      grams: extra.grams,
+      amount_formula: extra.formula,
+    })
   }
 
   return out
@@ -202,7 +224,7 @@ const dialogTitle = computed(() =>
 )
 
 function onPicked(food: FoodRow, grams: number) {
-  if (picking.value === 'add') extras.value = [...extras.value, { food, grams }]
+  if (picking.value === 'add') extras.value = [...extras.value, { food, grams, formula: null }]
   else if (typeof picking.value === 'number') edit(picking.value, { food })
   picking.value = null
 }
@@ -212,7 +234,10 @@ function removeExtra(index: number) {
 }
 
 function bumpExtra(index: number, delta: number) {
-  extras.value[index]!.grams = Math.max(0, extras.value[index]!.grams + delta)
+  const extra = extras.value[index]!
+  extra.grams = Math.max(0, extra.grams + delta)
+  // A stepper produces a number, not a sum.
+  extra.formula = null
 }
 </script>
 
@@ -258,16 +283,15 @@ function bumpExtra(index: number, delta: number) {
 
         <div v-if="isIncluded(ingredient) && !readonly" class="flex items-center gap-1.5 shrink-0">
           <div class="relative">
-            <input
-              :value="currentAmount(ingredient)"
-              type="number"
-              min="0"
-              step="any"
-              inputmode="decimal"
+            <MathNumberInput
+              :model-value="currentAmount(ingredient)"
+              :formula="currentFormula(ingredient)"
+              preview="chip"
               class="input input-bordered input-sm w-20 text-right tabular pr-4 no-native-spinner"
               :aria-label="`Amount of ${ingredientName(ingredient)}`"
-              @input="edit(ingredient.id, { amount: Number(($event.target as HTMLInputElement).value) })"
-            >
+              @update:model-value="edit(ingredient.id, { amount: $event ?? 0 })"
+              @update:formula="edit(ingredient.id, { amount_formula: $event })"
+            />
             <div class="amount-stepper">
               <button
                 type="button"
@@ -319,15 +343,15 @@ function bumpExtra(index: number, delta: number) {
           <div class="text-xs text-base-content/60">Just for this meal</div>
         </div>
         <div class="relative shrink-0">
-          <input
-            v-model.number="extra.grams"
-            type="number"
-            min="0"
-            step="any"
-            inputmode="decimal"
+          <MathNumberInput
+            :model-value="extra.grams"
+            :formula="extra.formula"
+            preview="chip"
             class="input input-bordered input-sm w-20 text-right tabular pr-4 no-native-spinner"
             :aria-label="`Amount of ${extra.food.name}`"
-          >
+            @update:model-value="extra.grams = $event ?? 0"
+            @update:formula="extra.formula = $event"
+          />
           <div class="amount-stepper">
             <button
               type="button"

@@ -517,3 +517,26 @@ describe('referential rules', () => {
     expect(foodRow(db, id).source).toBe(RECIPE_SOURCE)
   })
 })
+
+describe('amount_formula travels with an ingredient', () => {
+  it('is carried into a copied recipe', async () => {
+    // Build a recipe with one ingredient whose amount was typed as arithmetic,
+    // copy it, and confirm the copy remembers how the amount was written.
+    const db = await boot()
+    const { chicken } = seed(db)
+    db.prepare("INSERT INTO users (id, email, name) VALUES (2, 'other@test', 'Other')").run()
+    const { createRecipeFood, cloneRecipe } = await recipes()
+
+    const recipeId = createRecipeFood(db, 1, 'Chicken Bowl', 1)
+    addIngredient(db, recipeId, chicken, 200)
+    db.prepare("UPDATE recipe_ingredients SET amount_formula = '50x4' WHERE recipe_food_id = ?")
+      .run(recipeId)
+
+    const copyId = cloneRecipe(db, recipeId, 2, { localiseForeignFoods: true })
+
+    const row = db
+      .prepare('SELECT amount_formula FROM recipe_ingredients WHERE recipe_food_id = ?')
+      .get(copyId) as { amount_formula: string | null }
+    expect(row.amount_formula).toBe('50x4')
+  })
+})

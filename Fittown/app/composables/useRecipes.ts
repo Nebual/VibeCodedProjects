@@ -40,6 +40,8 @@ export interface RecipeIngredient {
   raw_text: string | null
   /** Amount descriptor or prep note — "a lot of", "minced". */
   note: string | null
+  /** The arithmetic the amount was typed as — for the input box only. */
+  amount_formula: string | null
   sort_order: number
   /** Does this ingredient get a switch — "50 g bacon on top"? */
   is_optional: number

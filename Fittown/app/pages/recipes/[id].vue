@@ -55,7 +55,7 @@ async function patch(body: Record<string, unknown>) {
 // --- name -------------------------------------------------------------------
 
 const name = ref('')
-const servingsInput = ref(1)
+const servingsInput = ref<number | null>(1)
 const instructions = ref('')
 watch(
   recipe,
@@ -183,6 +183,7 @@ function editLink(ingredient: RecipeIngredient) {
   })
   if (ingredient.serving_label) params.set('sl', ingredient.serving_label)
   if (ingredient.serving_count) params.set('sc', String(ingredient.serving_count))
+  if (ingredient.amount_formula) params.set('af', ingredient.amount_formula)
   // So the Optional switch over there opens in the state it is in over here.
   if (ingredient.is_optional) params.set('opt', '1')
   return `/food/${ingredient.food.id}?${params}`
@@ -251,10 +252,12 @@ function displayAmount(ingredient: RecipeIngredient, choice: PortionUnit): numbe
 /** Which row's amount is open for a quick edit, and its unsaved draft. */
 const editingIngredientId = ref<number | null>(null)
 const amountDraft = ref(0)
+/** The arithmetic behind `amountDraft`, when it was typed as one. */
+const formulaDraft = ref<string | null>(null)
 const unitDraft = ref<PortionUnit>({ key: 'g', label: 'g', size: 1 })
-const amountInputEl = ref<HTMLInputElement | null>(null)
-function setAmountInputEl(el: Element | null) {
-  amountInputEl.value = el as HTMLInputElement | null
+const amountInputEl = ref<{ focus: () => void; select: () => void } | null>(null)
+function setAmountInputEl(el: unknown) {
+  amountInputEl.value = el as { focus: () => void; select: () => void } | null
 }
 
 watch(editingIngredientId, async (opened) => {
@@ -269,6 +272,7 @@ function startEditAmount(ingredient: RecipeIngredient) {
   editingIngredientId.value = ingredient.id
   unitDraft.value = choice
   amountDraft.value = displayAmount(ingredient, choice)
+  formulaDraft.value = ingredient.amount_formula
 }
 
 /** Switching units mid-edit keeps the weight fixed — it just re-expresses it —
@@ -277,6 +281,8 @@ function switchDraftUnit(unit: PortionUnit) {
   const grams = amountDraft.value * unitDraft.value.size
   unitDraft.value = unit
   amountDraft.value = Math.round((grams / unit.size) * 100) / 100
+  // A unit switch recomputes the amount rather than accepting a typed one.
+  formulaDraft.value = null
 }
 
 function cancelEditAmount() {
@@ -316,7 +322,12 @@ async function commitAmount(ingredient: RecipeIngredient) {
   try {
     await $fetch(`/api/recipes/${id.value}/ingredients/${ingredient.id}`, {
       method: 'PATCH',
-      body: { grams, serving_label: servingLabel, serving_count: servingCount },
+      body: {
+        grams,
+        serving_label: servingLabel,
+        serving_count: servingCount,
+        amount_formula: formulaDraft.value,
+      },
     })
     await refresh()
   } catch (err) {
@@ -611,32 +622,26 @@ const logLink = computed(
         <div class="flex gap-2">
           <label class="form-control w-28">
             <span class="label-text text-xs mb-1">Servings</span>
-            <input
-              v-model.number="servingsInput"
-              type="number"
-              min="0"
-              step="any"
-              inputmode="decimal"
+            <MathNumberInput
+              v-model="servingsInput"
               class="input input-bordered w-full"
+              wrapper-class="w-full"
               @blur="saveServings"
               @keyup.enter="saveServings"
-            >
+            />
           </label>
 
           <label class="form-control flex-1">
             <span class="label-text text-xs mb-1">Final weight (optional)</span>
             <div class="flex gap-2">
-              <input
-                v-model.number="weightAmount"
-                type="number"
-                min="0"
-                step="any"
-                inputmode="decimal"
+              <MathNumberInput
+                v-model="weightAmount"
                 class="input input-bordered flex-1 min-w-0"
+                wrapper-class="flex-1 min-w-0"
                 :placeholder="`Weigh it in ${unit}`"
                 @blur="saveWeight"
                 @keyup.enter="saveWeight"
-              >
+              />
               <select
                 class="select select-bordered w-24"
                 :value="weightUnitKey"
@@ -743,18 +748,16 @@ const logLink = computed(
                 class="flex items-center gap-1.5 flex-wrap"
                 @focusout="onAmountGroupFocusOut($event, ingredient)"
               >
-                <input
+                <MathNumberInput
                   :ref="setAmountInputEl"
-                  v-model.number="amountDraft"
-                  type="number"
-                  min="0"
-                  step="any"
-                  inputmode="decimal"
+                  v-model="amountDraft"
+                  v-model:formula="formulaDraft"
+                  preview="chip"
                   class="input input-bordered input-xs w-20 text-right tabular"
                   :aria-label="`Amount of ${ingredientName(ingredient)}`"
                   @keydown.enter="commitAmount(ingredient)"
                   @keydown.esc="cancelEditAmount"
-                >
+                />
                 <select
                   class="select select-bordered select-xs w-24 truncate"
                   :aria-label="`Unit for ${ingredientName(ingredient)}`"

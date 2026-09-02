@@ -50,12 +50,13 @@ watch(
 )
 
 /**
- * `v-model.number` leaves a *cleared* field as `''` rather than `null` — Vue's
- * number coercion only replaces the typed string when it parses, and an empty
- * string parses to nothing, so it passes straight through unchanged. Reading
- * every numeric ref through this keeps `''` from silently defeating the `??`
- * fallback below (`'' ?? x` is `''`, not `x`) and from turning into `NaN` in
- * the macro arithmetic (`'' * 4` is `NaN`, which poisons the whole sum).
+ * A defensive read, not a coercion.
+ *
+ * `MathNumberInput` emits `number | null` and never the empty string that
+ * `v-model.number` used to leave behind, so the `''` hazard this used to guard
+ * is gone at the source. It stays because the macro arithmetic below must never
+ * see a `NaN` — one poisons the whole sum — and because null means "not
+ * recorded", which is not zero.
  */
 function num(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
@@ -145,12 +146,12 @@ async function save() {
               — will use {{ derivedKcal }} from macros
             </span>
           </span>
-          <input
-            v-model.number="kcal"
-            type="number" min="0" step="any" inputmode="decimal"
+          <MathNumberInput
+            v-model="kcal"
             class="input input-bordered w-full"
+            wrapper-class="w-full"
             :placeholder="derivedKcal !== null ? String(derivedKcal) : ''"
-          >
+          />
         </label>
 
         <label class="form-control">
@@ -165,11 +166,11 @@ async function save() {
 
         <label v-for="f in macroFields" :key="f.key" class="form-control">
           <span class="label-text text-xs mb-1">{{ f.label }} ({{ f.unit }})</span>
-          <input
-            v-model.number="f.model.value"
-            type="number" min="0" step="any" inputmode="decimal"
+          <MathNumberInput
+            v-model="f.model.value"
             class="input input-bordered input-sm w-full"
-          >
+            wrapper-class="w-full"
+          />
         </label>
       </div>
 

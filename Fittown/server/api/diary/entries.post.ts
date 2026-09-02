@@ -35,6 +35,9 @@ export default defineEventHandler(async (event) => {
     min: 0.01,
     max: 1000,
   })
+  // The arithmetic the amount was typed as, kept only so the box can show it
+  // again. 100 characters is a generous ceiling on a sum somebody typed by hand.
+  const amountFormula = optionalText(body.amount_formula, 100)
   const adjustments = assertAdjustments(body.adjustments)
 
   return transact((db) => {
@@ -106,10 +109,14 @@ export default defineEventHandler(async (event) => {
     const info = db
       .prepare(
         `INSERT INTO diary_entries
-           (user_id, date, meal, food_id, grams, serving_label, serving_count, sort_order)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+           (user_id, date, meal, food_id, grams, serving_label, serving_count,
+            amount_formula, sort_order)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(user.id, day, meal, loggedFoodId, loggedGrams, servingLabel, servingCount, next)
+      .run(
+        user.id, day, meal, loggedFoodId, loggedGrams, servingLabel, servingCount,
+        amountFormula, next,
+      )
 
     return { id: Number(info.lastInsertRowid) }
   })

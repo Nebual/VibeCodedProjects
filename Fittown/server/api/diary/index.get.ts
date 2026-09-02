@@ -29,7 +29,7 @@ export default defineEventHandler(async (event) => {
       // d.id is aliased: both tables have an `id`, and the later column would
       // otherwise silently overwrite the earlier one in the result object.
       `SELECT d.id AS entry_id, d.meal, d.grams, d.serving_label,
-              d.serving_count, d.sort_order,
+              d.serving_count, d.amount_formula, d.sort_order,
               ${foodCols()}
        FROM diary_entries d
        JOIN foods f ON f.id = d.food_id
@@ -56,6 +56,7 @@ export default defineEventHandler(async (event) => {
       grams,
       serving_label: row.serving_label,
       serving_count: row.serving_count,
+      amount_formula: row.amount_formula,
       food: pickFood(row),
       nutrients,
     })
@@ -243,7 +244,7 @@ export default defineEventHandler(async (event) => {
 function pickFood(row: Record<string, unknown>) {
   const {
     entry_id: _entryId, meal: _meal, grams: _grams, serving_label: _sl,
-    serving_count: _sc, sort_order: _so, ...food
+    serving_count: _sc, amount_formula: _af, sort_order: _so, ...food
   } = row
   return food
 }

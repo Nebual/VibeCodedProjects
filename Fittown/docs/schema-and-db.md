@@ -45,6 +45,12 @@ list is how an old database catches up. Verified against the shipped
 `data/fittown.db` (old schema, 203,695 foods): it gains the columns on first
 DB-touching request and loses nothing.
 
+`amount_formula` on `diary_entries` and `recipe_ingredients` holds the
+arithmetic an amount was typed as (`50x4`), for redisplay in the input box
+only. Every calculation uses `grams`. It is shown again only when it still
+evaluates to the stored amount (`fieldText()` in `shared/mathExpr.ts`), so it
+can never make the box disagree with the figure the app uses.
+
 Note the migration is **lazy** — `useDb()` runs it on first use, so a request
 that 401s before touching the database won't trigger it. That is fine in
 practice and confusing when testing; hit an authenticated route.

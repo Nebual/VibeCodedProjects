@@ -175,10 +175,16 @@ const ADDED_COLUMNS: Record<string, Record<string, string>> = {
   recipe_ingredients: {
     raw_text: 'TEXT',
     note: 'TEXT',
-    // Optional ingredients. Defaults reproduce the old behaviour exactly, so
-    // every existing row keeps counting the way it always did.
     is_optional: 'INTEGER NOT NULL DEFAULT 0',
     is_included: 'INTEGER NOT NULL DEFAULT 1',
+    // The arithmetic behind the amount. Nullable with no default, so this is a
+    // plain ADD COLUMN — no rebuild. rebuildRecipeIngredients() deliberately
+    // does not carry it: that only fires on databases predating raw_text, and
+    // it runs before migrate(), which adds this immediately afterwards.
+    amount_formula: 'TEXT',
+  },
+  diary_entries: {
+    amount_formula: 'TEXT',
   },
   // The first reminders release created reminder_checks without a done flag;
   // this widens those databases (and no-ops on fresh ones that already have

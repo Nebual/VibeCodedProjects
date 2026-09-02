@@ -82,6 +82,13 @@ describe('fresh database', () => {
     expect((goals.carbs_g * 4) / goals.calorie_goal).toBeCloseTo(0.5, 2)
     expect((goals.fat_g * 9) / goals.calorie_goal).toBeCloseTo(0.3, 2)
   })
+
+  it('gives both amount tables a column for the formula behind the number', async () => {
+    await boot()
+    const db = inspect()
+    expect(columnNames(db, 'diary_entries')).toContain('amount_formula')
+    expect(columnNames(db, 'recipe_ingredients')).toContain('amount_formula')
+  })
 })
 
 describe('migrating an existing database', () => {
@@ -324,5 +331,37 @@ describe('exercise library sync', () => {
         )
         .run(),
     ).not.toThrow()
+  })
+})
+
+describe('amount_formula on a database that predates it', () => {
+  /**
+   * The formula column is nullable with no default, so it is a plain ADD
+   * COLUMN — no table rebuild. This is the test that says so: a database
+   * carrying rows gains the column and keeps every row intact.
+   */
+  it('widens existing tables without disturbing their rows', async () => {
+    const first = await boot()
+    first.prepare("INSERT INTO users (email, name) VALUES ('a@b.c', 'A')").run()
+    first.prepare(
+      "INSERT INTO foods (name, source) VALUES ('Rice', 'custom')",
+    ).run()
+    first.prepare(
+      `INSERT INTO diary_entries (user_id, date, meal, food_id, grams)
+       VALUES (1, '2026-09-01', 'lunch', 1, 200)`,
+    ).run()
+
+    // Drop the column back off, so the next boot is a genuine migration.
+    first.exec('ALTER TABLE diary_entries DROP COLUMN amount_formula')
+    expect(columnNames(first, 'diary_entries')).not.toContain('amount_formula')
+
+    const second = await boot()
+    expect(columnNames(second, 'diary_entries')).toContain('amount_formula')
+
+    const row = second
+      .prepare('SELECT grams, amount_formula FROM diary_entries WHERE id = 1')
+      .get() as { grams: number; amount_formula: string | null }
+    expect(row.grams).toBe(200)
+    expect(row.amount_formula).toBeNull()
   })
 })

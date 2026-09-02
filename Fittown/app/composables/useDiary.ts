@@ -44,6 +44,8 @@ export interface DiaryEntry {
   grams: number
   serving_label: string | null
   serving_count: number | null
+  /** The arithmetic the amount was typed as — for the input box only. */
+  amount_formula: string | null
   food: FoodRow
   nutrients: NutrientTotals
 }

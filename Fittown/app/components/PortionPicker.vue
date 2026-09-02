@@ -14,7 +14,11 @@ import type { PortionOption, PortionPickerState } from '~/composables/usePortion
 const props = defineProps<{ picker: PortionPickerState }>()
 
 /** The amount field that should gain focus when a portion option is picked. */
-const amountField = ref<HTMLInputElement | null>(null)
+const amountField = ref<{
+  focus: () => void
+  select: () => void
+  adopt: (value: number | null, formula: string | null) => void
+} | null>(null)
 
 /** The in-page portion dropdown is open. */
 const open = ref(false)
@@ -36,34 +40,6 @@ onMounted(() => document.addEventListener('pointerdown', onDocumentPointerDown))
 onBeforeUnmount(() => document.removeEventListener('pointerdown', onDocumentPointerDown))
 
 /**
- * Focusing the amount selects what's in it, so the first keypress replaces the
- * figure instead of extending it. The box is never empty — it always holds the
- * portion's starting amount — and someone reaching for it means "not that, this
- * much": tapping a box holding 100 and typing 2 should log 2, not 1002.
- */
-const selectionPending = ref(false)
-
-function onAmountFocus(event: FocusEvent) {
-  ;(event.target as HTMLInputElement).select()
-  selectionPending.value = true
-}
-
-/** A press *inside* an already-focused box is the caret being placed by hand. */
-function onAmountPointerDown() {
-  selectionPending.value = false
-}
-
-/**
- * Only the release that completes the focusing click: left alone, it drops the
- * caret where the pointer went down and throws the selection away again.
- */
-function onAmountMouseUp(event: MouseEvent) {
-  if (!selectionPending.value) return
-  event.preventDefault()
-  selectionPending.value = false
-}
-
-/**
  * Picking a portion option.
  *
  * This is deliberately NOT a native <select>. Firefox on Android never raises
@@ -81,6 +57,14 @@ function selectOption(option: PortionOption) {
   props.picker.selectedKey = option.key
   props.picker.onPortionChange(previousGrams)
   open.value = false
+  // Push the recomputed amount straight into the field. Its own
+  // modelValue/formula props won't reflect this until this component
+  // re-renders (Vue schedules that asynchronously), but focus() right below
+  // must stay synchronous in this same click handler — Android's soft
+  // keyboard needs focus() in the same gesture call stack, so it cannot wait
+  // a tick. picker.amount/picker.amountFormula are already current, since
+  // onPortionChange() just set them, so hand them in directly.
+  amountField.value?.adopt(props.picker.amount, props.picker.amountFormula)
   amountField.value?.focus()
   amountField.value?.select()
 }
@@ -91,18 +75,13 @@ function selectOption(option: PortionOption) {
     <div class="flex gap-2">
       <label class="form-control flex-1">
         <span class="label-text text-xs mb-1">Amount</span>
-        <input
+        <MathNumberInput
           ref="amountField"
-          v-model.number="picker.amount"
-          type="number"
-          min="0"
-          step="any"
-          inputmode="decimal"
+          v-model="picker.amount"
+          v-model:formula="picker.amountFormula"
           class="input input-bordered w-full"
-          @focus="onAmountFocus"
-          @mousedown="onAmountPointerDown"
-          @mouseup="onAmountMouseUp"
-        >
+          wrapper-class="w-full"
+        />
       </label>
 
       <label class="form-control flex-1 relative">
