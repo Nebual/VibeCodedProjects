@@ -29,6 +29,13 @@ that predates the migration must not blank a friend's page. Enforcement is
 server-side: `/api/friends/[id]/summary` strips the sections its owner withheld
 on the way out, and the UI merely hides what it wasn't given.
 
+One field never leaves at all: `latest_weight_kg` — the range-independent
+weigh-in the calorie chart estimates maintenance calories from — is only
+computed under the `full` goal scope, so a friend's payload can't carry a
+weight past `share_weight` the way the per-day `weights` array would. Anything
+else added to `summarise()` that isn't a per-day rollup needs the same
+treatment: the strip-on-the-way-out step only knows about the keys it lists.
+
 ## Token-addressed routes (the only unauthenticated ones)
 
 **Two** token-addressed routes answer without a session, and they are the only

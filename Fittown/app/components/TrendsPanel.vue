@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { Goals } from '~/composables/useDiary'
-import { formatWeight, kgToLb } from '#shared/body'
+import type { CalorieTone } from '#shared/body'
+import { calorieTone, formatWeight, kgToLb, maintenanceForChart } from '#shared/body'
 import { sharePermissions, type SharePermissions } from '#shared/sharing'
 import { addDays, fromLocalDate } from '~/utils/dates'
 
@@ -43,6 +44,11 @@ interface Summary {
   water: Record<string, { total_ml: number }>
   workouts: Record<string, { calories: number | null; minutes: number | null }>
   weights: { date: string; weight_kg: number }[]
+  /**
+   * Latest weigh-in on any date, so the maintenance estimate survives a
+   * range with no weigh-in in it. Null on a friend's summary.
+   */
+  latest_weight_kg: number | null
   biometrics: {
     id: number
     name: string
@@ -153,6 +159,64 @@ const goal = computed(() => data.value?.goals?.calorie_goal ?? 2000)
 const maxKcal = computed(() =>
   Math.max(goal.value, ...buckets.value.flatMap((b) => [b.net, b.kcal])) * 1.1,
 )
+
+/**
+ * Age from the stored birth year, using the user's own calendar day — the same
+ * derivation Settings does, and for the same reason: a stored age goes stale.
+ */
+const age = computed(() => {
+  const year = today.value ? Number(today.value.slice(0, 4)) : null
+  const born = data.value?.goals?.birth_year ?? null
+  return year && born ? year - born : null
+})
+
+/**
+ * The second line on the calorie chart, and the one that decides when a bar
+ * turns red.
+ *
+ * A friend's goals carry no body metrics at all, and plenty of people never
+ * fill theirs in, so this is often the approximate figure scaled off the goal
+ * — which the label says out loud rather than passing off as an estimate of
+ * *them*.
+ */
+const maintenance = computed(() =>
+  maintenanceForChart(
+    {
+      sex: data.value?.goals?.sex,
+      age: age.value,
+      weightKg: data.value?.latest_weight_kg,
+      heightCm: data.value?.goals?.height_cm,
+    },
+    data.value?.goals?.activity_level,
+    goal.value,
+  ),
+)
+
+const maintenanceKcal = computed(() => Math.round(maintenance.value.kcal))
+
+/**
+ * Drawn only once something crosses it. On a well-kept deficit the line would
+ * otherwise sit above every bar for months, adding a number to read and
+ * nothing to notice — and being off the top of the scale, it can only ever be
+ * on-chart when a bar has already reached past it.
+ */
+const showMaintenance = computed(() =>
+  buckets.value.some((b) => b.net > maintenanceKcal.value),
+)
+
+/**
+ * Amber is "over target", red is "over maintenance". Splitting them matters
+ * because they mean opposite things: the first is a day that ate into the
+ * deficit, the second is a day that undid it.
+ */
+const TONE_CLASS: Record<CalorieTone, string> = {
+  'under': 'bg-primary/70',
+  'over-goal': 'bg-warning/70',
+  'over-maintenance': 'bg-error/70',
+}
+
+const toneClass = (net: number) =>
+  TONE_CLASS[calorieTone(net, goal.value, maintenanceKcal.value)]
 
 const logged = computed(() => days.value.filter((d) => d.kcal > 0))
 const avgKcal = computed(() =>
@@ -305,8 +369,32 @@ const nothingToShow = computed(
               class="absolute inset-x-0 border-t border-dashed border-primary/50 z-10"
               :style="`bottom:${(goal / maxKcal) * 100}%`"
             >
-              <span class="absolute -top-4 right-0 text-[0.6rem] text-primary/70 tabular">
+              <span
+                class="absolute -top-4 right-0 text-[0.6rem] text-primary/70 tabular
+                       bg-base-100/80 rounded px-1"
+              >
                 goal {{ goal }}
+              </span>
+            </div>
+
+            <!--
+              Maintenance line — where bars start reading as a surplus rather
+              than a missed target. Labelled on the left, because on a maintain
+              plan it sits almost on top of the goal line.
+            -->
+            <div
+              v-if="showMaintenance"
+              class="absolute inset-x-0 border-t border-dashed border-error/40 z-10"
+              :style="`bottom:${(maintenanceKcal / maxKcal) * 100}%`"
+            >
+              <span
+                class="absolute -top-4 left-0 text-[0.6rem] text-error/70 tabular
+                       bg-base-100/80 rounded px-1"
+                :title="maintenance.approximate
+                  ? 'Rough guess from your calorie goal. Fill in your body metrics in Settings for an estimate of you.'
+                  : 'Estimated with the Mifflin-St Jeor equation and your activity level.'"
+              >
+                maintenance {{ maintenance.approximate ? '~' : '' }}{{ maintenanceKcal }}
               </span>
             </div>
 
@@ -330,7 +418,7 @@ const nothingToShow = computed(
                 />
                 <div
                   class="absolute inset-x-0 top-0 transition-all rounded-t"
-                  :class="[b.net > goal ? 'bg-error/70' : 'bg-primary/70', { 'rounded-b-none': b.burned > 0 }]"
+                  :class="[toneClass(b.net), { 'rounded-b-none': b.burned > 0 }]"
                   :style="`height:${Math.min(100, (b.net / Math.max(b.kcal, 1)) * 100)}%`"
                 />
               </div>

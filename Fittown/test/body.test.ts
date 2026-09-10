@@ -6,11 +6,13 @@ import {
   KCAL_PER_KG,
   KG_PER_LB,
   MAX_SAFE_RATE_KG,
+  GOAL_TO_MAINTENANCE,
   ACTIVITY_LEVELS,
   activityLevel,
   bmi,
   bmiCategory,
   bmr,
+  calorieTone,
   weightForBmi,
   calorieFloor,
   cmToFtIn,
@@ -22,6 +24,7 @@ import {
   kgToLb,
   lbToKg,
   maintenanceCalories,
+  maintenanceForChart,
   planFromCalories,
   planFromRate,
   ratePresets,
@@ -267,5 +270,69 @@ describe('rate presets', () => {
         expect(preset.kgPerWeek).toBeLessThanOrEqual(MAX_SAFE_RATE_KG)
       }
     }
+  })
+})
+
+describe('maintenanceForChart', () => {
+  it('uses the real equation when every body metric is known', () => {
+    const estimate = maintenanceForChart(PROFILE, 'moderate', 1880)
+    expect(estimate.approximate).toBe(false)
+    expect(estimate.kcal).toBeCloseTo(maintenanceCalories(PROFILE, 'moderate'), 10)
+  })
+
+  it('treats a missing activity level as sedentary rather than as unknown', () => {
+    // Every other metric is there, so this is still a real figure — just the
+    // most conservative one, matching `maintenanceCalories`' own default.
+    const estimate = maintenanceForChart(PROFILE, null, 1880)
+    expect(estimate.approximate).toBe(false)
+    expect(estimate.kcal).toBeCloseTo(bmr(PROFILE) * 1.2, 10)
+  })
+
+  it('scales off the calorie goal when a metric is missing', () => {
+    for (const missing of [{ sex: null }, { age: null }, { heightCm: null }, { weightKg: null }]) {
+      const estimate = maintenanceForChart({ ...PROFILE, ...missing }, 'moderate', 1880)
+      expect(estimate.approximate).toBe(true)
+      expect(estimate.kcal).toBeCloseTo(1880 * GOAL_TO_MAINTENANCE, 10)
+    }
+  })
+
+  it('always estimates maintenance above the goal it was scaled from', () => {
+    // Otherwise the red band would start below the amber one and no bar could
+    // ever be merely "over goal".
+    expect(GOAL_TO_MAINTENANCE).toBeGreaterThan(1)
+  })
+
+  it('lands within a sane distance of the real figure for the reference profile', () => {
+    // The stand-in is a guess, but a guess that came out at half or double the
+    // truth would be worse than drawing no line at all.
+    const real = maintenanceCalories(PROFILE, 'moderate')
+    const guess = maintenanceForChart({ ...PROFILE, sex: null }, 'moderate', 1880).kcal
+    expect(Math.abs(guess - real) / real).toBeLessThan(0.15)
+  })
+})
+
+describe('calorieTone', () => {
+  const GOAL = 1880
+  const MAINTENANCE = 2480
+
+  it('leaves a day at or under the goal alone', () => {
+    expect(calorieTone(1850, GOAL, MAINTENANCE)).toBe('under')
+    expect(calorieTone(GOAL, GOAL, MAINTENANCE)).toBe('under')
+  })
+
+  it('warns between the goal and maintenance — over target, still losing', () => {
+    expect(calorieTone(2100, GOAL, MAINTENANCE)).toBe('over-goal')
+    expect(calorieTone(MAINTENANCE, GOAL, MAINTENANCE)).toBe('over-goal')
+  })
+
+  it('only calls it over-maintenance once the day is a real surplus', () => {
+    expect(calorieTone(2481, GOAL, MAINTENANCE)).toBe('over-maintenance')
+  })
+
+  it('never reddens a bar under the goal, even on a bulk where the goal is higher', () => {
+    // goal 3000 on a 2480 maintenance: eating 2600 is under target and must
+    // not read as a warning, let alone as a blowout.
+    expect(calorieTone(2600, 3000, MAINTENANCE)).toBe('under')
+    expect(calorieTone(3100, 3000, MAINTENANCE)).toBe('over-maintenance')
   })
 })

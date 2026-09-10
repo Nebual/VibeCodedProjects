@@ -85,6 +85,28 @@ export function summarise(
     .all(userId, start, end) as { date: string; weight_kg: number }[]
 
   /**
+   * The most recent weigh-in on *any* date, not just inside the range.
+   *
+   * The calorie chart estimates maintenance calories from it, and a fortnight
+   * with no weigh-in is not a fortnight with no body — reusing `weights` here
+   * would make the maintenance line blink out on exactly the ranges where the
+   * user has been least diligent.
+   *
+   * Owner scope only. A friend's goals have the body metrics stripped, so the
+   * number is useless to them, and returning it anyway would hand out a weight
+   * that `share_weight` is supposed to be able to switch off.
+   */
+  const latestWeight =
+    goalScope === 'full'
+      ? (db
+          .prepare(
+            `SELECT weight_kg FROM weight_entries
+             WHERE user_id = ? ORDER BY date DESC LIMIT 1`,
+          )
+          .get(userId) as { weight_kg: number } | undefined)
+      : undefined
+
+  /**
    * Custom measurements, already grouped into one series per type.
    *
    * Grouping here rather than in the client keeps the payload small and means
@@ -140,6 +162,7 @@ export function summarise(
     water: byDate(waterCombined),
     workouts: byDate(workouts),
     weights,
+    latest_weight_kg: latestWeight?.weight_kg ?? null,
     biometrics: [...bySeries.values()],
     goals,
   }

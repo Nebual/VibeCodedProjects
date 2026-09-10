@@ -176,6 +176,77 @@ export function maintenanceCalories(body: BodyInput, activity: ActivityKey): num
 }
 
 /**
+ * Ratio of maintenance calories to a calorie goal, used when the real figure
+ * can't be worked out.
+ *
+ * The trends chart needs *some* maintenance number to decide when a day was a
+ * genuine surplus rather than merely over target, but every body metric is
+ * optional and a friend's summary deliberately carries none of them. A goal is
+ * maintenance minus a deficit, so the ratio inverts that: 1.25 is a 20%
+ * deficit, which is roughly the 500 kcal/day most people pick against a
+ * ~2,500 kcal maintenance.
+ *
+ * Wrong in both directions for anyone on an unusually gentle or unusually
+ * aggressive plan, which is why the line it draws is labelled as approximate.
+ */
+export const GOAL_TO_MAINTENANCE = 1.25
+
+export interface MaintenanceEstimate {
+  /** Daily intake that would hold weight steady. */
+  kcal: number
+  /** True when body metrics were missing and this was scaled off the goal. */
+  approximate: boolean
+}
+
+/**
+ * Maintenance calories for the trends chart, which — unlike the target
+ * calculator — has to draw something for everyone.
+ *
+ * The calculator can refuse and name the missing field; a chart can't, so a
+ * missing metric falls back to {@link GOAL_TO_MAINTENANCE} and says so. A
+ * missing *activity level* is not a missing metric: `maintenanceCalories()`
+ * already defaults it to sedentary, and the resulting figure is real, just
+ * conservative.
+ */
+export function maintenanceForChart(
+  body: {
+    sex: Sex | null | undefined
+    age: number | null | undefined
+    weightKg: number | null | undefined
+    heightCm: number | null | undefined
+  },
+  activity: ActivityKey | null | undefined,
+  calorieGoal: number,
+): MaintenanceEstimate {
+  const { sex, age, weightKg, heightCm } = body
+  if (sex && age && weightKg && heightCm) {
+    return {
+      kcal: maintenanceCalories({ sex, age, weightKg, heightCm }, activity ?? 'sedentary'),
+      approximate: false,
+    }
+  }
+  return { kcal: calorieGoal * GOAL_TO_MAINTENANCE, approximate: true }
+}
+
+/** How a day's calories read against the two lines on the calorie chart. */
+export type CalorieTone = 'under' | 'over-goal' | 'over-maintenance'
+
+/**
+ * Which band a day falls in: on target, over target, or an actual surplus.
+ *
+ * Over the goal is a missed target — normal, and the thing a deficit is made
+ * of. Over *maintenance* is the only case where the day added weight, so it is
+ * the only one worth alarming about. Both thresholds must be cleared for the
+ * alarm, so a bulk (goal above maintenance) can't redden a bar that is under
+ * the number the user asked for.
+ */
+export function calorieTone(net: number, goal: number, maintenance: number): CalorieTone {
+  if (net > goal && net > maintenance) return 'over-maintenance'
+  if (net > goal) return 'over-goal'
+  return 'under'
+}
+
+/**
  * Energy in a kilogram of body tissue.
  *
  * The familiar 3,500 kcal/lb (7,700 kcal/kg) figure treats the tissue as pure
