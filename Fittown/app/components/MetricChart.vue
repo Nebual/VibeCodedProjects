@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { fromLocalDate } from '~/utils/dates'
+import { pickAxisValues } from '~/utils/axisTicks'
 
 /**
  * A line chart of one measurement over the selected date range.
@@ -48,6 +49,10 @@ const CHART_H = 100
 /** Past this many points, markers would overlap into a smear rather than
  *  read as individual weigh-ins. */
 const MAX_DOTS = 120
+
+/** Closest two y-axis labels may sit, in viewBox units: the SVG is h-32
+ *  (128px) tall, so this is ~14px — a 0.6rem label plus breathing room. */
+const MIN_TICK_GAP = 11
 
 const latest = computed(() => props.points[props.points.length - 1] ?? null)
 
@@ -100,6 +105,14 @@ const chart = computed(() => {
         }))
       : []
 
+  // Label real readings, not the padded bounds: `min`/`max` are wherever the
+  // padding happened to land, which reads as random numbers.
+  const ticks = pickAxisValues(values, y, MIN_TICK_GAP).map((value) => ({
+    value,
+    topPct: (y(value) / CHART_H) * 100,
+    latest: value === Number(values[values.length - 1]!.toFixed(1)),
+  }))
+
   return {
     line: props.points.map((p) => `${x(p.date).toFixed(2)},${y(p.value).toFixed(2)}`).join(' '),
     goalY: goalOnChart ? goalY : null,
@@ -107,8 +120,9 @@ const chart = computed(() => {
      *  its line — shown as plain text next to the latest reading instead. */
     goalOffChart: props.goal != null && !goalOnChart ? props.goal : null,
     dots,
-    min,
-    max,
+    ticks,
+    lo,
+    hi,
   }
 })
 
@@ -129,14 +143,37 @@ const show = (value: number) => `${Number(value.toFixed(1))} ${props.unit}`
         </span>
       </header>
 
-      <div class="relative">
+      <div class="flex gap-1.5">
+        <!--
+          Axis labels are real readings (see pickAxisValues), in a gutter of
+          their own so they never sit on top of the line. Unitless to keep the
+          gutter narrow — the header states the unit.
+        -->
+        <div class="relative w-8 shrink-0 h-32" aria-hidden="true">
+          <span
+            v-for="t in chart.ticks"
+            :key="t.value"
+            class="absolute right-0 -translate-y-1/2 text-[0.6rem] tabular leading-none"
+            :class="t.latest ? 'text-base-content/80 font-semibold' : 'text-base-content/45'"
+            :style="`top:${t.topPct}%`"
+          >{{ Number(t.value.toFixed(1)) }}</span>
+        </div>
+
+        <div class="relative flex-1 min-w-0">
         <svg
           class="w-full h-32 overflow-visible"
           :viewBox="`0 0 ${CHART_W} ${CHART_H}`"
           preserveAspectRatio="none"
           role="img"
-          :aria-label="`${label} from ${show(chart.min)} to ${show(chart.max)}`"
+          :aria-label="`${label} from ${show(chart.lo)} to ${show(chart.hi)}`"
         >
+          <line
+            v-for="t in chart.ticks"
+            :key="t.value"
+            x1="0" :y1="(t.topPct / 100) * CHART_H" :x2="CHART_W" :y2="(t.topPct / 100) * CHART_H"
+            class="stroke-base-content/10" stroke-width="1"
+            vector-effect="non-scaling-stroke"
+          />
           <line
             v-if="chart.goalY !== null"
             x1="0" :y1="chart.goalY" :x2="CHART_W" :y2="chart.goalY"
@@ -151,12 +188,6 @@ const show = (value: number) => `${Number(value.toFixed(1))} ${props.unit}`
           />
         </svg>
 
-        <span class="absolute top-0 left-0 text-[0.6rem] text-base-content/40 tabular">
-          {{ show(chart.max) }}
-        </span>
-        <span class="absolute bottom-0 left-0 text-[0.6rem] text-base-content/40 tabular">
-          {{ show(chart.min) }}
-        </span>
         <span
           v-if="chart.goalY !== null"
           class="absolute right-0 text-[0.6rem] text-success/80 tabular -translate-y-1/2"
@@ -175,9 +206,10 @@ const show = (value: number) => `${Number(value.toFixed(1))} ${props.unit}`
             class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1 hidden group-hover:block group-focus:block text-[0.65rem] tabular bg-neutral text-neutral-content px-1.5 py-0.5 rounded whitespace-nowrap z-20"
           >{{ show(d.value) }} · {{ d.date }}</span>
         </button>
+        </div>
       </div>
 
-      <div class="flex justify-between text-[0.6rem] text-base-content/40">
+      <div class="flex justify-between text-[0.6rem] text-base-content/40 pl-9.5">
         <span>{{ from }}</span>
         <span>{{ to }}</span>
       </div>
